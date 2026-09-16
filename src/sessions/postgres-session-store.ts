@@ -589,8 +589,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                SELECT 1 FROM session_transcript_entries t
                WHERE t.session_id=target_session AND NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.session_id=t.session_id AND e.seq=t.seq)
              ) OR EXISTS (
-               SELECT session_id FROM session_transcript_entries WHERE session_id=target_session
-               GROUP BY session_id HAVING MIN(seq)<>0 OR MAX(seq)+1<>COUNT(*) OR COUNT(seq)<>COUNT(*)
+               SELECT 1 FROM session_transcript_entries WHERE session_id=target_session AND (seq IS NULL OR seq<0)
              ) THEN
                RAISE EXCEPTION 'Transcript migration is incomplete; finish and validate the transcript backfill before cutover';
              END IF;
@@ -889,7 +888,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
               SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
                                        THEN last_activity
                                        ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
-                  messages = $3,
+                  messages = CASE WHEN messages = $5 THEN $3
+                                  ELSE (SELECT COUNT(*) FROM session_transcript_entries t WHERE t.session_id = $1) END,
                   turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
                                THEN (SELECT COUNT(*) FROM session_transcript_entries t WHERE t.session_id = $1 AND ${userTurn("t")})
                                ELSE turns + $4 END
@@ -976,6 +976,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [sessionId, opts?.sinceSeq ?? 0, opts?.limit ?? null],
       );
       return rows.map(rowToEntry).reverse();
+    },
+
+    async countEntries(sessionId, opts) {
+      const rows = await q(
+        "SELECT count(*)::int AS n FROM session_transcript_entries WHERE session_id=$1 AND seq >= $2 AND ($3::int IS NULL OR seq < $3)",
+        [sessionId, opts?.sinceSeq ?? 0, opts?.beforeSeq ?? null],
+      );
+      return Number(rows[0]?.n ?? 0);
     },
 
     async getContextWindow(sessionId) {

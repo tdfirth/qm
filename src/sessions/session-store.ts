@@ -680,6 +680,7 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  countEntries(sessionId: string, opts?: { sinceSeq?: number; beforeSeq?: number }): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;

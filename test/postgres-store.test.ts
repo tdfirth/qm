@@ -2471,7 +2471,7 @@ test(
   },
 );
 
-test("pg transcript migration refuses gapped legacy history", { skip }, async () => {
+test("pg transcript migration preserves sparse legacy identities and parents", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const pg = (await import("pg")).default;
   const client = new pg.Client({ connectionString: URL! });
@@ -2486,12 +2486,31 @@ test("pg transcript migration refuses gapped legacy history", { skip }, async ()
     await s.releaseLease(lease);
     await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [session.id]);
     await client.query("DELETE FROM session_tape WHERE session_id=$1", [session.id]);
-    for (const apply of [false, true])
-      await assert.rejects(
-        migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
-        /sequence gap/,
-      );
-    assert.deepEqual(await s.getEntries(session.id), []);
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 1, apply: true }), {
+      busy: false,
+      scanned: 1,
+      changed: 1,
+      afterSeq: 0,
+    });
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: 0, limit: 1, apply: true }), {
+      busy: false,
+      scanned: 1,
+      changed: 1,
+      afterSeq: 2,
+    });
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: 2, limit: 1, apply: true }), {
+      busy: false,
+      scanned: 0,
+      changed: 0,
+      afterSeq: 2,
+    });
+    assert.deepEqual(
+      (await s.getEntries(session.id)).map((entry) => [entry.seq, entry.parentSeq]),
+      [
+        [0, null],
+        [2, 1],
+      ],
+    );
   } finally {
     await client.end();
   }

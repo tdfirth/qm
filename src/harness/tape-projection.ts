@@ -3,7 +3,7 @@ import type { GetEntriesOptions, NewSearchEntry, SessionStore } from "../session
 import { entryWithinTenure } from "../sessions/session-store.ts";
 import { entrySearchAuthor, entrySearchText, SEARCHABLE_ENTRY_TYPES } from "../sessions/entry-search.ts";
 
-type TranscriptStore = Pick<SessionStore, "getEntries" | "visibleEntries" | "participantWindowsOf">;
+type TranscriptStore = Pick<SessionStore, "getEntries" | "countEntries" | "visibleEntries" | "participantWindowsOf">;
 
 interface TranscriptRead {
   entries: SessionEntry[];
@@ -19,7 +19,10 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
   return {
     async forRender(sessionId, opts?) {
       const entries = await sessions.getEntries(sessionId, opts);
-      return { entries, earlier: entries[0]?.seq ?? 0 };
+      return {
+        entries,
+        earlier: entries.length ? await sessions.countEntries(sessionId, { beforeSeq: entries[0]!.seq }) : 0,
+      };
     },
     async forViewer(sessionId, principalId, opts?) {
       const windows = await sessions.participantWindowsOf(sessionId);
@@ -36,7 +39,12 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
           ...(opts?.limit === undefined ? {} : { limit: opts.limit }),
         })
       ).filter((entry) => entryWithinTenure(entry, window));
-      return { entries, earlier: Math.max(0, (entries[0]?.seq ?? window.validFromSeq) - window.validFromSeq) };
+      return {
+        entries,
+        earlier: entries.length
+          ? await sessions.countEntries(sessionId, { sinceSeq: window.validFromSeq, beforeSeq: entries[0]!.seq })
+          : 0,
+      };
     },
   };
 }

@@ -22,6 +22,12 @@ export async function migrateTranscriptPage(
       await client.query("ROLLBACK");
       return { busy: true };
     }
+    if (options.afterSeq < 0) {
+      const invalid = await client.query("SELECT 1 FROM session_entries WHERE session_id=$1 AND seq<0 LIMIT 1", [
+        sessionId,
+      ]);
+      if (invalid.rows.length) throw new Error("Legacy history has an invalid sequence");
+    }
     const source = (
       await client.query("SELECT * FROM session_entries WHERE session_id=$1 AND seq>$2 ORDER BY seq LIMIT $3", [
         sessionId,
@@ -29,8 +35,6 @@ export async function migrateTranscriptPage(
         options.limit,
       ])
     ).rows.map(rowToEntry);
-    if (source.some((entry, index) => entry.seq !== options.afterSeq + index + 1))
-      throw new Error("Legacy history has a sequence gap");
     if (source.length < options.limit) {
       const tail = source.at(-1)?.seq ?? options.afterSeq;
       const extra = await client.query(

@@ -9,7 +9,7 @@ npm run migrate:transcript-tape -- --apply
 npm run migrate:transcript-tape
 ```
 
-The operator pages entries under each session's writer lock and verifies each applied page. It refuses source gaps, unexpected canonical entries, and unrepresentable payload changes. It reports active sessions for reconciliation. An interrupted apply can resume with `--after <last-completed-session-id>`; a resumed or capped scan is explicitly partial and cannot qualify the whole corpus. Preserve the original histories when investigating any rejected data.
+The operator pages entries under each session's writer lock and verifies each applied page. It preserves existing sparse sequence IDs and parent references without filling holes or renumbering. It refuses invalid negative identities, unexpected canonical entries, and unrepresentable payload changes. It reports active sessions for reconciliation. An interrupted apply can resume with `--after <last-completed-session-id>`; a resumed or capped scan is explicitly partial and cannot qualify the whole corpus. Preserve the original histories when investigating any rejected data.
 
 After the backfill, run the exact cutover candidate's gate before starting its production tasks:
 
@@ -17,7 +17,7 @@ After the backfill, run the exact cutover candidate's gate before starting its p
 npm run qualify:transcript-cutover
 ```
 
-This applies the ordinary migration ledger, including migration 0018. The gate rejects orphaned histories, missing or changed entries, extra canonical entries, and sequence gaps. It compares original payloads, timestamps, scopes, and parent identities one session at a time, including sessions the backfill skipped as busy. Its safety depends on all remaining writers preserving the atomic compatibility invariant. Do not deploy another schema migration concurrently with this qualification.
+This applies the ordinary migration ledger, including migration 0018. The gate rejects orphaned histories, missing or changed entries, extra canonical entries, and invalid identities. Existing source gaps remain unchanged; every surviving source row must have an exact canonical counterpart. It compares original payloads, timestamps, scopes, and parent identities one session at a time, including sessions the backfill skipped as busy. Its safety depends on all remaining writers preserving the atomic compatibility invariant. Do not deploy another schema migration concurrently with this qualification.
 
 Only a successful gate records transcript authority and moves search indexing to canonical annotations. Deploy that same immutable candidate and verify full, bounded, participant-scoped, and continuation reads. Backfill apply is rejected after authority is established.
 

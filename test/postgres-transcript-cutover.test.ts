@@ -32,7 +32,7 @@ async function isolated() {
 }
 
 test(
-  "cutover rejects missing, divergent, extra and gapped histories before recording authority",
+  "cutover rejects missing, divergent, extra and invalid histories before recording authority",
   { skip },
   async () => {
     const db = await isolated();
@@ -81,11 +81,11 @@ test(
       await client.query("UPDATE session_tape SET entry_seq=3 WHERE entry_seq=0");
       await reject();
       await client.query("UPDATE session_tape SET entry_seq=0 WHERE entry_seq=3");
-      await client.query("DELETE FROM session_entries WHERE seq=0");
-      await client.query("DELETE FROM session_tape WHERE entry_seq=0");
+      await client.query("UPDATE session_entries SET seq=-1 WHERE seq=0");
+      await client.query("UPDATE session_tape SET entry_seq=-1 WHERE entry_seq=0");
       await reject();
-      await insertLegacy();
-      await repair();
+      await client.query("UPDATE session_entries SET seq=0 WHERE seq=-1");
+      await client.query("UPDATE session_tape SET entry_seq=0 WHERE entry_seq=-1");
       await client.query("UPDATE session_entries SET session_id='orphan' WHERE session_id='history' AND seq=0");
       await reject(/orphaned histories/);
       await client.query("UPDATE session_entries SET session_id='history' WHERE session_id='orphan'");

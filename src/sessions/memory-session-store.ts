@@ -276,7 +276,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       held.expiresAt = now() + leaseTtlMs;
       const log = transcriptEntries(lease.sessionId);
       if (!sessions.has(lease.sessionId)) throw new Error(`unknown session: ${lease.sessionId}`);
-      const seq = log.length;
+      const seq = (log.at(-1)?.seq ?? -1) + 1;
       const full: SessionEntry = {
         sessionId: lease.sessionId,
         seq,
@@ -307,6 +307,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
+    async countEntries(sessionId, opts) {
+      return transcriptEntries(sessionId).filter(
+        (entry) => entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
+      ).length;
+    },
+
     async getContextWindow(sessionId) {
       return contextWindowFromEntries(transcriptEntries(sessionId));
     },
@@ -316,7 +322,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async latestEntrySeq(sessionId) {
-      return transcriptEntries(sessionId).length - 1;
+      return transcriptEntries(sessionId).at(-1)?.seq ?? -1;
     },
 
     async clearSecurityTaint(sessionId) {
@@ -471,7 +477,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         w.set(principalId, {
           validFrom: includeHistory ? 0 : now(),
           validTo: null,
-          validFromSeq: includeHistory ? 0 : transcriptEntries(sessionId).length,
+          validFromSeq: includeHistory ? 0 : (transcriptEntries(sessionId).at(-1)?.seq ?? -1) + 1,
           validToSeq: null,
           ...(retainedTitle != null ? { title: retainedTitle } : {}),
           ...(existing?.archived ? { archived: existing.archived } : {}),
@@ -491,7 +497,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const win = windows.get(sessionId)?.get(principalId);
       if (win && win.validTo === null) {
         win.validTo = now();
-        win.validToSeq = transcriptEntries(sessionId).length;
+        win.validToSeq = (transcriptEntries(sessionId).at(-1)?.seq ?? -1) + 1;
       }
     },
 
