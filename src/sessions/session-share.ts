@@ -1,4 +1,4 @@
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { SessionEntry } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 
 export interface SharedAttachment {
@@ -17,7 +17,6 @@ export interface SharedMessage {
 export interface SessionShare {
   token: string;
   sessionId: string;
-  scopeId?: ScopeId;
   audience: "internal" | "external";
   createdBy: string;
   createdAt: number;

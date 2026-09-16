@@ -173,12 +173,11 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal(response.headers.get("cache-control"), "no-store");
   const text = await response.text();
   assert.ok(text.includes("Published reply"));
-  for (const privateField of ["SECRET", "blobKey", "createdBy", "attachmentIds", "scopeId"])
+  for (const privateField of ["SECRET", "blobKey", "createdBy", "attachmentIds"])
     assert.equal(text.includes(privateField), false);
   const data = JSON.parse(text);
   const fileId = data.messages.at(-1).attachments[0].id;
   assert.notEqual(fileId, "f1");
-  assert.equal((await h.store.get(token))?.scopeId, alice);
   assert.equal((await h.read(token, "external")).status, 404);
   assert.equal((await h.read(token, "internal", "", "")).status, 403);
   h.visible = [...original, entry("user", { text: "New message" }, 13)];
@@ -296,20 +295,21 @@ test("authenticated-only sharing governs external shares at creation and on ever
   assert.equal((await h.create("external")).status, 200);
   assert.equal((await publicRead(external)).status, 200);
 
-  const legacy = { ...(await h.store.get(external))!, token: "legacy" };
-  delete legacy.scopeId;
-  await h.store.put(legacy.token, legacy);
-  assert.equal((await publicRead(legacy.token)).status, 200);
   h.liveSessionScope = finance;
-  assert.equal((await publicRead(legacy.token)).status, 404);
-  assert.equal((await publicRead(legacy.token, `/files/${fileId}`)).status, 404);
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
   h.liveSessionScope = null;
-  assert.equal((await publicRead(legacy.token)).status, 200);
-  await h.config.setAuthenticatedOnlySharing(org, true);
-  assert.equal((await publicRead(legacy.token)).status, 404);
-  assert.equal((await publicRead(legacy.token, `/files/${fileId}`)).status, 404);
-  await h.config.setAuthenticatedOnlySharing(org, false);
-  assert.equal((await publicRead(legacy.token)).status, 200);
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
+  h.liveSessionScope = alice;
+  assert.equal((await publicRead(external)).status, 200);
+  const config = h.config;
+  h.config = undefined as unknown as typeof config;
+  assert.equal((await h.create("external")).status, 403);
+  assert.equal((await h.create("internal")).status, 200);
+  assert.equal((await publicRead(external)).status, 404);
+  h.config = config;
+  assert.equal((await publicRead(external)).status, 200);
 
   h.accessible = false;
   assert.equal((await publicRead(external)).status, 404);
