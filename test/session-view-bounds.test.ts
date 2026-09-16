@@ -6,12 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
-import {
-  windowedTranscript,
-  TAPE_RENDER_VERSION,
-  type Lease,
-  type SessionStore,
-} from "../src/sessions/session-store.ts";
+import { windowedTranscript, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId, type ScopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -52,18 +47,7 @@ test("a tailTurns view is bounded yet reports the same earlierEntries as the ful
   }
 });
 
-function withoutCanonicalTranscript(sessions: SessionStore) {
-  const getTape = sessions.getTape.bind(sessions);
-  sessions.getTranscriptEntries = async () => [];
-  sessions.getTape = async (sessionId, opts) => {
-    const rows = (await getTape(sessionId)).filter(
-      (row) => (row.payload as { event?: string }).event !== "transcript_entry" && row.seq > (opts?.sinceSeq ?? -1),
-    );
-    return opts?.limit === undefined ? rows : rows.slice(-opts.limit);
-  };
-}
-
-async function coarseForeignSession(sessions: SessionStore, turns = 1) {
+async function foreignSession(sessions: SessionStore, turns = 1) {
   const scope = scopeId("personal", "U1");
   const session = await sessions.getOrCreateByThread("web:U1:coarse-pins", "dm", scope, undefined, "web");
   await sessions.addParticipant(session.id, "U1", undefined, { includeHistory: true });
@@ -93,7 +77,7 @@ async function coarseForeignSession(sessions: SessionStore, turns = 1) {
       kind: "annotation",
       payload: {
         subturnEnd: true,
-        render: TAPE_RENDER_VERSION,
+        render: 1,
         entry: { type: "assistant", payload: { text: `Queue ${turn} tidied.` }, at: reply.createdAt },
       },
       scopeLabel: scope,
@@ -101,7 +85,7 @@ async function coarseForeignSession(sessions: SessionStore, turns = 1) {
     });
     await sessions.appendTape(held, {
       kind: "annotation",
-      payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+      payload: { turnEnd: true, render: 1 },
       scopeLabel: scope,
       entrySeq: reply.seq,
     });
@@ -110,15 +94,14 @@ async function coarseForeignSession(sessions: SessionStore, turns = 1) {
   return { session, narration: narration!, reply: reply! };
 }
 
-test("bounded earlierEntries on a coarse foreign session counts renderable entries, not raw seqs", async () => {
+test("bounded foreign-harness histories retain exact entries and counts", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
-    withoutCanonicalTranscript(built.sessions);
-    const { session } = await coarseForeignSession(built.sessions, 30);
+    const { session } = await foreignSession(built.sessions, 30);
     const full = (await built.app.getSession(session.id))!;
     assert.equal(full.earlierEntries ?? 0, 0, "the unbounded read reports nothing earlier");
-    assert.equal(full.entries.length, 60, "coarse render keeps only user + assistant per turn");
+    assert.equal(full.entries.length, 150, "canonical history retains narration and tools");
     const bounded = (await built.app.getSession(session.id, { tailTurns: 1 }))!;
     assert.deepEqual(
       bounded.entries.map((e) => [e.seq, e.type]),
@@ -127,7 +110,7 @@ test("bounded earlierEntries on a coarse foreign session counts renderable entri
     assert.equal(
       bounded.entries.length + (bounded.earlierEntries ?? 0),
       full.entries.length,
-      "earlierEntries counts exactly the renderable entries above the window, not projection-dropped seqs",
+      "earlierEntries counts exactly the entries above the window",
     );
     const fullViewer = (await built.app.getSessionForViewer(session.id, "U1"))!;
     const boundedViewer = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
@@ -141,46 +124,26 @@ test("bounded earlierEntries on a coarse foreign session counts renderable entri
   }
 });
 
-test("pins on entries a coarse projection drops still resolve through the targeted entries fallback", async () => {
+test("foreign-harness narration remains pinnable and participant-scoped", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
-    withoutCanonicalTranscript(built.sessions);
-    const { session, narration } = await coarseForeignSession(built.sessions);
+    const { session, narration } = await foreignSession(built.sessions);
     const view = (await built.app.getSessionForViewer(session.id, "U1"))!;
     assert.deepEqual(
       view.entries.map((e) => e.type),
-      ["user", "assistant"],
-      "the transcript itself renders coarsely",
+      ["user", "text", "tool_call", "tool_result", "assistant"],
+      "the transcript retains every original entry",
     );
     const pinned = await built.app.pinConversationItem("web:U1:coarse-pins", "U1", { entrySeq: narration.seq });
-    assert.ok("pin" in pinned && pinned.pin, "pinning a projection-dropped entry is not bad_entry");
+    assert.ok("pin" in pinned && pinned.pin, "pinning narration succeeds");
     assert.equal(pinned.pin!.preview, "queue narration detail");
     const listed = (await built.app.listConversationPins("web:U1:coarse-pins", "U1"))!;
     assert.equal(listed[0]!.preview, "queue narration detail");
     const fetched = await built.app.getSessionEntryForViewer(session.id, "U1", narration.seq);
     assert.equal((fetched?.entry.payload as { text?: string })?.text, "queue narration detail");
     const stranger = await built.app.getSessionEntryForViewer(session.id, "stranger", narration.seq);
-    assert.equal(stranger, null, "the targeted fallback stays tenure-gated");
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("canonical transcripts retain foreign harness tool detail and exact bounded counts", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  try {
-    const { session, narration } = await coarseForeignSession(built.sessions, 30);
-    const full = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 9999 }))!;
-    assert.deepEqual(full.entries, await built.sessions.getEntries(session.id));
-    assert.equal(full.entries.length, 150);
-    const bounded = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
-    assert.deepEqual(bounded.entries, full.entries.slice(-5));
-    assert.equal(bounded.earlierEntries, 145);
-    const pinned = await built.app.pinConversationItem("web:U1:coarse-pins", "U1", { entrySeq: narration.seq });
-    assert.ok("pin" in pinned && pinned.pin);
-    assert.equal(pinned.pin.preview, "queue narration detail");
+    assert.equal(stranger, null, "the targeted read stays tenure-gated");
   } finally {
     await built.runtime.stop();
   }

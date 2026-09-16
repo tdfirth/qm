@@ -45,7 +45,7 @@ import type {
   TapeMeta,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeCheckpointPayload } from "../sessions/session-store.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -2002,16 +2002,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               }
             }
           };
-          const tapeEntryMirror = async (mirrored: {
-            seq: number;
-            createdAt: number;
-            type: string;
-            payload: unknown;
-            scopeLabel: ScopeId;
-          }): Promise<void> => {
-            if (!turn.tape) return;
-            await turn.tape(tapeEntryMirrorRecord(mirrored));
-          };
           const tapeLeftoverSteers = async (): Promise<void> => {
             const leftovers = pendingSteerTapeMeta.splice(0);
             if (!turn.tape) return;
@@ -2033,19 +2023,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               });
             }
           };
-          const checkpointSubturn = async (
-            finalEntry: { seq: number; createdAt: number },
-            reply: string,
-          ): Promise<void> => {
+          const checkpointSubturn = async (finalEntry: { seq: number }): Promise<void> => {
             if (!turn.tape) return;
             await tapeLeftoverSteers();
             await turn.tape({
               kind: "annotation",
-              payload: tapeCheckpointPayload("subturnEnd", {
-                type: "assistant",
-                payload: { text: reply },
-                at: finalEntry.createdAt,
-              }),
+              payload: tapeCheckpointPayload("subturnEnd"),
               scopeLabel: turn.scopeLabel,
               entrySeq: finalEntry.seq,
             });
@@ -2300,12 +2283,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
           if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
             if (entry.ref.goal) {
-              const goalEntry = await turn.emit({
+              await turn.emit({
                 type: "system",
                 payload: { kind: "goal", goal: { ...entry.ref.goal } },
                 scopeLabel: turn.scopeLabel,
               });
-              await tapeEntryMirror(goalEntry);
             }
             return {
               reply: "",
@@ -2334,12 +2316,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 g.status = "paused";
                 g.updatedAt = Date.now();
               }
-              const goalEntry = await turn.emit({
+              await turn.emit({
                 type: "system",
                 payload: { kind: "goal", goal: { ...g } },
                 scopeLabel: turn.scopeLabel,
               });
-              await tapeEntryMirror(goalEntry);
               if (g.status === "complete" || g.status === "blocked") entry.ref.goal = null;
             }
             const finalEntry = await turn.emit({
@@ -2356,7 +2337,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 scopeLabel: turn.scopeLabel,
               });
             }
-            await checkpointSubturn(finalEntry, reply);
+            await checkpointSubturn(finalEntry);
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
               reply,
@@ -2370,12 +2351,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           if (entry.ref.goal) {
             const g = entry.ref.goal;
-            const goalEntry = await turn.emit({
+            await turn.emit({
               type: "system",
               payload: { kind: "goal", goal: { ...g } },
               scopeLabel: turn.scopeLabel,
             });
-            await tapeEntryMirror(goalEntry);
             if (g.status === "complete" || g.status === "blocked") entry.ref.goal = null;
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
@@ -2387,7 +2367,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
-          await checkpointSubturn(finalEntry, reply);
+          await checkpointSubturn(finalEntry);
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
           const cacheUsage = sumCacheUsage(callStats);

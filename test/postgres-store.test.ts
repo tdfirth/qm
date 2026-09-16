@@ -3,13 +3,15 @@ import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import {
   backfillSessionOriginBatch,
   createPostgresSessionStore,
   rowToSession,
+  rowToEntry,
 } from "../src/sessions/postgres-session-store.ts";
+import { tapeTranscriptEntryRecord } from "../src/sessions/session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
@@ -30,6 +32,19 @@ before(async () => {
   );
   await p.end();
 });
+
+async function mirrorHistoricalFixture(pool: import("pg").Pool, sessionId: string) {
+  await pool.query(
+    `INSERT INTO session_tape(session_id,seq,kind,payload,scope_label,entry_seq,created_at)
+    SELECT e.session_id,base.next_seq+row_number() OVER (ORDER BY e.seq)-1,'annotation',
+      json_build_object('event','transcript_entry','entry',json_build_object(
+        'type',e.type,'payload',safe_json(e.payload),'at',e.created_at,'parentSeq',e.parent_seq))::text,
+      e.scope_label,e.seq,e.created_at
+    FROM session_entries e CROSS JOIN (SELECT COALESCE(MAX(seq),-1)+1 AS next_seq FROM session_tape WHERE session_id=$1) base
+    WHERE e.session_id=$1 AND NOT EXISTS (SELECT 1 FROM session_transcript_entries t WHERE t.session_id=e.session_id AND t.seq=e.seq)`,
+    [sessionId],
+  );
+}
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({
@@ -855,7 +870,11 @@ test("pg scopeSessionSummaries: previews extracted in SQL match the JS extractio
     await raw.end();
   }
   const again = (await s.scopeSessionSummaries(scope, false)).find((r) => r.id === strp.id)!;
-  assert.equal(again.lastMessage, "poisonedtail", "the null-byte escape is dropped, not fatal");
+  assert.equal(
+    again.lastMessage,
+    "a bare string payload",
+    "an unqualified legacy write cannot replace canonical previews",
+  );
 
   const junk = await s.getOrCreateByThread("pvwD", "channel", scope);
   const pg2 = (await import("pg")).default;
@@ -1143,45 +1162,59 @@ test(
   },
 );
 
-test("pg null-byte payloads: stripped on write, tolerated on read (no jsonb cast crash)", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "nul");
-  const a = await s.getOrCreateByThread("nulA", "channel", scope);
-  await s.addParticipant(a.id, "NUL1");
-  const { lease } = await s.acquireLease(a.id);
-  const e = await s.append(lease!, { type: "user", payload: { text: "a\u0000b" }, scopeLabel: scope });
-  await s.releaseLease(lease!);
-  assert.equal(
-    (e.payload as { text?: string }).text,
-    "ab",
-    "append returns the sanitized payload, matching what is stored",
-  );
-  assert.equal(((await s.getEntries(a.id))[0]!.payload as { text?: string }).text, "ab", "null byte stripped at write");
-
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query(
-      "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [a.id, 1, 0, "user", JSON.stringify({ text: "x\u0000y" }), scope, Date.now()],
+test(
+  "pg null-byte payloads are stripped on write and unqualified legacy data cannot alter canonical reads",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const scope = scopeId("channel", "nul");
+    const a = await s.getOrCreateByThread("nulA", "channel", scope);
+    await s.addParticipant(a.id, "NUL1");
+    const { lease } = await s.acquireLease(a.id);
+    const e = await s.append(lease!, { type: "user", payload: { text: "a\u0000b" }, scopeLabel: scope });
+    await s.releaseLease(lease!);
+    assert.equal(
+      (e.payload as { text?: string }).text,
+      "ab",
+      "append returns the sanitized payload, matching what is stored",
     );
-    await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
-  } finally {
-    await raw.end();
-  }
-  const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
-  assert.equal(
-    attributed.reduce((n, t) => n + t.turns, 0),
-    2,
-    "both user turns counted; the poisoned legacy row does not crash the read",
-  );
-  const { lease: lease2 } = await s.acquireLease(a.id);
-  await s.append(lease2!, { type: "user", payload: { text: "z" }, scopeLabel: scope });
-  await s.releaseLease(lease2!);
-  const row = (await s.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
-  assert.equal(row.turns, 3, "append recounts NULL turns; the poisoned row is counted, not crashed");
-  assert.equal(row.messages, 3, "messages self-heal from the entry seq");
-});
+    assert.equal(
+      ((await s.getEntries(a.id))[0]!.payload as { text?: string }).text,
+      "ab",
+      "null byte stripped at write",
+    );
+
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    try {
+      await raw.query(
+        "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [a.id, 1, 0, "user", JSON.stringify({ text: "x\u0000y" }), scope, Date.now()],
+      );
+      await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
+    } finally {
+      await raw.end();
+    }
+    const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
+    assert.equal(
+      attributed.reduce((n, t) => n + t.turns, 0),
+      1,
+      "only the canonical user turn is counted",
+    );
+    const repair = new pg.Client({ connectionString: URL });
+    await repair.connect();
+    await assert.rejects(migrateTranscriptPage(repair, a.id, { afterSeq: -1, limit: 100, apply: true }));
+    assert.equal((await s.getEntries(a.id)).length, 1);
+    await repair.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [a.id]);
+    await repair.end();
+    const { lease: lease2 } = await s.acquireLease(a.id);
+    await s.append(lease2!, { type: "user", payload: { text: "z" }, scopeLabel: scope });
+    await s.releaseLease(lease2!);
+    const row = (await s.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
+    assert.equal(row.turns, 2, "append recounts NULL turns from the canonical history");
+    assert.equal(row.messages, 2, "messages self-heal from the canonical entry seq");
+  },
+);
 
 test("pg session counters: boot backfill fills pre-column rows", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
@@ -1220,6 +1253,7 @@ test("pg session counters: boot backfill fills pre-column rows", { skip }, async
       "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
       [a.id, 3, 2, "user", JSON.stringify({ text: "from the old instance" }), scope, Date.now()],
     );
+    await mirrorHistoricalFixture(raw2, a.id);
   } finally {
     await raw2.end();
   }
@@ -1243,6 +1277,7 @@ test("pg session counters: boot backfill fills pre-column rows", { skip }, async
         Date.now() + 1,
       ],
     );
+    await mirrorHistoricalFixture(raw3, b.id);
   } finally {
     await raw3.end();
   }
@@ -2150,22 +2185,30 @@ test("pg search: writes are atomic and updates and deletes keep the index curren
       payload: { text: "original document" },
       scopeLabel: session.scopeId,
     });
-    await pool.query("UPDATE session_entries SET payload=$3 WHERE session_id=$1 AND seq=$2", [
+    await pool.query("UPDATE session_entries SET payload=$2 WHERE session_id=$1", [
       session.id,
-      entry.seq,
-      JSON.stringify({ text: "edited document", name: "Editor" }),
+      JSON.stringify({ text: "legacy tamper" }),
     ]);
+    assert.equal((await store.searchEntries("UATOMIC", "original")).length, 1);
+    const edited = { ...entry, payload: { text: "edited document", name: "Editor" } };
+    const revision = await store.appendTape(lease, tapeTranscriptEntryRecord(edited));
     assert.deepEqual(await store.searchEntries("UATOMIC", "original"), []);
     assert.equal((await store.searchEntries("UATOMIC", "edited"))[0]!.author, "Editor");
-    await pool.query("UPDATE session_entries SET type='tool_result' WHERE session_id=$1", [session.id]);
+    const hidden = await store.appendTape(lease, tapeTranscriptEntryRecord({ ...edited, type: "tool_result" }));
     assert.deepEqual(await store.searchEntries("UATOMIC", "edited"), []);
-    await pool.query("UPDATE session_entries SET type='user' WHERE session_id=$1", [session.id]);
+    await pool.query("DELETE FROM session_tape WHERE session_id=$1 AND seq=$2", [session.id, hidden.seq]);
     assert.equal((await store.searchEntries("UATOMIC", "edited")).length, 1);
     await pool.query("DELETE FROM session_entry_search WHERE session_id=$1", [session.id]);
     assert.equal(await store.missingSearchEntries(session.id), 1);
-    assert.deepEqual(await store.searchEntries("UATOMIC", "edited"), [], "search never falls back to the legacy table");
-    await pool.query("UPDATE session_entries SET payload=payload WHERE session_id=$1", [session.id]);
+    assert.deepEqual(await store.searchEntries("UATOMIC", "edited"), []);
+    await pool.query("UPDATE session_tape SET payload=payload WHERE session_id=$1 AND seq=$2", [
+      session.id,
+      revision.seq,
+    ]);
+    assert.equal((await store.searchEntries("UATOMIC", "edited")).length, 1);
     await pool.query("DELETE FROM session_entries WHERE session_id=$1", [session.id]);
+    assert.equal((await store.searchEntries("UATOMIC", "edited")).length, 1);
+    await pool.query("DELETE FROM session_tape WHERE session_id=$1", [session.id]);
     assert.deepEqual(await store.searchEntries("UATOMIC", "edited"), []);
   } finally {
     await pool.query("ALTER TABLE session_entry_search DROP CONSTRAINT IF EXISTS search_test_failure");
@@ -2182,16 +2225,14 @@ test("pg search: migration fills holes below the watermark and covers legacy-onl
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   try {
-    await pool.query("DROP TRIGGER session_entries_search_write_through ON session_entries");
-    await pool.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0014-search-write-through-v1','sessions/store/0015-search-backfill-v1')",
-    );
     for (let seq = 0; seq < 3; seq++) {
       await pool.query(
         "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) VALUES($1,$2,NULL,'user',$3,$4,$5)",
         [session.id, seq, JSON.stringify({ text: `historical document ${seq}` }), session.scopeId, seq],
       );
     }
+    await mirrorHistoricalFixture(pool, session.id);
+    await pool.query("DELETE FROM session_entry_search WHERE session_id=$1", [session.id]);
     await pool.query(
       "INSERT INTO session_entry_search(session_id,seq,type,text,created_at) VALUES($1,2,'user','historical document 2',2)",
       [session.id],
@@ -2203,7 +2244,9 @@ test("pg search: migration fills holes below the watermark and covers legacy-onl
       ids.indexOf("sessions/store/0014-search-write-through-v1") <
         ids.indexOf("sessions/store/0015-search-backfill-v1"),
     );
-    await migrateRegisteredPgSchemas(URL!);
+    for (const statement of registeredPgMigrations(URL!).find((m) => m.id === "sessions/store/0015-search-backfill-v1")!
+      .statements)
+      await pool.query(statement);
     const migrated = store;
     assert.equal(await migrated.missingSearchEntries(session.id), 0);
     const hits = await migrated.searchEntries("UMIGSEARCH", "historical document");
@@ -2213,6 +2256,8 @@ test("pg search: migration fills holes below the watermark and covers legacy-onl
       "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) VALUES($1,3,NULL,'user',$2,$3,3)",
       [session.id, JSON.stringify({ text: "old writer document" }), session.scopeId],
     );
+    assert.equal((await migrated.searchEntries("UMIGSEARCH", "old writer")).length, 0);
+    await mirrorHistoricalFixture(pool, session.id);
     assert.equal((await migrated.searchEntries("UMIGSEARCH", "old writer")).length, 1);
   } finally {
     await pool.end();
@@ -2253,13 +2298,19 @@ test(
         payload: { tool: "execute", callId: `c${i}`, result: "denied", isError: true, code: 1, securityTainted: true },
       });
     const before = await s.getEntries(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), before);
-    assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
-    assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
+    assert.equal(before.length, 4);
+    assert.deepEqual(await s.getEntries(session.id, { limit: 2 }), before.slice(-2));
+    assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
     assert.equal(await s.tapeCoverage(session.id), -1);
     assert.equal(await s.clearSecurityTaint(session.id), true);
     const after = await s.getEntries(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), after);
+    assert.deepEqual(
+      after.map((e) => e.payload),
+      before.map((e) => {
+        const { securityTainted: _securityTainted, ...payload } = e.payload as Record<string, unknown>;
+        return payload;
+      }),
+    );
     assert.equal(after[0]!.createdAt, before[0]!.createdAt);
     assert.equal(after[0]!.parentSeq, before[0]!.parentSeq);
     assert.equal((after[0]!.payload as { securityTainted?: boolean }).securityTainted, undefined);
@@ -2292,7 +2343,7 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
       /transcript unavailable/,
     );
     assert.deepEqual(await s.getEntries(session.id), []);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.equal((await client.query("SELECT 1 FROM session_entries WHERE session_id=$1", [session.id])).rowCount, 0);
     assert.equal(await s.latestEntrySeq(session.id), -1);
     const counters = (await client.query("SELECT messages FROM sessions WHERE id=$1", [session.id])).rows[0];
     assert.equal(counters.messages, 0);
@@ -2320,20 +2371,30 @@ test("pg transcript backfill is bounded, idempotent, and independent of model co
     );
     const dry = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: false });
     assert.deepEqual(dry, { busy: false, scanned: 200, changed: 200, afterSeq: 199 });
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.deepEqual(await s.getEntries(session.id), []);
     for (let afterSeq = -1; afterSeq < 619;) {
       const page = await migrateTranscriptPage(client, session.id, { afterSeq, limit: 200, apply: true });
       assert.ok(!page.busy);
       assert.ok(page.scanned <= 200);
       afterSeq = page.afterSeq;
     }
-    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
+    assert.deepEqual(
+      await s.getEntries(session.id),
+      (await client.query("SELECT * FROM session_entries WHERE session_id=$1 ORDER BY seq", [session.id])).rows.map(
+        rowToEntry,
+      ),
+    );
     assert.equal(await s.tapeCoverage(session.id), -1);
     const repeated = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: true });
     assert.deepEqual(repeated, { busy: false, scanned: 200, changed: 0, afterSeq: 199 });
     assert.equal((await s.getTape(session.id)).length, 620);
     await s.clearSecurityTaint(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
+    assert.deepEqual(
+      await s.getEntries(session.id),
+      (await client.query("SELECT * FROM session_entries WHERE session_id=$1 ORDER BY seq", [session.id])).rows.map(
+        rowToEntry,
+      ),
+    );
   } finally {
     await client.end();
   }
@@ -2397,7 +2458,7 @@ test(
             /extra entry/,
           );
         }
-        assert.equal((await s.getTranscriptEntries(session.id)).length, originalCount + 1);
+        assert.equal((await s.getEntries(session.id)).length, originalCount + 1);
       }
     } finally {
       await client.end();
@@ -2425,7 +2486,7 @@ test("pg transcript migration refuses gapped legacy history", { skip }, async ()
         migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
         /sequence gap/,
       );
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.deepEqual(await s.getEntries(session.id), []);
   } finally {
     await client.end();
   }

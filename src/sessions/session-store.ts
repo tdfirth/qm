@@ -144,40 +144,8 @@ export interface SessionPin extends NewSessionPin {
 
 type TapeKind = "message" | "context_event" | "annotation";
 
-export const TAPE_RENDER_VERSION = 1;
-
-export interface TapeCheckpointEntry {
-  type: EntryType;
-  payload: unknown;
-  at: number;
-}
-
-export function tapeCheckpointPayload(
-  bound: "turnEnd" | "subturnEnd",
-  entry?: TapeCheckpointEntry,
-  spanStart?: number,
-): Record<string, unknown> {
-  return {
-    [bound]: true,
-    render: TAPE_RENDER_VERSION,
-    ...(entry ? { entry } : {}),
-    ...(spanStart !== undefined ? { spanStart } : {}),
-  };
-}
-
-export function tapeEntryMirrorRecord(entry: {
-  seq: number;
-  createdAt: number;
-  type: string;
-  payload: unknown;
-  scopeLabel: ScopeId;
-}): NewTapeRecord {
-  return {
-    kind: "annotation",
-    payload: { entry: { type: entry.type, payload: entry.payload, at: entry.createdAt } },
-    scopeLabel: entry.scopeLabel,
-    entrySeq: entry.seq,
-  };
+export function tapeCheckpointPayload(bound: "turnEnd" | "subturnEnd"): Record<string, unknown> {
+  return { [bound]: true };
 }
 
 export function tapeTranscriptEntryRecord(entry: SessionEntry): NewTapeRecord {
@@ -240,7 +208,7 @@ export async function appendEntryOutsideTurn(
   }
   await sessions.appendTape(lease, {
     kind: "annotation",
-    payload: tapeCheckpointPayload("turnEnd", { type: entry.type, payload: entry.payload, at: appended.createdAt }),
+    payload: tapeCheckpointPayload("turnEnd"),
     scopeLabel: entry.scopeLabel,
     entrySeq: appended.seq,
   });
@@ -712,7 +680,6 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
-  getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;

@@ -40,7 +40,6 @@ import {
   isOverheardEntry,
   TAPE_IMPORT_MAX_ENTRIES,
   tapeCheckpointPayload,
-  tapeEntryMirrorRecord,
 } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
@@ -911,14 +910,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
               ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
             };
-            const taintedEntry = await deps.sessions.append(lease, {
+            await deps.sessions.append(lease, {
               type: "user",
               payload: taintedPayload,
               scopeLabel: scopeId,
             });
-            await deps.sessions
-              .appendTape(lease, tapeEntryMirrorRecord(taintedEntry))
-              .catch(swallowAs("orchestrator: tainted input mirror", undefined));
             const command = "security-screen";
             const requestId = inputApprovalId(session.id, replayableRequest(input));
             const grantModesField =
@@ -2490,7 +2486,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ).catch(swallowAs("orchestrator: inbound file-event log", undefined));
           if (appended) {
             preAppendedSeqs.push(appended.seq);
-            await withManagedRosterVersion(() => deps.sessions.appendTape(lease, tapeEntryMirrorRecord(appended)));
           }
         }
 
@@ -3248,15 +3243,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           const stoppedUnsafe = !!result.stopped && !result.stoppedTapeComplete;
           if (lastSeq <= latchedCoverageSeq || !preTurnCovered || stoppedUnsafe) return;
-          const spanStart = [...emittedEntries.map((e) => e.seq), ...preAppendedSeqs].reduce(
-            (m, s2) => Math.min(m, s2),
-            lastSeq,
-          );
           try {
             await withManagedRosterVersion(() =>
               deps.sessions.appendTape(lease, {
                 kind: "annotation",
-                payload: tapeCheckpointPayload("turnEnd", undefined, spanStart),
+                payload: tapeCheckpointPayload("turnEnd"),
                 scopeLabel: scopeId,
                 entrySeq: lastSeq,
               }),
@@ -3727,16 +3718,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         markErrorRecorded(err);
         if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
-          const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
-            if (!entry) return;
-            await deps.sessions
-              .appendTape(lease, tapeEntryMirrorRecord(entry))
-              .catch(swallowAs("orchestrator: turn failure mirror", undefined));
-          };
           if (failureUserPayload) {
             await deps.sessions
               .append(lease, { type: "user", payload: failureUserPayload, scopeLabel: scopeId as ScopeId })
-              .then(mirrorFailureEntry)
               .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
           }
           const payload: TurnFailurePayload = {
@@ -3746,7 +3730,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
           await deps.sessions
             .append(lease, { type: "system", payload, scopeLabel: scopeId as ScopeId })
-            .then(mirrorFailureEntry)
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
         throw err;
