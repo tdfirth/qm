@@ -57,6 +57,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "prepare:transcript-tape": "node scripts/prepare-transcript-tape.ts",
     "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts",
     "qualify:transcript-cutover": "node scripts/qualify-transcript-cutover.ts"
   },

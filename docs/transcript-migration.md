@@ -5,7 +5,7 @@ Existing PostgreSQL deployments must first run the compatibility release that ad
 Take a recoverable database backup and check free storage before the additive backfill. Large stores can prebuild the `session_tape_transcript_entries` partial index concurrently using the exact definition from migration 0017. Use the reviewed migration tools from the cutover source while application services remain on the compatibility release. First apply the additive payload-format migration; it accepts both older nested annotations and lossless serialized payloads without establishing transcript authority:
 
 ```sh
-node scripts/prepare-transcript-tape.ts
+npm run prepare:transcript-tape
 npm run migrate:transcript-tape -- --apply
 npm run migrate:transcript-tape
 ```
