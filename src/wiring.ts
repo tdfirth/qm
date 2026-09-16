@@ -154,7 +154,7 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import { createDeployStore, deployTouchDebounceMs, type Deployment, type DeployStore } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -480,6 +480,7 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   keychain?: Keychain;
+  deployStore: DeployStore;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
@@ -1546,20 +1547,18 @@ export function buildApp(
               orgScope,
               acl,
             );
-            if (credentials.length) {
-              env.AGENT_API_URL = deployGitBase;
-              env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
-                {
-                  actorId: deployment.createdBy,
-                  scopeId: personalScope(deployment.createdBy),
-                  aud: CREDENTIAL_BROKER_AUD,
-                  credentials,
-                  deployment: deployment.id,
-                  exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-                },
-                config.capabilitySecret ?? deployGitSecret,
-              );
-            }
+            env.AGENT_API_URL = deployGitBase;
+            env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
+              {
+                actorId: deployment.createdBy,
+                scopeId: personalScope(deployment.createdBy),
+                aud: CREDENTIAL_BROKER_AUD,
+                credentials,
+                deployment: deployment.id,
+                exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+              },
+              config.capabilitySecret ?? deployGitSecret,
+            );
             return env;
           },
         }
@@ -2484,6 +2483,7 @@ export function buildApp(
     memory,
     ...(keychain ? { keychain } : {}),
     serviceCreds: credentialStore,
+    deployStore,
     deliveries,
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
@@ -2613,6 +2613,7 @@ export function serverDeps(
     webhookReceiver: built.webhookReceiver,
     identity: built.identity,
     ...(built.keychain ? { keychain: built.keychain } : {}),
+    deployStore: built.deployStore,
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
