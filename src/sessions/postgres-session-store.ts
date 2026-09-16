@@ -1,3 +1,4 @@
+import { transcriptPayloadMigration } from "./transcript-schema.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
@@ -179,8 +180,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
 
-  const notOverheard = (col: string): string =>
-    `(safe_json(${col}.payload)->'overheard')::jsonb IS DISTINCT FROM 'true'::jsonb`;
+  const notOverheard = (col: string): string => `(${col}.attributes->'overheard') IS DISTINCT FROM 'true'::jsonb`;
   const userTurn = (col: string): string => `${col}.type = 'user' AND ${notOverheard(col)}`;
   const lastActivityExpr = (col: string): string => `COALESCE(${col}.last_activity, ${col}.created_at)`;
   const withinParticipantWindow = (entry: string, participant: string): string =>
@@ -217,11 +217,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${originExpr(alias)} NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
-  const previewExpr = (col: string): string =>
-    `(SELECT CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
-                  WHEN json_typeof(j) = 'string' THEN j #>> '{}'
-                  ELSE NULL END
-        FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
 
   const recountRecentSessions = `UPDATE sessions s
         SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
@@ -555,6 +550,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ORDER BY t.session_id, t.entry_seq DESC, t.seq DESC`,
         ],
       },
+      transcriptPayloadMigration,
       {
         id: "sessions/store/0017-subagent-parentage",
         statements: [
@@ -582,8 +578,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                WHERE e.session_id=target_session AND NOT EXISTS (
                  SELECT 1 FROM session_transcript_entries t
                  WHERE t.session_id=e.session_id AND t.seq=e.seq
-                   AND (t.parent_seq,t.type,t.payload::jsonb,t.scope_label,t.created_at)
-                       IS NOT DISTINCT FROM (e.parent_seq,e.type,e.payload::jsonb,e.scope_label,e.created_at)
+                   AND (t.parent_seq,t.type,t.scope_label,t.created_at)
+                       IS NOT DISTINCT FROM (e.parent_seq,e.type,e.scope_label,e.created_at)
+                   AND CASE WHEN t.payload IS NOT DISTINCT FROM e.payload THEN true
+                            ELSE t.payload::jsonb IS NOT DISTINCT FROM e.payload::jsonb END
                )
              ) OR EXISTS (
                SELECT 1 FROM session_transcript_entries t
@@ -617,15 +615,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                SELECT * INTO e FROM session_transcript_entries WHERE session_id=target_session AND seq=target_seq;
                body := NULL;
                IF FOUND AND e.type IN ('user','assistant','text') THEN
-                 body := entry_search_text(e.payload);
+                 body := COALESCE(CASE WHEN e.encoded_payload THEN e.attributes->>'searchText' END, entry_search_text(e.payload));
                END IF;
                IF body IS NULL OR btrim(body)='' THEN
                  DELETE FROM session_entry_search WHERE session_id=target_session AND seq=target_seq;
                ELSE
                  INSERT INTO session_entry_search(session_id,seq,type,author,text,created_at)
                  VALUES(target_session,target_seq,e.type,
-                   CASE WHEN e.type='user' AND json_typeof(safe_json(e.payload)->'name')='string'
-                        THEN safe_json(e.payload)->>'name' END,body,e.created_at)
+                   CASE WHEN e.type='user' AND jsonb_typeof(e.attributes->'name')='string'
+                        THEN e.attributes->>'name' END,body,e.created_at)
                  ON CONFLICT(session_id,seq) DO UPDATE
                    SET type=EXCLUDED.type,author=EXCLUDED.author,text=EXCLUDED.text,created_at=EXCLUDED.created_at;
                END IF;
@@ -868,7 +866,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [lease.sessionId],
         );
         const seq = Number(max.rows[0]!.n);
-        const stored = jsonbSafeStringify(entry.payload ?? null);
+        const stored = JSON.stringify(entry.payload ?? null);
         const full: SessionEntry = {
           sessionId: lease.sessionId,
           seq,
@@ -904,7 +902,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
         const updated = await client.query(
-          "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND jsonb_typeof(payload::jsonb) = 'object' AND payload::jsonb ? 'securityTainted'",
+          "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND jsonb_typeof(attributes)='object' AND attributes ? 'securityTainted'",
           [sessionId],
         );
         for (const row of updated.rows) {
@@ -915,7 +913,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           await client.query("UPDATE session_entries SET payload=$3 WHERE session_id=$1 AND seq=$2", [
             sessionId,
             entry.seq,
-            jsonbSafeStringify(payload),
+            JSON.stringify(payload),
           ]);
         }
         if (updated.rows.length > 0) return true;
@@ -990,17 +988,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const [meta, summary] = await Promise.all([
         q(
           `SELECT count(*)::int AS total,
-                  bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
+                  bool_or(attributes -> 'securityTainted' = 'true'::jsonb) AS taint
              FROM session_transcript_entries WHERE session_id = $1`,
           [sessionId],
         ),
         q(
-          `SELECT (payload::jsonb ->> 'throughSeq')::int AS through
+          `SELECT (attributes ->> 'throughSeq')::int AS through
              FROM session_transcript_entries
             WHERE session_id = $1 AND type = 'system'
-              AND payload::jsonb ->> 'kind' = 'context_summary'
-              AND jsonb_typeof(payload::jsonb -> 'throughSeq') = 'number'
-              AND jsonb_typeof(payload::jsonb -> 'text') = 'string'
+              AND attributes ->> 'kind' = 'context_summary'
+              AND jsonb_typeof(attributes -> 'throughSeq') = 'number'
+              AND jsonb_typeof(attributes -> 'text') = 'string'
             ORDER BY seq DESC LIMIT 1`,
           [sessionId],
         ),
@@ -1377,7 +1375,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async missingSearchEntries(sessionId): Promise<number> {
       const rows = await q(
         `WITH missing AS MATERIALIZED (
-           SELECT entry_search_text(e.payload) AS text FROM session_transcript_entries e
+           SELECT COALESCE(CASE WHEN e.encoded_payload THEN e.attributes->>'searchText' END, entry_search_text(e.payload)) AS text FROM session_transcript_entries e
             WHERE e.session_id = $1 AND e.type IN ('user', 'assistant', 'text')
               AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
          )
@@ -1391,7 +1389,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await q(
         `SELECT seq AS n FROM session_transcript_entries
           WHERE session_id = $1 AND type IN ('user', 'assistant', 'text')
-            AND COALESCE(btrim(entry_search_text(payload)), '') <> '' ORDER BY seq DESC LIMIT 1`,
+            AND COALESCE(btrim(COALESCE(CASE WHEN encoded_payload THEN attributes->>'searchText' END, entry_search_text(payload))), '') <> '' ORDER BY seq DESC LIMIT 1`,
         [sessionId],
       );
       return Number(rows[0]?.n ?? -1);
@@ -1474,10 +1472,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                 COALESCE(s.messages, 0) AS messages,
                 COALESCE(s.turns, 0) AS turns,
                 ${lastActivityExpr("s")} AS last_activity,
-                (SELECT ${previewExpr("fe.payload")} FROM session_transcript_entries fe
+                (SELECT fe.payload FROM session_transcript_entries fe
                   WHERE fe.session_id = s.id AND ${userTurn("fe")}
                   ORDER BY fe.seq ASC LIMIT 1) AS first_user,
-                (SELECT ${previewExpr("le.payload")} FROM session_transcript_entries le
+                (SELECT le.payload FROM session_transcript_entries le
                   WHERE le.session_id = s.id AND ${userTurn("le")}
                   ORDER BY le.seq DESC LIMIT 1) AS last_user
            FROM sessions s
@@ -1485,7 +1483,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           ORDER BY last_activity DESC, s.id DESC${pageClause}`,
         params,
       );
-      const parse = (v: unknown, maxLen?: number): string => userMessagePreview(v ?? null, maxLen);
+      const parse = (v: unknown, maxLen?: number): string =>
+        userMessagePreview(typeof v === "string" ? JSON.parse(v) : null, maxLen);
       return rows.map((r) => ({
         id: r.id as string,
         type: r.type as Session["type"],
@@ -1505,13 +1504,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const out = new Map<string, string>();
       if (sessionIds.length === 0) return out;
       const rows = await q(
-        `SELECT DISTINCT ON (le.session_id) le.session_id, ${previewExpr("le.payload")} AS last_user
+        `SELECT DISTINCT ON (le.session_id) le.session_id, le.payload AS last_user
            FROM session_transcript_entries le
           WHERE le.session_id = ANY($1) AND ${userTurn("le")}
           ORDER BY le.session_id, le.seq DESC`,
         [sessionIds],
       );
-      for (const r of rows) out.set(r.session_id as string, userMessagePreview(r.last_user ?? null, 100));
+      for (const r of rows)
+        out.set(
+          r.session_id as string,
+          userMessagePreview(typeof r.last_user === "string" ? JSON.parse(r.last_user) : null, 100),
+        );
       return out;
     },
 

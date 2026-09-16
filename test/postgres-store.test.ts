@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import "./run-availability.ts";
 import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
 import { test, before } from "node:test";
@@ -1163,7 +1164,7 @@ test(
 );
 
 test(
-  "pg null-byte payloads are stripped on write and unqualified legacy data cannot alter canonical reads",
+  "pg null-byte payloads are preserved and unqualified legacy data cannot alter canonical reads",
   { skip },
   async () => {
     const s = createPostgresSessionStore(URL!);
@@ -1175,13 +1176,13 @@ test(
     await s.releaseLease(lease!);
     assert.equal(
       (e.payload as { text?: string }).text,
-      "ab",
-      "append returns the sanitized payload, matching what is stored",
+      "a\u0000b",
+      "append preserves the payload, matching what is stored",
     );
     assert.equal(
       ((await s.getEntries(a.id))[0]!.payload as { text?: string }).text,
-      "ab",
-      "null byte stripped at write",
+      "a\u0000b",
+      "null byte preserved at write",
     );
 
     const pg = (await import("pg")).default;
@@ -1203,7 +1204,14 @@ test(
     );
     const repair = new pg.Client({ connectionString: URL });
     await repair.connect();
-    await assert.rejects(migrateTranscriptPage(repair, a.id, { afterSeq: -1, limit: 100, apply: true }));
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, ["scripts/migrate-transcript-tape.ts", "--apply"], {
+          env: { ...process.env, DATABASE_URL: URL! },
+          stdio: "pipe",
+        }),
+      /authority is already established/,
+    );
     assert.equal((await s.getEntries(a.id)).length, 1);
     await repair.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [a.id]);
     await repair.end();

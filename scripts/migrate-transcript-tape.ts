@@ -38,6 +38,11 @@ const report = (event: string) =>
 report("start");
 try {
   if (
+    !(await client.query("SELECT 1 FROM qm_schema_migrations WHERE id='sessions/store/0017-transcript-payload-json'"))
+      .rowCount
+  )
+    throw new Error("Prepare the transcript payload format before migrating histories");
+  if (
     values.apply &&
     (await client.query("SELECT 1 FROM qm_schema_migrations WHERE id='sessions/store/0018-transcript-authority'"))
       .rowCount

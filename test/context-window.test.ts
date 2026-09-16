@@ -121,7 +121,7 @@ test(
     await store.releaseLease(lease!);
 
     await pool.query(
-      `UPDATE session_tape SET payload = (payload::jsonb #- '{entry,payload,securityTainted}')::text WHERE session_id = $1 AND entry_seq = $2 AND kind='annotation' AND safe_json(payload)->>'event'='transcript_entry'`,
+      `UPDATE session_tape SET payload = (jsonb_set(payload::jsonb, '{entry,payloadJson}', to_jsonb(((payload::jsonb #>> '{entry,payloadJson}')::jsonb - 'securityTainted')::text)) #- '{entry,attributes,securityTainted}')::text WHERE session_id = $1 AND entry_seq = $2 AND kind='annotation' AND safe_json(payload)->>'event'='transcript_entry'`,
       [s.id, summary.seq],
     );
     const rewritten = await pool.query(

@@ -2,16 +2,19 @@
 
 Existing PostgreSQL deployments must first run the compatibility release that adds migration `sessions/store/0017-transcript-entries`. That release atomically mirrors every entry and taint revision into the tape while preserving legacy reads and writes. Drain every older core and background writer before migrating histories.
 
-Take a recoverable database backup and check free storage before the additive backfill. Large stores can prebuild the `session_tape_transcript_entries` partial index concurrently using the exact definition from migration 0017. Run the compatibility image's operator against the deployment database:
+Take a recoverable database backup and check free storage before the additive backfill. Large stores can prebuild the `session_tape_transcript_entries` partial index concurrently using the exact definition from migration 0017. Use the reviewed migration tools from the cutover source while application services remain on the compatibility release. First apply the additive payload-format migration; it accepts both older nested annotations and lossless serialized payloads without establishing transcript authority:
 
 ```sh
+node scripts/prepare-transcript-tape.ts
 npm run migrate:transcript-tape -- --apply
 npm run migrate:transcript-tape
 ```
 
+Escaped NUL characters and lone surrogates remain byte-for-byte in a serialized payload string. Small derived attributes support SQL metadata queries without parsing unsupported Unicode. The operator verifies those attributes against the decoded authoritative payload, and preserves raw formatting for exact qualification. After cutover, run search-index repair for historical rows whose old search projection could not decode the payload.
+
 The operator pages entries under each session's writer lock and verifies each applied page. It preserves existing sparse sequence IDs and parent references without filling holes or renumbering. It refuses invalid negative identities, unexpected canonical entries, and unrepresentable payload changes. It reports active sessions for reconciliation. An interrupted apply can resume with `--after <last-completed-session-id>`; a resumed or capped scan is explicitly partial and cannot qualify the whole corpus. Preserve the original histories when investigating any rejected data.
 
-After the backfill, run the exact cutover candidate's gate before starting its production tasks:
+Only a complete, uncapped operator pass with no busy histories qualifies the payload and derived metadata; a SQL-only payload comparison is insufficient for encoded metadata. After the backfill, run the exact cutover candidate's gate before starting its production tasks:
 
 ```sh
 npm run qualify:transcript-cutover

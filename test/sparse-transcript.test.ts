@@ -7,7 +7,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { tapeTranscriptEntryRecord, type SessionStore } from "../src/sessions/session-store.ts";
 import { createTranscriptSource } from "../src/harness/tape-projection.ts";
-import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
+import { migrateTranscriptPage, verifyTranscriptAttributes } from "../scripts/lib/transcript-tape-migration.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 
 const scope = scopeId("personal", "sparse");
@@ -142,6 +142,191 @@ test(
           { seq: 9, parent_seq: 8 },
         ],
       );
+    } finally {
+      await client.end();
+      await pool.end();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    }
+  },
+);
+
+test(
+  "Postgres preserves historical JSON escapes through migration, context and taint clearing",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    const schema = `escaped_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const url = new URL(process.env.DATABASE_URL!);
+    url.searchParams.set("options", `-c search_path=${schema}`);
+    const pool = new pg.Pool({ connectionString: url.toString() });
+    const client = new pg.Client({ connectionString: url.toString() });
+    await client.connect();
+    try {
+      const store = createPostgresSessionStore(url.toString());
+      const migrations = registeredPgMigrations(url.toString());
+      const authority = migrations.find((m) => m.id === "sessions/store/0018-transcript-authority")!;
+      await applyPgMigrations(
+        pool,
+        migrations.filter((m) => m !== authority),
+      );
+      await client.query(
+        "INSERT INTO sessions(id,type,scope_id,thread_ref,created_at) VALUES('escaped','dm',$1,'escaped',1)",
+        [scope],
+      );
+      const payload = { stdout: "before\u0000after", literal: "\\u0000", surrogate: "\ud800", securityTainted: true };
+      const raw = JSON.stringify(payload, null, 2);
+      await client.query(
+        "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) VALUES('escaped',0,NULL,'tool_result',$1,$2,1)",
+        [raw, scope],
+      );
+      assert.deepEqual(await migrateTranscriptPage(client, "escaped", { afterSeq: -1, limit: 10, apply: true }), {
+        busy: false,
+        scanned: 1,
+        changed: 1,
+        afterSeq: 0,
+      });
+      assert.equal(
+        (await client.query("SELECT payload FROM session_transcript_entries WHERE session_id='escaped'")).rows[0]
+          .payload,
+        raw,
+      );
+      assert.equal(
+        (
+          (await migrateTranscriptPage(client, "escaped", { afterSeq: -1, limit: 10, apply: false })) as {
+            changed: number;
+          }
+        ).changed,
+        0,
+      );
+      await client.query(
+        "UPDATE session_tape SET payload=jsonb_set(payload::jsonb,'{entry,payloadJson}',to_jsonb($1::text))::text WHERE session_id='escaped'",
+        [JSON.stringify(payload)],
+      );
+      assert.equal(
+        (
+          (await migrateTranscriptPage(client, "escaped", { afterSeq: -1, limit: 10, apply: true })) as {
+            changed: number;
+          }
+        ).changed,
+        1,
+      );
+      await client.query(
+        "UPDATE session_tape SET payload=jsonb_set(payload::jsonb,'{entry,attributes,securityTainted}','false')::text WHERE session_id='escaped'",
+      );
+      assert.equal(
+        (
+          (await migrateTranscriptPage(client, "escaped", { afterSeq: -1, limit: 10, apply: false })) as {
+            changed: number;
+          }
+        ).changed,
+        1,
+      );
+      await client.query("BEGIN READ ONLY");
+      await assert.rejects(verifyTranscriptAttributes(client), /metadata differs/);
+      await client.query("ROLLBACK");
+      assert.equal(
+        (
+          (await migrateTranscriptPage(client, "escaped", { afterSeq: -1, limit: 10, apply: true })) as {
+            changed: number;
+          }
+        ).changed,
+        1,
+      );
+      await client.query(
+        "INSERT INTO sessions(id,type,scope_id,thread_ref,created_at) VALUES('null-payload','dm',$1,'null-payload',1)",
+        [scope],
+      );
+      await client.query(
+        "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) VALUES('null-payload',0,NULL,'tool_result',NULL,$1,1)",
+        [scope],
+      );
+      await client.query(
+        "INSERT INTO session_tape(session_id,seq,kind,payload,scope_label,entry_seq,created_at) VALUES('null-payload',0,'annotation',$1,$2,0,1)",
+        [
+          JSON.stringify({
+            event: "transcript_entry",
+            entry: { type: "tool_result", payload: null, at: 1, parentSeq: null },
+          }),
+          scope,
+        ],
+      );
+      assert.equal(
+        (
+          (await migrateTranscriptPage(client, "null-payload", { afterSeq: -1, limit: 10, apply: true })) as {
+            changed: number;
+          }
+        ).changed,
+        1,
+      );
+      assert.equal(
+        (await client.query("SELECT payload FROM session_transcript_entries WHERE session_id='null-payload'")).rows[0]
+          .payload,
+        null,
+      );
+      await client.query("BEGIN READ ONLY");
+      assert.equal(await verifyTranscriptAttributes(client), 2);
+      await client.query("COMMIT");
+      await applyPgMigrations(pool, [authority]);
+      assert.deepEqual((await store.getEntries("escaped"))[0]?.payload, payload);
+      const context = await store.getContextWindow("escaped");
+      assert.equal(context.hasSecurityTaint, true);
+      assert.deepEqual(context.entries[0]?.payload, payload);
+      await store.clearSecurityTaint("escaped");
+      const cleared = { stdout: payload.stdout, literal: payload.literal, surrogate: payload.surrogate };
+      assert.deepEqual((await store.getEntries("escaped"))[0]?.payload, cleared);
+      assert.equal((await store.getContextWindow("escaped")).hasSecurityTaint, false);
+      const lease = (await store.acquireLease("escaped")).lease!;
+      await store.addParticipant("escaped", "reader", undefined, { includeHistory: true });
+      const userPayload = {
+        text: "continued\u0000 searchable",
+        ["bad\u0000key"]: 1,
+        ["bad\ud800key"]: 2,
+        name: "Operator",
+      };
+      const next = await store.append(lease, { type: "user", payload: userPayload, scopeLabel: scope });
+      assert.equal(next.seq, 1);
+      assert.deepEqual(next.payload, userPayload);
+      assert.deepEqual((await store.getEntries("escaped"))[1]?.payload, userPayload);
+      assert.equal((await store.searchEntries("reader", "searchable")).length, 1);
+      assert.equal(await store.lastSearchableEntrySeq("escaped"), 1);
+      assert.equal(await store.missingSearchEntries("escaped"), 0);
+      assert.equal((await store.lastUserMessages(["escaped"])).get("escaped"), userPayload.text);
+      assert.equal((await store.scopeSessionSummaries(scope, false)).find((row) => row.id === "escaped")?.turns, 1);
+      await client.query("DELETE FROM session_entry_search WHERE session_id='escaped' AND seq=1");
+      assert.equal(await store.missingSearchEntries("escaped"), 1);
+      await store.append(lease, {
+        type: "system",
+        payload: { kind: "context_\u0000summary", throughSeq: 999, text: "not a real summary" },
+        scopeLabel: scope,
+      });
+      assert.equal((await store.getContextWindow("escaped")).entries.length, 3);
+      const keyedPayload = { text: "keyonly searchable", ["bad\u0000key"]: 1, ["bad\ud800key"]: 2 };
+      await store.append(lease, { type: "user", payload: keyedPayload, scopeLabel: scope });
+      assert.equal((await store.searchEntries("reader", "keyonly")).length, 1);
+      assert.equal(await store.lastSearchableEntrySeq("escaped"), 3);
+      for (const [seq, oldPayload, type] of [
+        [4, ["securityTainted"], "tool_result"],
+        [5, "securityTainted", "tool_result"],
+        [6, { text: "legacy searchable", searchText: "" }, "user"],
+      ] as const)
+        await store.appendTape(lease, {
+          kind: "annotation",
+          payload: { event: "transcript_entry", entry: { type, payload: oldPayload, at: 1, parentSeq: seq - 1 } },
+          scopeLabel: scope,
+          entrySeq: seq,
+        });
+      await store.clearSecurityTaint("escaped");
+      assert.deepEqual(
+        (await store.getEntries("escaped", { sinceSeq: 4 })).slice(0, 2).map((entry) => entry.payload),
+        [["securityTainted"], "securityTainted"],
+      );
+      assert.equal((await store.searchEntries("reader", "legacy")).length, 1);
+      assert.equal(await store.lastSearchableEntrySeq("escaped"), 6);
+      await client.query("DELETE FROM session_entry_search WHERE session_id='escaped' AND seq=6");
+      assert.equal(await store.missingSearchEntries("escaped"), 2);
+      await store.releaseLease(lease);
     } finally {
       await client.end();
       await pool.end();
