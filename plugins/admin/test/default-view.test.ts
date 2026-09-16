@@ -219,6 +219,7 @@ test("control-plane pages use the shared web UI canvas without redundant page in
   assert.match(html, /data-choice-for="security-posture"/);
   assert.match(html, /data-choice-for="sharing-posture"/);
   assert.match(html, /data-checkbox-for="external-slack-participants"/);
+  assert.match(html, /data-checkbox-for="authenticated-only-sharing"/);
   assert.match(html, /governanceAmbient\.id = "card-governance-org-ambient"/);
   assert.match(html, /id="sc-editor"/);
   assert.match(html, /id="sc-add">\+ Add credential/);
@@ -238,6 +239,7 @@ test("governance renders simple settings as compact rows with contextual actions
     "card-security-posture",
     "card-sharing-posture",
     "card-external-slack",
+    "card-authenticated-only-sharing",
     "card-base-model",
     "card-people-directory",
     "card-turn-wall-clock",

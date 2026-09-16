@@ -251,6 +251,7 @@ const SETTINGS_RESOURCES = {
     "ambientPolicy",
     "egress",
     "externalSlackParticipants",
+    "authenticatedOnlySharing",
     "internalMemberOverrides",
     "orgAmbient",
   ],

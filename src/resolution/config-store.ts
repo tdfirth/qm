@@ -195,6 +195,8 @@ export interface ScopedConfigStore {
   setExternalSlackParticipants(id: ScopeId, on: boolean): void;
   clearExternalSlackParticipants(id: ScopeId): void;
   getExternalSlackParticipantsDurable(id: ScopeId): Promise<boolean>;
+  setAuthenticatedOnlySharing(id: ScopeId, on: boolean): Promise<void>;
+  getAuthenticatedOnlySharingDurable(id: ScopeId): Promise<boolean>;
   getChannelHeaderPin(id: ScopeId): boolean;
   setChannelHeaderPinLatest(id: ScopeId, on: boolean | null): Promise<void>;
   getChannelHeaderPinDurable(id: ScopeId): Promise<boolean>;
@@ -271,6 +273,7 @@ export function createMemoryConfigStore(
     egressPolicies?: DurableMap<PersistedEgressPolicy>;
     unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
     externalSlackParticipants?: DurableMap<PersistedScopedFlag>;
+    authenticatedOnlySharing?: DurableMap<PersistedScopedFlag>;
     channelHeaderPin?: DurableMap<PersistedScopedFlag>;
     baseModels?: DurableMap<PersistedBaseModel>;
     approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
@@ -327,6 +330,7 @@ export function createMemoryConfigStore(
   const egressStore = opts.egressPolicies ?? createMemoryMap<PersistedEgressPolicy>();
   const unfulfilledInsightsStore = opts.unfulfilledInsights ?? createMemoryMap<PersistedScopedFlag>();
   const externalSlackParticipantsStore = opts.externalSlackParticipants ?? createMemoryMap<PersistedScopedFlag>();
+  const authenticatedOnlySharingStore = opts.authenticatedOnlySharing ?? createMemoryMap<PersistedScopedFlag>();
   const channelHeaderPinStore = opts.channelHeaderPin ?? createMemoryMap<PersistedScopedFlag>();
   const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
   const approvedHarnessStore = opts.approvedHarnesses ?? createMemoryMap<PersistedApprovedHarnesses>();
@@ -773,6 +777,14 @@ export function createMemoryConfigStore(
     getExternalSlackParticipantsDurable: async (id) =>
       ((await externalSlackParticipantsStore.get(org))?.on ?? false) ||
       ((await externalSlackParticipantsStore.get(id))?.on ?? false),
+    async setAuthenticatedOnlySharing(id, on) {
+      await writeQueue(`authenticatedOnlySharing:${id}`, () =>
+        authenticatedOnlySharingStore.put(id, { scopeId: id, on }),
+      );
+    },
+    getAuthenticatedOnlySharingDurable: async (id) =>
+      ((await authenticatedOnlySharingStore.get(org))?.on ?? false) ||
+      ((await authenticatedOnlySharingStore.get(id))?.on ?? false),
     getChannelHeaderPin: (id) => channelHeaderPin.get(id) ?? channelHeaderPin.get(org) ?? false,
     async setChannelHeaderPinLatest(id, on) {
       await writeQueue(`channelHeaderPin:${id}`, async () => {
