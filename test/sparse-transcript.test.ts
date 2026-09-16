@@ -127,6 +127,8 @@ test(
       await migrateTranscriptPage(client, "sparse", { afterSeq: 2, limit: 1, apply: true });
       await applyPgMigrations(pool, [authority]);
       const store = createPostgresSessionStore(url.toString());
+      await store.getEntries("sparse");
+      await client.query("UPDATE sessions SET messages=10,turns=10,last_activity=0 WHERE id='sparse'");
       await exercise(store, "sparse");
       assert.deepEqual(
         (

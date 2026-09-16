@@ -888,13 +888,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
               SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
                                        THEN last_activity
                                        ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
-                  messages = CASE WHEN messages = $5 THEN $3
-                                  ELSE (SELECT COUNT(*) FROM session_transcript_entries t WHERE t.session_id = $1) END,
-                  turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
+                  messages = canonical.n,
+                  turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM canonical.n - 1
                                THEN (SELECT COUNT(*) FROM session_transcript_entries t WHERE t.session_id = $1 AND ${userTurn("t")})
-                               ELSE turns + $4 END
+                               ELSE turns + $3 END
+             FROM (SELECT COUNT(*)::int AS n FROM session_transcript_entries t WHERE t.session_id = $1) canonical
             WHERE id = $1`,
-          [full.sessionId, full.createdAt, seq + 1, full.type === "user" && !isOverheardEntry(full) ? 1 : 0, seq],
+          [full.sessionId, full.createdAt, full.type === "user" && !isOverheardEntry(full) ? 1 : 0],
         );
         return full;
       });
