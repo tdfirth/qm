@@ -569,10 +569,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         id: "sessions/store/0018-transcript-authority",
         statements: [
           `DO $transcript_parity$
+           DECLARE target_session text;
            BEGIN
+             IF EXISTS (SELECT 1 FROM session_entries e WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id=e.session_id))
+                OR EXISTS (SELECT 1 FROM session_tape t WHERE t.kind='annotation' AND safe_json(t.payload)->>'event'='transcript_entry'
+                           AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id=t.session_id)) THEN
+               RAISE EXCEPTION 'Transcript migration has orphaned histories; reconcile them before cutover';
+             END IF;
+             FOR target_session IN SELECT id FROM sessions LOOP
              IF EXISTS (
                SELECT 1 FROM session_entries e
-               WHERE NOT EXISTS (
+               WHERE e.session_id=target_session AND NOT EXISTS (
                  SELECT 1 FROM session_transcript_entries t
                  WHERE t.session_id=e.session_id AND t.seq=e.seq
                    AND (t.parent_seq,t.type,t.payload::jsonb,t.scope_label,t.created_at)
@@ -580,13 +587,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                )
              ) OR EXISTS (
                SELECT 1 FROM session_transcript_entries t
-               WHERE NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.session_id=t.session_id AND e.seq=t.seq)
+               WHERE t.session_id=target_session AND NOT EXISTS (SELECT 1 FROM session_entries e WHERE e.session_id=t.session_id AND e.seq=t.seq)
              ) OR EXISTS (
-               SELECT session_id FROM session_transcript_entries
+               SELECT session_id FROM session_transcript_entries WHERE session_id=target_session
                GROUP BY session_id HAVING MIN(seq)<>0 OR MAX(seq)+1<>COUNT(*) OR COUNT(seq)<>COUNT(*)
              ) THEN
                RAISE EXCEPTION 'Transcript migration is incomplete; finish and validate the transcript backfill before cutover';
              END IF;
+             END LOOP;
            END $transcript_parity$`,
           `SET LOCAL lock_timeout = '3s'`,
           `CREATE OR REPLACE FUNCTION sync_session_transcript_search() RETURNS trigger
@@ -963,19 +971,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
-      const since = opts?.sinceSeq ?? 0;
-      if (opts?.limit !== undefined) {
-        const rows = await q(
-          "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC LIMIT $3",
-          [sessionId, since, opts.limit],
-        );
-        return rows.map(rowToEntry).reverse();
-      }
       const rows = await q(
-        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq ASC",
-        [sessionId, since],
+        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC LIMIT $3",
+        [sessionId, opts?.sinceSeq ?? 0, opts?.limit ?? null],
       );
-      return rows.map(rowToEntry);
+      return rows.map(rowToEntry).reverse();
     },
 
     async getContextWindow(sessionId) {
@@ -1000,11 +1000,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const through = summary[0]?.through;
       const sinceSeq = typeof through === "number" ? through + 1 : 0;
       const rows = await q(
-        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq ASC",
+        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC",
         [sessionId, sinceSeq],
       );
       return {
-        entries: rows.map(rowToEntry),
+        entries: rows.map(rowToEntry).reverse(),
         totalEntries: Number(meta[0]?.total ?? 0),
         hasSecurityTaint: meta[0]?.taint === true,
       };
@@ -1289,10 +1289,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $2
           WHERE e.session_id = $1
             AND ${withinParticipantWindow("e", "p")}
-          ORDER BY e.seq ASC`,
+          ORDER BY e.seq DESC`,
         [sessionId, principalId],
       );
-      return rows.map(rowToEntry);
+      return rows.map(rowToEntry).reverse();
     },
 
     async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
@@ -1610,13 +1610,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async attributedTurns(): Promise<AttributedTurn[]> {
       const rows = await q(
-        `SELECT p.principal_id, e.session_id, (e.created_at / 86400000)::bigint AS day,
-                COUNT(*) AS turns, MIN(e.created_at) AS first_at, MAX(e.created_at) AS last_at
+        `SELECT p.principal_id,p.session_id,d.day,d.turns,d.first_at,d.last_at
            FROM participants p
-           JOIN session_transcript_entries e ON e.session_id = p.session_id
-          WHERE ${userTurn("e")}
-            AND ${withinParticipantWindow("e", "p")}
-          GROUP BY p.principal_id, e.session_id, day`,
+           CROSS JOIN LATERAL (
+             SELECT (e.created_at / 86400000)::bigint AS day,
+                    COUNT(*) AS turns,MIN(e.created_at) AS first_at,MAX(e.created_at) AS last_at
+               FROM session_transcript_entries e
+              WHERE e.session_id=p.session_id AND ${userTurn("e")}
+                AND ${withinParticipantWindow("e", "p")}
+              GROUP BY day
+           ) d`,
       );
       return rows.map((r) => ({
         principalId: r.principal_id as string,

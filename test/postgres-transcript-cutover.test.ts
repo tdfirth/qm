@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
@@ -53,8 +55,8 @@ test(
       await insertLegacy();
       await client.query(`INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at)
       VALUES('history',1,0,'assistant','{"text":"reply"}','personal:test',2)`);
-      const reject = async () => {
-        await assert.rejects(applyPgMigrations(db.pool, [authority]), /Transcript migration is incomplete/);
+      const reject = async (message = /Transcript migration is incomplete/) => {
+        await assert.rejects(applyPgMigrations(db.pool, [authority]), message);
         assert.equal(
           (await client.query("SELECT 1 FROM qm_schema_migrations WHERE id=$1", [authority.id])).rowCount,
           0,
@@ -84,11 +86,27 @@ test(
       await reject();
       await insertLegacy();
       await repair();
+      await client.query("UPDATE session_entries SET session_id='orphan' WHERE session_id='history' AND seq=0");
+      await reject(/orphaned histories/);
+      await client.query("UPDATE session_entries SET session_id='history' WHERE session_id='orphan'");
+      await client.query("UPDATE session_tape SET session_id='orphan' WHERE session_id='history' AND entry_seq=0");
+      await reject(/orphaned histories/);
+      await client.query("UPDATE session_tape SET session_id='history' WHERE session_id='orphan'");
       await applyPgMigrations(db.pool, [authority]);
       assert.equal(
         (await client.query("SELECT checksum FROM qm_schema_migrations WHERE id=$1", [authority.id])).rows[0].checksum,
         authority.checksum,
       );
+      const applyAfterCutover = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL("../scripts/migrate-transcript-tape.ts", import.meta.url)), "--apply"],
+        {
+          env: { ...process.env, DATABASE_URL: db.url },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(applyAfterCutover.status, 1);
+      assert.match(applyAfterCutover.stderr, /Transcript authority is already established/);
       const store = createPostgresSessionStore(db.url);
       assert.deepEqual(
         (await store.getEntries("history")).map((e) => e.payload),

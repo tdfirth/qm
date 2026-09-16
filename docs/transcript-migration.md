@@ -1,0 +1,24 @@
+# Canonical transcript cutover
+
+Existing PostgreSQL deployments must first run the compatibility release that adds migration `sessions/store/0017-transcript-entries`. That release atomically mirrors every entry and taint revision into the tape while preserving legacy reads and writes. Drain every older core and background writer before migrating histories.
+
+Take a recoverable database backup and check free storage before the additive backfill. Large stores can prebuild the `session_tape_transcript_entries` partial index concurrently using the exact definition from migration 0017. Run the compatibility image's operator against the deployment database:
+
+```sh
+npm run migrate:transcript-tape -- --apply
+npm run migrate:transcript-tape
+```
+
+The operator pages entries under each session's writer lock and verifies each applied page. It refuses source gaps, unexpected canonical entries, and unrepresentable payload changes. It reports active sessions for reconciliation. An interrupted apply can resume with `--after <last-completed-session-id>`; a resumed or capped scan is explicitly partial and cannot qualify the whole corpus. Preserve the original histories when investigating any rejected data.
+
+After the backfill, run the exact cutover candidate's gate before starting its production tasks:
+
+```sh
+npm run qualify:transcript-cutover
+```
+
+This applies the ordinary migration ledger, including migration 0018. The gate rejects orphaned histories, missing or changed entries, extra canonical entries, and sequence gaps. It compares original payloads, timestamps, scopes, and parent identities one session at a time, including sessions the backfill skipped as busy. Its safety depends on all remaining writers preserving the atomic compatibility invariant. Do not deploy another schema migration concurrently with this qualification.
+
+Only a successful gate records transcript authority and moves search indexing to canonical annotations. Deploy that same immutable candidate and verify full, bounded, participant-scoped, and continuation reads. Backfill apply is rejected after authority is established.
+
+This cutover release retains legacy writes for rollback. Before a subsequent release stops them, retain this tape-authoritative release as the rollback target: older releases allocate sequence numbers from the frozen legacy table. Keep the frozen table and recovery backups until the deployment's retention policy permits deletion. Model replay imports and harness-specific reconstruction remain separate from transcript storage; exact transcript annotations never fabricate model replay coverage.
