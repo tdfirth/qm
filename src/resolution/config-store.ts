@@ -197,6 +197,7 @@ export interface ScopedConfigStore {
   getExternalSlackParticipantsDurable(id: ScopeId): Promise<boolean>;
   setAuthenticatedOnlySharing(id: ScopeId, on: boolean): Promise<void>;
   getAuthenticatedOnlySharingDurable(id: ScopeId): Promise<boolean>;
+  getAuthenticatedOnlySharingOwnDurable(id: ScopeId): Promise<boolean | null>;
   getChannelHeaderPin(id: ScopeId): boolean;
   setChannelHeaderPinLatest(id: ScopeId, on: boolean | null): Promise<void>;
   getChannelHeaderPinDurable(id: ScopeId): Promise<boolean>;
@@ -785,6 +786,7 @@ export function createMemoryConfigStore(
     getAuthenticatedOnlySharingDurable: async (id) =>
       ((await authenticatedOnlySharingStore.get(org))?.on ?? false) ||
       ((await authenticatedOnlySharingStore.get(id))?.on ?? false),
+    getAuthenticatedOnlySharingOwnDurable: async (id) => (await authenticatedOnlySharingStore.get(id))?.on ?? null,
     getChannelHeaderPin: (id) => channelHeaderPin.get(id) ?? channelHeaderPin.get(org) ?? false,
     async setChannelHeaderPinLatest(id, on) {
       await writeQueue(`channelHeaderPin:${id}`, async () => {

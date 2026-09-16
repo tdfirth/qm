@@ -283,6 +283,7 @@ test("governance reviews high-impact changes in product and preserves drafts", (
   assert.match(html, /key === "security-posture"/);
   assert.match(html, /key === "sharing-posture"/);
   assert.match(html, /key === "external-slack-participants"/);
+  assert.match(html, /key === "authenticated-only-sharing"/);
   assert.match(html, /Review the immutable change below/);
   assert.match(html, /function hasGovernanceDraft\(\)/);
   assert.match(html, /function governanceScopeName\(scopeId = scope\)/);

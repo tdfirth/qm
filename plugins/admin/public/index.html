@@ -5732,6 +5732,7 @@
                     </p>
                   </div>
                   <div class="body">
+                    <p id="authenticated-only-sharing-effective"></p>
                     <input type="checkbox" id="authenticated-only-sharing" hidden />
                     <div class="choice-stack">
                       <label class="posture-choice"
@@ -8299,10 +8300,20 @@
         const showAuthenticatedOnlySharing = "authenticatedOnlySharing" in r.data;
         $("card-authenticated-only-sharing").classList.toggle("hidden", !showAuthenticatedOnlySharing);
         if (showAuthenticatedOnlySharing) {
-          $("authenticated-only-sharing").checked = !!r.data.authenticatedOnlySharing;
+          const authenticatedOnly = !!r.data.authenticatedOnlySharing;
+          const authenticatedOnlyLabel = (on) => (on ? "Authenticated only" : "Allow links for anyone");
+          $("authenticated-only-sharing-effective").textContent =
+            (r.data.authenticatedOnlySharingOverride == null
+              ? scope.startsWith("org:")
+                ? "Default"
+                : "Following organization"
+              : "Configured: " + authenticatedOnlyLabel(r.data.authenticatedOnlySharingOverride)) +
+            " · Effective: " +
+            authenticatedOnlyLabel(authenticatedOnly);
+          $("authenticated-only-sharing").checked = authenticatedOnly;
           document
             .querySelectorAll('[data-checkbox-for="authenticated-only-sharing"]')
-            .forEach((input) => (input.checked = input.value === (r.data.authenticatedOnlySharing ? "on" : "off")));
+            .forEach((input) => (input.checked = input.value === (authenticatedOnly ? "on" : "off")));
         }
         const showInternalOverrides = scope.startsWith("org:") && "internalMemberOverrides" in r.data;
         $("card-internal-member-overrides").classList.toggle("hidden", !showInternalOverrides);
@@ -11223,6 +11234,24 @@
               : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
             confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
             danger: !!body.on,
+          });
+        }
+        if (key === "authenticated-only-sharing") {
+          const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
+          const label = (on) => (on ? "Authenticated only" : "Links for anyone allowed");
+          return reviewGovernanceChange({
+            title: body.on ? "Require sign-in for shared conversations?" : "Allow public share links again?",
+            subtitle: "This applies to new shares and to every existing public link in the selected scope.",
+            facts: [
+              ["Scope", governanceScopeName()],
+              ["Current", label(before)],
+              ["Proposed", label(body.on)],
+            ],
+            warning: body.on
+              ? "New anyone-with-the-link shares are refused and existing public links stop resolving while this is on."
+              : "Every public link created before the prohibition becomes readable again by anyone who holds it, without signing in.",
+            confirmLabel: body.on ? "Require sign-in" : "Allow public links",
+            danger: !body.on,
           });
         }
         if (key === "internal-member-overrides") {
