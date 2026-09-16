@@ -545,7 +545,13 @@ test("authenticated-only sharing is scope-admin governed and reads back as the e
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ on: false }),
     });
-    assert.notEqual(anonymous.status, 200);
+    assert.ok([401, 403].includes(anonymous.status), `anonymous PUT returned ${anonymous.status}`);
+    const nonAdmin = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/authenticated-only-sharing`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      body: JSON.stringify({ on: false }),
+    });
+    assert.equal(nonAdmin.status, 403);
     assert.equal(await read("org:default-org"), true);
   } finally {
     await srv.close();

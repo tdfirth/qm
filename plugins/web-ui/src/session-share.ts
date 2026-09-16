@@ -31,7 +31,7 @@ export async function openSessionShare(id: string): Promise<void> {
   let state: ShareState = { share: null };
   let busy = false;
   let audience: Audience = "internal";
-  let audiences: Audience[] = ["internal", "external"];
+  let audiences: Audience[] | null = null;
   let error = "";
   let copied = false;
   const endpoint = `/api/sessions/${encodeURIComponent(id)}/share`;
@@ -69,6 +69,7 @@ export async function openSessionShare(id: string): Promise<void> {
     }
   };
   const draw = () => {
+    const offered: Audience[] = audiences ?? ["internal"];
     const saveLabel = state.share ? "Create new link" : "Create link";
     const url = state.share
       ? new URL(withBase(`/share/${state.share.audience}/${state.share.token}`), location.origin).href
@@ -88,7 +89,7 @@ export async function openSessionShare(id: string): Promise<void> {
               aria-label="Who can view"
               aria-haspopup="menu"
               aria-expanded="false"
-              ?disabled=${busy || audiences.length < 2}
+              ?disabled=${busy || offered.length < 2}
               @click=${toggleFormMenu}
               @keydown=${(event: KeyboardEvent) => {
                 if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -121,7 +122,7 @@ export async function openSessionShare(id: string): Promise<void> {
                 }
               }}
             >
-              ${audiences.map(
+              ${offered.map(
                 (value) =>
                   html`<button
                     type="button"
@@ -149,7 +150,7 @@ export async function openSessionShare(id: string): Promise<void> {
         </div>
         ${audience === "external" ? html`<p class="share-external-warning" role="status">⚠️ External. Double-check what you're sharing.</p>` : ""}
         ${
-          audiences.includes("external")
+          audiences === null || audiences.includes("external")
             ? ""
             : html`<p class="share-privacy-note share-policy-note" role="status">
                 Links for anyone are turned off by policy. Only signed-in members of your organization can view this
@@ -211,7 +212,7 @@ export async function openSessionShare(id: string): Promise<void> {
   void api<{ audiences: Audience[] }>(endpoint)
     .then((policy) => {
       audiences = policy.audiences;
-      if (!audiences.includes(audience)) audience = audiences[0] ?? "internal";
+      if (!policy.audiences.includes(audience)) audience = policy.audiences[0] ?? "internal";
       draw();
     })
     .catch((e) => swallow("web-ui: read share audiences", e));
