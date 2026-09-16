@@ -2185,6 +2185,11 @@ test("pg search: writes are atomic and updates and deletes keep the index curren
       payload: { text: "original document" },
       scopeLabel: session.scopeId,
     });
+    await pool.query(
+      "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) SELECT session_id,seq,parent_seq,type,payload,scope_label,created_at FROM session_transcript_entries WHERE session_id=$1 ON CONFLICT DO NOTHING",
+      [session.id],
+    );
+    assert.equal((await pool.query("SELECT 1 FROM session_entries WHERE session_id=$1", [session.id])).rowCount, 1);
     await pool.query("UPDATE session_entries SET payload=$2 WHERE session_id=$1", [
       session.id,
       JSON.stringify({ text: "legacy tamper" }),
