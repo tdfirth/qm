@@ -2592,12 +2592,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const sameHarness = rows.every(
               (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
             );
-            if (
-              (!covered || lastImportLacksScopes(rows)) &&
-              deps.sessionTapeMode === "serve" &&
-              sameHarness &&
-              participantHistorySeqs === undefined
-            ) {
+            if ((!covered || lastImportLacksScopes(rows)) && sameHarness && participantHistorySeqs === undefined) {
               const imported = await appendCoverageImport(deps.sessions, lease, rawEntries, scopeId);
               if (imported) {
                 console.log(
@@ -2610,12 +2605,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             }
             const eventsEntitled = tapeEventsEntitled(rows, conversation.audience, scopeId, resolution.orgScopeId);
-            const eligible =
-              deps.sessionTapeMode === "serve" &&
-              covered &&
-              sameHarness &&
-              eventsEntitled &&
-              participantHistorySeqs === undefined;
+            const eligible = covered && sameHarness && eventsEntitled && participantHistorySeqs === undefined;
             let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
             if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
               const interrupt = await deps.sessions.appendTape(lease, {
@@ -2872,14 +2862,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           continuation?: {
             history: SessionEntry[];
-            tape?: { rows: Awaited<ReturnType<SessionStore["getTape"]>>; mode: "shadow" | "serve"; fold?: unknown[] };
+            tape?: { rows: Awaited<ReturnType<SessionStore["getTape"]>>; fold?: unknown[] };
           },
         ) => {
           let selectedTape = continuation?.tape;
-          if (!continuation && tapeRows) {
+          if (!continuation && tapeRows?.serve && history === visibleHistory) {
             selectedTape = {
               rows: tapeRows.rows,
-              mode: tapeRows.serve && history === visibleHistory ? "serve" : "shadow",
               ...(tapeRows.fold ? { fold: tapeRows.fold } : {}),
             };
           }
@@ -3039,7 +3028,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(selectedTape
               ? {
                   tapeRows: selectedTape.rows,
-                  tapeMode: selectedTape.mode,
                   ...(selectedTape.fold ? { tapeFold: selectedTape.fold } : {}),
                 }
               : {}),
@@ -3204,22 +3192,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 includeSecurityTainted: false,
               }),
             );
-            const resumedTape = tapeRows
-              ? {
-                  rows: filterTapeForAudience(
-                    await deps.sessions.getTape(session.id),
-                    conversation.audience,
-                    scopeId,
-                    resolution.orgScopeId,
-                  ),
-                  mode: "shadow" as const,
-                }
-              : undefined;
             segment = await runHarnessSegment(
               resumeNote() +
                 "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
               inbound.images.length ? { images: inbound.images } : {},
-              { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
+              { history: resumedHistory },
             );
             modelCalls += segment.modelCalls ?? 0;
             addUsage();
@@ -3325,9 +3302,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       );
                     if (primaryServedTape && sameHarness && eventsEntitled && primarySubturnComplete) {
                       const fold = await rehydrateTape(foldTape(rows));
-                      if (fold.length && lintFold(fold).ok) return { rows, mode: "serve" as const, fold };
+                      if (fold.length && lintFold(fold).ok) return { rows, fold };
                     }
-                    return { rows, mode: "shadow" as const };
+                    return undefined;
                   })
                   .catch((e) => {
                     swallow("tape: nudge read", e);
@@ -3336,7 +3313,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : undefined;
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
-              nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
+              !nudgeTape && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
             if (primaryStopped && !result.stopped)

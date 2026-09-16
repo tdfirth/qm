@@ -1525,40 +1525,29 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     credentialExecServices?: readonly { service: string; binary: string }[],
     commandCredentialHandles?: readonly string[],
     tapeRows?: TapeRecord[],
-    tapeMode?: "shadow" | "serve",
     tapeFold?: unknown[],
     tape?: HarnessTurnInput["tape"],
     turnProviderKeys?: ProviderKeys,
     sessionTools = false,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
-    let reconstructed: PiReplayMessage[] | null;
-    try {
-      reconstructed = reconstructMessagesFromHistory(history);
-    } catch (err) {
-      console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
-      reconstructed = null;
-    }
-    let foldSeed: PiReplayMessage[] | null = null;
+    let seedSource: PiReplayMessage[] | null = null;
     if (tapeRows?.length) {
-      const tag = tapeMode === "serve" ? "[tape-serve]" : "[tape-shadow]";
       try {
-        const plan = planTapeSeed(tapeRows, "pi", tapeMode, tapeFold);
-        foldSeed = (plan.seed as PiReplayMessage[] | null) ?? null;
-        if (plan.skip) {
-          console.log(`${tag} cold session=${sessionId} skip=${plan.skip} rows=${tapeRows.length}`);
-        } else {
-          console.log(
-            `${tag} cold session=${sessionId} fold=${plan.fold!.length} lint=${plan.lint!.ok ? "ok" : "FAIL"} recon=${reconstructed?.length ?? -1}` +
-              (tapeMode === "serve" ? ` served=${foldSeed ? "fold" : "reconstruction"}` : "") +
-              (plan.lint!.ok ? "" : ` problems=${JSON.stringify(plan.lint!.problems.slice(0, 3))}`),
-          );
-        }
+        const plan = planTapeSeed(tapeRows, "pi", tapeFold);
+        seedSource = plan.seed as PiReplayMessage[] | null;
+        if (!seedSource) console.log(`[tape] cold session=${sessionId} reconstruction=${plan.skip ?? "invalid-fold"}`);
       } catch (err) {
-        console.error("%s", `${tag} fold threw:`, errMessage(err));
+        console.error("[tape] fold threw:", errMessage(err));
       }
     }
-    const seedSource = foldSeed ?? reconstructed;
+    if (!seedSource) {
+      try {
+        seedSource = reconstructMessagesFromHistory(history);
+      } catch (err) {
+        console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
+      }
+    }
     const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
@@ -1754,7 +1743,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.credentialExecServices,
           turn.commandCredentialHandles,
           turn.tapeRows,
-          turn.tapeMode,
           turn.tapeFold,
           turn.tape,
           turn.providerKeys,
