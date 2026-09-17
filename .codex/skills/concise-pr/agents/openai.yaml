@@ -1,4 +1,0 @@
-interface:
-  display_name: "Concise PR"
-  short_description: "Commit scoped changes with concise PR bullets"
-  default_prompt: "Use $concise-pr to commit the scoped changes and open a concise pull request."
