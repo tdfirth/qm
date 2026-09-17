@@ -117,6 +117,15 @@ test("the inbox reads the loop's ledger, not a bespoke inbox endpoint", () => {
   assert.match(inbox, /const payload = entry\.sourcePayload;/, "source fields are read out of the opaque payload");
 });
 
+test("localhost can overlay private inbox seed data without checking it into source", () => {
+  assert.match(inbox, /fetch\("\/inbox-seed\.local\.json", \{ cache: "no-store" \}\)/);
+  assert.match(
+    inbox,
+    /if \(!\["localhost", "127\.0\.0\.1", "\[::1\]"\]\.includes\(location\.hostname\)\) return \[\];/,
+  );
+  assert.match(inbox, /return local\.length \? local : payload\.items\.map\(toInboxItem\);/);
+});
+
 test("each item carries a follow-up chat with the agent", () => {
   assert.match(inbox, /export function chatTpl\(item: InboxItem\): TemplateResult/);
   assert.match(inbox, /actionPath\(item, "followup"\)/);
@@ -180,6 +189,46 @@ test("the inbox stylesheet exists and scopes to inbox- classes", () => {
   assert.match(css, /\.inbox-chip\.active \{/);
   assert.match(css, /\.pane-kind-count \{/);
   assert.match(css, /\.nav-badge \{/);
+});
+
+test("the inbox list spans the same desktop content width as the item detail", () => {
+  assert.match(
+    css,
+    /--inbox-content-width: calc\(var\(--inbox-primary-width\) \+ var\(--inbox-content-gap\) \+ var\(--inbox-aside-width\)\);/,
+  );
+  assert.match(css, /\.inbox-page \.inbox-surface \{\s*width: min\(var\(--inbox-content-width\), 100%\);/);
+  assert.match(
+    css,
+    /\.inbox-page:not\(:has\(\.inbox-item-aside\)\) > \.pane-head \{\s*width: min\(var\(--inbox-content-width\), 100%\);\s*max-width: none;/,
+  );
+  assert.match(
+    css,
+    /grid-template-columns: minmax\(0, var\(--inbox-primary-width\)\) minmax\(0, var\(--inbox-aside-width\)\);/,
+  );
+});
+
+test("inbox item hover behaves like a sidebar conversation hover", () => {
+  assert.match(css, /\.session:hover \{\s*background: var\(--conversation-hover\);/);
+  assert.match(css, /--inbox-row-hover: color-mix\(in srgb, var\(--foreground\) 4%, var\(--background\)\);/);
+  assert.match(css, /\.inbox-item-summary:hover,[\s\S]*?background: var\(--inbox-row-hover\);/);
+  const reveal = css.match(/\.inbox-item-summary:hover \.inbox-item-dismiss,[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(reveal, /opacity: 1;/);
+  assert.doesNotMatch(reveal, /background:|color:|pointer-events:/);
+  assert.match(css, /\.inbox-item-summary:has\(\.inbox-item-dismiss:hover\) \{\s*background: none;/);
+});
+
+test("inbox dividers do not collide with rounded hovered rows", () => {
+  assert.match(css, /\.inbox-item:not\(:last-child\)::after \{[\s\S]*?margin: 0 12px;/);
+  assert.match(
+    css,
+    /\.inbox-item:hover::after,\s*\.inbox-item:has\(\+ \.inbox-item:hover\)::after \{\s*background: transparent;/,
+  );
+  assert.doesNotMatch(css, /\.inbox-item \{\s*border-bottom:/);
+  assert.match(css, /\.inbox-page \.inbox-toolbar \{\s*padding: 8px 0;\s*border-bottom: 0;/);
+});
+
+test("clipped email snippets do not trigger a native hover tooltip", () => {
+  assert.match(css, /\.src-gmail \.inbox-item-snippet \{\s*pointer-events: none;/);
 });
 
 test("a send refused because the agent redrafted keeps the person's edit and shows the new draft", () => {

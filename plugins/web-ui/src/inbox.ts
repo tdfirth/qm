@@ -1,5 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
+  Archive,
   ArrowUp,
   ArrowUpRight,
   CheckCheck,
@@ -139,6 +140,71 @@ const sending = new Set<string>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
 const chatDrafts = new Map<string, string>();
+
+let archiveToastHost: HTMLDivElement | null = null;
+let archiveToastTimer: ReturnType<typeof setTimeout> | undefined;
+
+function closeArchiveToast(): void {
+  clearTimeout(archiveToastTimer);
+  archiveToastHost?.remove();
+  archiveToastHost = null;
+}
+
+function showArchiveToast(item: InboxItem): void {
+  closeArchiveToast();
+  const host = document.createElement("div");
+  archiveToastHost = host;
+  document.body.append(host);
+  let busy = false;
+  const schedule = (): void => {
+    clearTimeout(archiveToastTimer);
+    if (!busy && !host.matches(":hover") && !host.contains(document.activeElement)) {
+      archiveToastTimer = setTimeout(() => {
+        if (archiveToastHost === host) closeArchiveToast();
+      }, 8000);
+    }
+  };
+  const draw = (): void => {
+    render(
+      html`<div
+        class="action-toast"
+        role="status"
+        @mouseenter=${() => clearTimeout(archiveToastTimer)}
+        @mouseleave=${schedule}
+        @focusin=${() => clearTimeout(archiveToastTimer)}
+        @focusout=${() => queueMicrotask(schedule)}
+      >
+        ${icon(Archive, 16)}
+        <span>Dismissed from inbox</span>
+        <button
+          type="button"
+          ?disabled=${busy}
+          @click=${async () => {
+            busy = true;
+            clearTimeout(archiveToastTimer);
+            draw();
+            const restored = await setItemStatus(item, "open");
+            if (archiveToastHost !== host) return;
+            if (restored) closeArchiveToast();
+            else {
+              busy = false;
+              draw();
+              schedule();
+            }
+          }}
+        >
+          ${busy ? "Undoing…" : "Undo"}
+        </button>
+        <button class="icon-btn" type="button" aria-label="Dismiss notification" @click=${closeArchiveToast}>
+          ${icon(X, 14)}
+        </button>
+      </div>`,
+      host,
+    );
+  };
+  draw();
+  schedule();
+}
 
 let emojiIndexRequested = false;
 
@@ -319,8 +385,31 @@ export async function refreshInbox(opts: { silent?: boolean; ifStaleMs?: number 
 }
 
 async function fetchItems(loopId: string): Promise<InboxItem[]> {
-  const payload = await api<{ items: LedgerItem[] }>(`/api/loops/${encodeURIComponent(loopId)}/items`);
-  return payload.items.map(toInboxItem);
+  const [payload, local] = await Promise.all([
+    api<{ items: LedgerItem[] }>(`/api/loops/${encodeURIComponent(loopId)}/items`),
+    fetchLocalInboxItems(),
+  ]);
+  return local.length ? local : payload.items.map(toInboxItem);
+}
+
+async function fetchLocalInboxItems(): Promise<InboxItem[]> {
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return [];
+  try {
+    const response = await fetch("/inbox-seed.local.json", { cache: "no-store" });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { items?: unknown };
+    if (!Array.isArray(payload.items)) return [];
+    return payload.items.filter(
+      (item): item is InboxItem =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as InboxItem).id === "string" &&
+        typeof (item as InboxItem).sourceKey === "string" &&
+        ((item as InboxItem).source === "gmail" || (item as InboxItem).source === "slack"),
+    );
+  } catch {
+    return [];
+  }
 }
 
 let realtimeWired = false;
@@ -564,13 +653,17 @@ async function sendItemNow(itemId: string): Promise<void> {
   }
 }
 
-export async function setItemStatus(item: InboxItem, status: "open" | "dismissed"): Promise<void> {
-  if (acting.has(item.id)) return;
+export async function setItemStatus(item: InboxItem, status: "open" | "dismissed"): Promise<boolean> {
+  if (acting.has(item.id)) return false;
   acting.add(item.id);
+  drawAll();
   try {
     replaceItem(await postAction(item, status === "dismissed" ? "dismiss" : "reopen"));
+    if (status === "dismissed") showArchiveToast(item);
+    return true;
   } catch (e) {
     notify(`Couldn't update the item: ${e instanceof Error ? e.message : e}`);
+    return false;
   } finally {
     acting.delete(item.id);
     drawAll();
@@ -1025,35 +1118,51 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
   const sub = gmail ? item.title : item.from;
   return html`
     <div class="inbox-item ${expanded ? "expanded" : ""} ${handled ? "handled" : ""} src-${item.source}">
-      <button
-        class="inbox-item-row"
-        type="button"
-        aria-expanded=${expandedAttr}
-        @click=${() => {
-          const previous = surface.selectedId;
-          if (previous && previous !== item.id) {
-            const prevItem = inboxState.items.find((i) => i.id === previous);
-            if (prevItem) void persistDraft(prevItem);
-          }
-          surface.selectedId = inlineDetail && open ? null : item.id;
-          if (!inlineDetail) syncItemUrl(surface.selectedId, true);
-          drawAll();
-        }}
-      >
-        <span class="inbox-item-glyph">${sourceGlyph(item.source)}</span>
-        <span class="inbox-item-main">
-          <span class="inbox-item-top">
-            <span class="inbox-item-heading">${heading}</span>
-            <span class="inbox-item-sub">${sub}</span>
+      <div class="inbox-item-summary">
+        <button
+          class="inbox-item-row"
+          type="button"
+          aria-expanded=${expandedAttr}
+          @click=${() => {
+            const previous = surface.selectedId;
+            if (previous && previous !== item.id) {
+              const prevItem = inboxState.items.find((i) => i.id === previous);
+              if (prevItem) void persistDraft(prevItem);
+            }
+            surface.selectedId = inlineDetail && open ? null : item.id;
+            if (!inlineDetail) syncItemUrl(surface.selectedId, true);
+            drawAll();
+          }}
+        >
+          <span class="inbox-item-glyph">${sourceGlyph(item.source)}</span>
+          <span class="inbox-item-main">
+            <span class="inbox-item-top">
+              <span class="inbox-item-heading">${heading}</span>
+              <span class="inbox-item-sub">${sub}</span>
+            </span>
+            <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
           </span>
-          <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
-        </span>
-        <span class="inbox-item-side">
-          ${participantsTpl(item)} ${itemSideMark(item, handled)}
-          <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
-          ${icon(expanded ? ChevronDown : ChevronRight, 13)}
-        </span>
-      </button>
+          <span class="inbox-item-side">
+            ${participantsTpl(item)} ${itemSideMark(item, handled)}
+            <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
+            ${icon(expanded ? ChevronDown : ChevronRight, 13)}
+          </span>
+        </button>
+        ${
+          !handled
+            ? html`<button
+                class="session-menu-btn inbox-item-dismiss"
+                type="button"
+                aria-label=${`Archive ${item.title || heading}`}
+                ${tip("Archive")}
+                ?disabled=${acting.has(item.id)}
+                @click=${() => void setItemStatus(item, "dismissed")}
+              >
+                ${icon(Archive, 13.5)}
+              </button>`
+            : nothing
+        }
+      </div>
       ${
         expanded
           ? html`<div class="inbox-item-detail">
