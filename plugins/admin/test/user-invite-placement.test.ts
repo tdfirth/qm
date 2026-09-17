@@ -18,7 +18,7 @@ class Container {
   }
 }
 
-test("external invitation controls and feedback belong to External users, not the activity roster", () => {
+test("external invitation controls stay in External users", () => {
   const start = html.indexOf("const usersCard = dataCard(");
   const end = html.indexOf("\n        };\n        drawLists();", start);
   assert.ok(start >= 0 && end > start);
@@ -32,7 +32,10 @@ test("external invitation controls and feedback belong to External users, not th
       const body = new Container();
       body.append(content);
       cards.set(title, { heading, body });
-      return { querySelector: (selector: string) => (selector === ".head h2" ? heading : body) };
+      return {
+        classList: { add() {} },
+        querySelector: (selector: string) => (selector === ".head h2" || selector === ".head" ? heading : body),
+      };
     },
     actionTable: () => ({}),
     lists: new Container(),

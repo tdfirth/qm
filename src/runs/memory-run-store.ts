@@ -48,7 +48,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const store: RunStore = {
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
-    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
+    async enqueue({
+      sessionId,
+      request,
+      dedupKey,
+      maxAttempts = 3,
+      idleDelivery,
+    }: EnqueueInput): Promise<EnqueueResult> {
       if (dedupKey) {
         const existingId = byKey.get(dedupKey);
         if (existingId) {
@@ -56,6 +62,15 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           if (existing) return { run: existing, deduped: true };
         }
       }
+      if (
+        idleDelivery &&
+        ![...runs.values()].some(
+          (run) =>
+            !isTerminal(run.status) &&
+            (run.sessionId === idleDelivery.threadRef || run.sessionId.startsWith(`${idleDelivery.threadRef}:`)),
+        )
+      )
+        request = { ...request, deliveryTarget: idleDelivery.target };
       const run: Run = {
         id: randomUUID(),
         sessionId,
@@ -211,6 +226,14 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .sort((a, b) => a.createdAt - b.createdAt);
     },
 
+    async editPendingText(runId, text, expectedText) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending" || run.attempts !== 0 || run.turnUserSeq !== null) return false;
+      if ((run.request.displayText ?? run.request.text) !== expectedText) return false;
+      run.request = { ...run.request, text, displayText: text };
+      return true;
+    },
+
     async withdraw(runId) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;
@@ -226,8 +249,17 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return [...ids];
     },
 
-    async list({ limit = 200 }: { limit?: number } = {}) {
-      return [...runs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}) {
+      return [...runs.values()]
+        .filter(
+          (run) =>
+            !threadRef ||
+            run.sessionId === threadRef ||
+            run.sessionId.startsWith(`${threadRef}:task:`) ||
+            run.sessionId.startsWith(`${threadRef}:status:`),
+        )
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, limit);
     },
 
     async reapExpired(

@@ -280,6 +280,7 @@ export interface GetTapeOptions {
 
 export interface GetEntriesOptions {
   sinceSeq?: number;
+  beforeSeq?: number;
   limit?: number;
 }
 

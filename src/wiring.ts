@@ -1,3 +1,4 @@
+import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
@@ -12,6 +13,7 @@ import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
+import type { TaskAckState } from "./slack/task-ack.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -303,13 +305,14 @@ import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
+  createLegacyEnrollmentBridge,
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protection.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import {
   createMemoryProcessRegistry,
   createPostgresProcessRegistry,
@@ -385,7 +388,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
-import { sleep } from "./util/async.ts";
+import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
 export interface Runtime {
@@ -524,6 +527,14 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  let backgroundAdmission = () => !config.backgroundDeploymentId;
+  let noteAdmitted = () => {};
+  const admittedWork = createAdmittedWork({
+    canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
+    onAdmitted: () => noteAdmitted(),
+  });
+  const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
+    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
@@ -690,7 +701,7 @@ export function buildApp(
       : {}),
   });
   const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
   let skillsReady: Promise<void>;
@@ -1745,7 +1756,7 @@ export function buildApp(
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
-    ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
+    ...(config.sharedOwnerAuthIsolation ? { sharedOwnerAuthIsolation: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     managedGroups: projects,
@@ -1863,6 +1874,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -1925,7 +1937,9 @@ export function buildApp(
     reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge ? { ambientJudge: (s: string, pr: string) => harness.models.judge!(s, pr) } : {}),
+    ...(harness.models.judge
+      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
+      : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
@@ -1944,6 +1958,7 @@ export function buildApp(
   });
   const slackCore = createSlackCoreClient({
     surfaceCache,
+    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
@@ -2117,6 +2132,7 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   const scheduler = createScheduler({
+    admittedWork,
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     crons,
     deliveries,
@@ -2167,6 +2183,7 @@ export function buildApp(
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
+          admittedWork,
           monitors,
           processes,
           sandbox,
@@ -2196,7 +2213,6 @@ export function buildApp(
     directory,
     currentScopeMembers,
   });
-  let backgroundAdmission = () => !config.backgroundDeploymentId;
   const backgroundOwnership = config.backgroundDeploymentId
     ? {
         store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
@@ -2204,23 +2220,41 @@ export function buildApp(
         deploymentId: config.backgroundDeploymentId,
       }
     : undefined;
-  const instanceRegistry: InstanceRegistry =
-    config.buildSha && pgArtifactMap && !config.backgroundDeploymentId
+  const legacyRegistry =
+    pgArtifactMap && (backgroundOwnership || (config.buildSha && config.backgroundWorkEnabled))
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
-          buildSha: config.buildSha,
+          buildSha: backgroundOwnership ? `enrollment:${backgroundOwnership.deploymentId}` : config.buildSha!,
           startedAt: Date.now(),
         })
       : createNoopInstanceRegistry();
+  const instanceRegistry: InstanceRegistry = backgroundOwnership
+    ? createLegacyEnrollmentBridge(legacyRegistry, async () => {
+        if (!config.backgroundWorkEnabled || !backgroundAdmission()) return false;
+        const state = await backgroundOwnership.store.get();
+        const member = state.members.find((entry) => entry.instanceId === backgroundOwnership.instanceId);
+        return (
+          !state.enabled &&
+          state.generation === 0 &&
+          member?.generation === 0 &&
+          !member.retired &&
+          member.state === "admitted" &&
+          member.ready &&
+          backgroundAdmission()
+        );
+      })
+    : legacyRegistry;
   const taskProtection: TaskProtection | null =
     config.ecsTaskProtection && config.ecsAgentUri ? createEcsTaskProtection(config.ecsAgentUri) : null;
   const drain: DrainController = createDrainController({
     registry: instanceRegistry,
     protection: taskProtection,
-    busy: () => workers.some((w) => w.busy()),
+    busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
   });
+  noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
+      admittedWork,
       runs,
       sessions,
       orchestrator,
@@ -2284,6 +2318,7 @@ export function buildApp(
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
+    admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
     for (const worker of workers) {
@@ -2322,6 +2357,7 @@ export function buildApp(
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
+    admittedWork.pause();
     backgroundRunning = false;
     const previous = backgroundStopping;
     backgroundGeneration++;
@@ -2355,6 +2391,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
+      drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
@@ -2368,16 +2405,19 @@ export function buildApp(
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all(workers.map((worker) => worker.drained()));
+      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
     async releaseInFlightRuns() {
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
       await stopBackground();
-      await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
-        swallowAs("wiring: worker drain failed", undefined),
-      );
+      await Promise.all([
+        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
+          swallowAs("wiring: admitted work drain failed", undefined),
+        ),
+        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
+      ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
       runs.close?.();

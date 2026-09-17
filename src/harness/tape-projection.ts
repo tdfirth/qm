@@ -12,7 +12,11 @@ interface TranscriptRead {
 
 export interface TranscriptSource {
   forRender(sessionId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
-  forViewer(sessionId: string, principalId: string, opts?: { limit?: number }): Promise<TranscriptRead>;
+  forViewer(
+    sessionId: string,
+    principalId: string,
+    opts?: { limit?: number; beforeSeq?: number },
+  ): Promise<TranscriptRead>;
 }
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
@@ -29,13 +33,16 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
       const window = windows.find((item) => item.principalId === principalId);
       if (!window || opts?.limit === 0) return { entries: [], earlier: 0 };
       if (window.validFromSeq === null || window.validTo !== null) {
-        const visible = await sessions.visibleEntries(sessionId, principalId);
+        const visible = (await sessions.visibleEntries(sessionId, principalId)).filter(
+          (entry) => opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq,
+        );
         const entries = opts?.limit === undefined ? visible : visible.slice(-opts.limit);
         return { entries, earlier: visible.length - entries.length };
       }
       const entries = (
         await sessions.getEntries(sessionId, {
           sinceSeq: window.validFromSeq,
+          beforeSeq: opts?.beforeSeq,
           ...(opts?.limit === undefined ? {} : { limit: opts.limit }),
         })
       ).filter((entry) => entryWithinTenure(entry, window));

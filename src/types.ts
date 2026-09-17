@@ -111,6 +111,7 @@ export type EntryType =
   | "user"
   | "assistant"
   | "thinking"
+  | "text_start"
   | "text"
   | "tool_call"
   | "tool_result"
@@ -711,6 +712,7 @@ export interface TurnResult {
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  conversationAside?: true;
   stopped?: boolean;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];

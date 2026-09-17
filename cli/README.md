@@ -100,6 +100,30 @@ return its recorded boot flag and optional deployment identity. It returns
 boot flags or identities. Deployment wrappers can preserve the boot environment
 while changing durable ownership independently.
 
+The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
+that an inactive controlled stack is currently reusable. It requires another
+owner, fully drained current membership, stable native deployments and exact task
+inventories for every workload, resolved deployment preparation, and explicitly
+disabled protection on every current core task. It never changes task protection
+or deployment state. The deploy role needs `ecs:GetTaskProtection` on its tasks.
+The result binds the manifest and deployment identities, ownership generation,
+workload task definitions, native deployment IDs, task ARNs, and protection proof.
+`awsBackgroundWorkStatus` also returns the current manifest ID for an active-owner
+proof. A release coordinator can combine both snapshots with immutable candidate
+provenance and compare them again under its production lock before any mutation.
+This is a point-in-time check, not a reservation: intervening maintenance or task
+replacement invalidates the proof and must block promotion.
+
+Live checks use the active ownership cohort's authenticated canary endpoint to
+verify a real model reply, session persistence, generated title, error records,
+session cleanup, and database catalog health. The CLI proves the exact healthy
+task cohort and ownership generation before and after the check. It requires a
+final success bound to the request and responding task; heartbeats alone do not
+count. An uncertain result never triggers an automatic replay or fallback.
+Legacy deployments retain the Fargate canary. A controlled deployment uses that
+same path only when a successful ownership read proves bootstrap is disabled or
+another cohort owns background work.
+
 Once bootstrapped, background mode changes use generation-checked ownership
 requests without restarting ECS tasks. Activation waits for prior owners to stop
 claiming and every expected task to finish activation. Pausing stops new claims;

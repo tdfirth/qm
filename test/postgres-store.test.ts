@@ -2314,6 +2314,14 @@ test(
     assert.equal(before.length, 4);
     assert.deepEqual(await s.getEntries(session.id, { limit: 2 }), before.slice(-2));
     assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
+    for (const beforeSeq of [0, 1, 3, 4, 99]) {
+      for (const limit of [undefined, 0, 1, 10]) {
+        const expected = before.filter((entry) => entry.seq >= 1 && entry.seq < beforeSeq);
+        let page = expected;
+        if (limit !== undefined) page = limit === 0 ? [] : expected.slice(-limit);
+        assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
+      }
+    }
     assert.equal(await s.tapeCoverage(session.id), -1);
     assert.equal(await s.clearSecurityTaint(session.id), true);
     const after = await s.getEntries(session.id);

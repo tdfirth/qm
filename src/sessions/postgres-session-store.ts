@@ -970,8 +970,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const rows = await q(
-        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC LIMIT $3",
-        [sessionId, opts?.sinceSeq ?? 0, opts?.limit ?? null],
+        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 AND ($3::int IS NULL OR seq < $3) ORDER BY seq DESC LIMIT $4",
+        [sessionId, opts?.sinceSeq ?? 0, opts?.beforeSeq ?? null, opts?.limit ?? null],
       );
       return rows.map(rowToEntry).reverse();
     },

@@ -31,6 +31,17 @@ async function exercise(store: SessionStore, id: string) {
   assert.deepEqual(await source.forRender(id, { limit: 1 }), { entries: entries(id).slice(-1), earlier: 2 });
   assert.deepEqual(await source.forViewer(id, "owner", { limit: 1 }), { entries: entries(id).slice(-1), earlier: 2 });
   assert.equal((await source.forRender(id)).earlier, 0);
+  for (const beforeSeq of [0, 2, 3, 5, 8, 9, 10, 99]) {
+    for (const limit of [undefined, 0, 1, 10]) {
+      const prefix = entries(id).filter((entry) => entry.seq < beforeSeq);
+      let page = prefix;
+      if (limit !== undefined) page = limit === 0 ? [] : prefix.slice(-limit);
+      const earlier = page.length ? prefix.length - page.length : 0;
+      assert.deepEqual(await store.getEntries(id, { beforeSeq, limit }), page);
+      assert.deepEqual(await source.forRender(id, { beforeSeq, limit }), { entries: page, earlier });
+      assert.deepEqual(await source.forViewer(id, "owner", { beforeSeq, limit }), { entries: page, earlier });
+    }
+  }
   assert.deepEqual(
     (await store.getEntries(id, { sinceSeq: 4 })).map((e) => e.seq),
     [5, 9],
@@ -46,6 +57,11 @@ async function exercise(store: SessionStore, id: string) {
   await store.removeParticipant(id, "late");
   await store.append(lease, { type: "user", payload: { text: "after departure" }, scopeLabel: scope });
   assert.deepEqual(await store.visibleEntries(id, "late"), [appended]);
+  assert.deepEqual(await source.forViewer(id, "late", { beforeSeq: 10, limit: 1 }), { entries: [], earlier: 0 });
+  assert.deepEqual(await source.forViewer(id, "late", { beforeSeq: 11, limit: 1 }), {
+    entries: [appended],
+    earlier: 0,
+  });
   await store.releaseLease(lease);
   const summary = (await store.scopeSessionSummaries(scope, false)).find((item) => item.id === id)!;
   assert.equal(summary.messages, 5);

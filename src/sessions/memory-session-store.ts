@@ -302,7 +302,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = transcriptEntries(sessionId);
       const since = opts?.sinceSeq ?? 0;
-      const filtered = log.filter((e) => e.seq >= since);
+      const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
       if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
