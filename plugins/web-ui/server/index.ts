@@ -2482,6 +2482,29 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/inbox/sent/:messageId",
+    handle: async ({ res, user, params }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "GET", `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox/sent",
+    handle: async ({ res, user, url }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const params = new URLSearchParams();
+      for (const key of ["pageToken", "accountType"]) {
+        const value = url.searchParams.get(key);
+        if (value) params.set(key, value);
+      }
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
+    },
+  },
+  {
+    method: "GET",
     path: "/api/loops",
     handle: async (c) => {
       const { res, user } = c;

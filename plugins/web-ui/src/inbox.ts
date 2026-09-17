@@ -1,3 +1,14 @@
+import {
+  ensureSentMail,
+  isSentMailEmpty,
+  isSentMailLoading,
+  loadSentMail,
+  resetSentMail,
+  resetSelectedSentEmail,
+  selectedSentEmail,
+  sentEmailPageTpl,
+  sentMailTpl,
+} from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Archive,
@@ -26,7 +37,7 @@ import { splitMentions } from "./linkify";
 import { splitSlackWire } from "./slack-text";
 import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
-import { beginPaneKindDrag, endPaneDrag, exitSplitIfActive, notifyPanesChanged } from "./split";
+import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
 import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui";
 
@@ -117,7 +128,21 @@ const VIEWS: InboxView[] = [
   { id: "all", name: "All", sources: ["gmail", "slack"] },
   { id: "gmail", name: "Email", sources: ["gmail"] },
   { id: "slack", name: "Slack", sources: ["slack"] },
+  { id: "sent", name: "Sent", sources: [] },
 ];
+
+function isInboxViewId(value: string | null): value is string {
+  return value !== null && VIEWS.some((view) => view.id === value);
+}
+
+function inboxViewIdForSegment(segment: string | null): string | null {
+  if (segment === "email") return "gmail";
+  return isInboxViewId(segment) ? segment : null;
+}
+
+function inboxViewSegment(viewId: string): string {
+  return viewId === "gmail" ? "email" : viewId;
+}
 
 export const inboxState = {
   items: [] as InboxItem[],
@@ -225,16 +250,9 @@ interface InboxSurface {
 
 const surfaces = new Set<InboxSurface>();
 
-const externalSurfaces = new Set<{ redraw: () => void; visible: () => boolean }>();
-
-export function attachInboxSurface(surface: { redraw: () => void; visible: () => boolean }): () => void {
-  externalSurfaces.add(surface);
-  ensurePolling();
-  ensureRealtime();
-  return () => externalSurfaces.delete(surface);
-}
-
 export function resetInboxState(): void {
+  resetSentMail();
+  closeArchiveToast();
   inboxState.items = [];
   inboxState.loopId = null;
   inboxState.syncCron = null;
@@ -338,7 +356,7 @@ let pollTimer: number | null = null;
 function anySurfaceVisible(): boolean {
   if (!can("inbox")) return false;
   if (appState.currentView === "inbox") return true;
-  return [...surfaces].some((s) => s.pane && s.host.isConnected) || [...externalSurfaces].some((s) => s.visible());
+  return [...surfaces].some((s) => s.pane && s.host.isConnected);
 }
 
 function ensurePolling(): void {
@@ -368,7 +386,9 @@ export async function refreshInbox(opts: { silent?: boolean; ifStaleMs?: number 
     const found = await api<{ loop: { id: string } | null; syncCron: InboxSyncCron | null }>("/api/inbox");
     inboxState.syncCron = found.syncCron;
     inboxState.loopId = found.loop?.id ?? null;
-    inboxState.items = inboxState.loopId ? await fetchItems(inboxState.loopId) : [];
+    const localItems = await fetchLocalInboxItems();
+    inboxState.items = localItems.length ? localItems : [];
+    if (!inboxState.items.length && inboxState.loopId) inboxState.items = await fetchItems(inboxState.loopId);
     inboxState.loaded = true;
     inboxState.error = null;
     inboxState.fetchedAt = Date.now();
@@ -385,11 +405,8 @@ export async function refreshInbox(opts: { silent?: boolean; ifStaleMs?: number 
 }
 
 async function fetchItems(loopId: string): Promise<InboxItem[]> {
-  const [payload, local] = await Promise.all([
-    api<{ items: LedgerItem[] }>(`/api/loops/${encodeURIComponent(loopId)}/items`),
-    fetchLocalInboxItems(),
-  ]);
-  return local.length ? local : payload.items.map(toInboxItem);
+  const payload = await api<{ items: LedgerItem[] }>(`/api/loops/${encodeURIComponent(loopId)}/items`);
+  return payload.items.map(toInboxItem);
 }
 
 async function fetchLocalInboxItems(): Promise<InboxItem[]> {
@@ -1130,7 +1147,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
               if (prevItem) void persistDraft(prevItem);
             }
             surface.selectedId = inlineDetail && open ? null : item.id;
-            if (!inlineDetail) syncItemUrl(surface.selectedId, true);
+            if (!inlineDetail) syncInboxUrl(surface.selectedId, true);
             drawAll();
           }}
         >
@@ -1179,7 +1196,23 @@ function syncStatusLabel(cron: InboxSyncCron): string {
   return cron.lastFiredAt ? `Synced ${relTime(cron.lastFiredAt)}` : "First sync pending";
 }
 
-function syncLineTpl(): TemplateResult {
+function syncLineTpl(surface: InboxSurface): TemplateResult {
+  if (surface.viewId === "sent") {
+    const busy = isSentMailLoading();
+    return html`<span class="inbox-sync-line">
+      <button
+        class="icon-btn subtle compact"
+        type="button"
+        aria-label="Refresh sent mail"
+        ${tip("Refresh sent mail")}
+        ?disabled=${busy}
+        @click=${() => void loadSentMail(drawAll)}
+      >
+        ${icon(RefreshCw, 14)}
+      </button>
+      <span>${busy ? "Refreshing…" : "Refresh"}</span>
+    </span>`;
+  }
   const cron = inboxState.syncCron;
   if (!cron) {
     return html`<button
@@ -1220,35 +1253,29 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     <div class="inbox-chips" role="tablist" aria-label="Inbox views">
       ${VIEWS.map((v) => {
         const count = inboxOpenCount(v.id);
-        return html`<button
-          class="inbox-chip ${surface.viewId === v.id ? "active" : ""}"
-          type="button"
-          role="tab"
-          aria-selected=${surface.viewId === v.id ? "true" : "false"}
-          @click=${() => {
-            surface.viewId = v.id;
-            if (surface === fullSurface) fullViewId = v.id;
-            drawAll();
-          }}
-        >
-          <span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
-        </button>`;
+        const empty =
+          v.id === "sent"
+            ? isSentMailEmpty()
+            : inboxState.loaded &&
+              !inboxState.error &&
+              !inboxState.items.some((item) => v.sources.includes(item.source));
+        const disabled = empty && surface.viewId !== v.id;
+        return html`${v.id === "sent" ? html`<span class="inbox-chip-divider" aria-hidden="true"></span>` : nothing}<button
+            class="inbox-chip ${surface.viewId === v.id ? "active" : ""}"
+            type="button"
+            role="tab"
+            ?disabled=${disabled}
+            aria-selected=${surface.viewId === v.id ? "true" : "false"}
+            @click=${() => {
+              if (surface === fullSurface) selectInboxView(v.id, true);
+              else surface.viewId = v.id;
+              if (v.id === "sent") ensureSentMail(drawAll);
+              drawAll();
+            }}
+          >
+            <span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
+          </button>`;
       })}
-      <button
-        class="inbox-chip inbox-review-chip"
-        type="button"
-        draggable="true"
-        title="Draft review. Drag into the split canvas to pin it as a pane"
-        @dragstart=${(e: DragEvent) => {
-          e.dataTransfer?.setData("application/x-webui-draft-review", surface.viewId);
-          if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
-          beginPaneKindDrag("draftReview", surface.viewId);
-        }}
-        @dragend=${() => endPaneDrag()}
-        @click=${() => notify("Drag Draft review into the split canvas to pin it as a pane.")}
-      >
-        <span>Draft review</span>
-      </button>
     </div>
   `;
   const list = html`
@@ -1301,10 +1328,10 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   return html`
     <div class="inbox-surface ${compact ? "compact" : ""}" data-density=${density}>
       <div class="inbox-toolbar">
-        ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl()}` : nothing}
+        ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-      <div class="inbox-scroll">${list}</div>
+      <div class="inbox-scroll">${surface.viewId === "sent" ? sentMailTpl(drawAll) : list}</div>
     </div>
   `;
 }
@@ -1335,6 +1362,22 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     </div>
     <aside class="inbox-item-aside">${chatTpl(item)}</aside>
   `;
+}
+
+function sentInboxItem(threadId: string, subject: string): InboxItem | undefined {
+  const normalizedSubject = subject
+    .replace(/^(?:re|fw|fwd):\s*/i, "")
+    .trim()
+    .toLowerCase();
+  return inboxState.items.find(
+    (item) =>
+      item.source === "gmail" &&
+      (item.gmail?.threadId === threadId ||
+        item.title
+          .replace(/^(?:re|fw|fwd):\s*/i, "")
+          .trim()
+          .toLowerCase() === normalizedSubject),
+  );
 }
 
 function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
@@ -1379,24 +1422,25 @@ function drawFull(): void {
     pendingItemId = null;
   }
   const openItem = fullSurface.selectedId ? inboxState.items.find((i) => i.id === fullSurface?.selectedId) : undefined;
+  const openSentEmail = selectedSentEmail();
   if (fullSurface.selectedId && !openItem && inboxState.loaded) fullSurface.selectedId = null;
-  syncItemUrl(fullSurface.selectedId);
+  syncInboxUrl(fullSurface.selectedId);
   const host = fullSurface.host;
   const surface = fullSurface;
-  keepingChatLogsPinned(host, () =>
-    render(
-      openItem
-        ? itemPageTpl(openItem)
-        : html`
-            <div class="pane-head">
-              <h1 class="pane-title">Inbox</h1>
-              <div class="pane-head-actions">${syncLineTpl()}</div>
-            </div>
-            ${surfaceTpl(surface)}
-          `,
-      host,
-    ),
-  );
+  let page: TemplateResult | typeof nothing;
+  if (openItem) page = itemPageTpl(openItem);
+  else if (openSentEmail) {
+    const relatedItem = sentInboxItem(openSentEmail.threadId, openSentEmail.subject);
+    page = sentEmailPageTpl(drawAll, relatedItem ? chatTpl(relatedItem) : undefined);
+  } else
+    page = html`
+      <div class="pane-head">
+        <h1 class="pane-title">Inbox</h1>
+        <div class="pane-head-actions">${syncLineTpl(surface)}</div>
+      </div>
+      ${surfaceTpl(surface)}
+    `;
+  keepingChatLogsPinned(host, () => render(page, host));
   sizeAside(host);
   sizeChatInputs(host);
 }
@@ -1439,15 +1483,16 @@ function sizeChatInputs(host: HTMLElement): void {
   for (const box of host.querySelectorAll<HTMLTextAreaElement>(".inbox-chat-input")) autosizeChatInput(box);
 }
 
-function syncItemUrl(itemId: string | null, push = false): void {
+function syncInboxUrl(itemId: string | null, push = false): void {
   if (appState.currentView !== "inbox") return;
-  const next = deepLinkPath(UI_BASE, "inbox", null, null, itemId);
+  const next = deepLinkPath(UI_BASE, "inbox", null, null, itemId ?? inboxViewSegment(fullViewId));
   if (`${location.pathname}${location.search}` === next) return;
   if (push) history.pushState(null, "", next);
   else history.replaceState(null, "", next);
 }
 
 export function resetActiveInboxItem(): void {
+  resetSelectedSentEmail();
   const open = fullSurface?.selectedId;
   if (!open || !fullSurface) return;
   const item = inboxState.items.find((i) => i.id === open);
@@ -1457,34 +1502,48 @@ export function resetActiveInboxItem(): void {
 
 function closeInboxItem(): void {
   resetActiveInboxItem();
-  syncItemUrl(null);
+  syncInboxUrl(null);
   drawAll();
 }
 
-export function routeInboxHistory(itemId: string | null): void {
-  if (!fullSurface) return;
-  fullSurface.selectedId = itemId;
-  drawAll();
-}
-
-export function openInboxItemById(itemId: string): void {
-  pendingItemId = itemId;
+export function routeInboxHistory(segment: string | null): void {
+  resetSelectedSentEmail();
+  const viewId = inboxViewIdForSegment(segment);
+  if (viewId) {
+    fullViewId = viewId;
+    pendingItemId = null;
+    if (fullSurface) {
+      fullSurface.viewId = viewId;
+      fullSurface.selectedId = null;
+    }
+    if (viewId === "sent") ensureSentMail(drawAll);
+  } else {
+    fullViewId = "all";
+    pendingItemId = segment;
+    if (fullSurface) {
+      fullSurface.viewId = "all";
+      fullSurface.selectedId = segment;
+    }
+  }
+  if (appState.currentView === "inbox") drawAll();
 }
 
 export function drawAll(): void {
   for (const s of surfaces) drawSurface(s);
-  for (const s of externalSurfaces) s.redraw();
   drawFull();
   renderSidebarTop();
   notifyPanesChanged();
 }
 
-export function selectInboxView(viewId: string): void {
+export function selectInboxView(viewId: string, push = false): void {
+  resetSelectedSentEmail();
+  if (!isInboxViewId(viewId)) viewId = "all";
   fullViewId = viewId;
   if (fullSurface) {
     fullSurface.viewId = viewId;
     fullSurface.selectedId = null;
   }
+  syncInboxUrl(null, push);
 }
 
 export async function renderInbox(): Promise<void> {

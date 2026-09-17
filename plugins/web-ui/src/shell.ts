@@ -88,7 +88,6 @@ import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import {
   inboxOpenCount,
-  openInboxItemById,
   refreshInbox,
   renderInbox,
   resetActiveInboxItem,
@@ -1102,7 +1101,7 @@ export async function boot(): Promise<void> {
     if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);
+    if (wanted === "inbox") routeInboxHistory(wantedItem);
     if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
     switchView(wanted as View);
   } else if (connectedProvider && sessionsState.list.length) {

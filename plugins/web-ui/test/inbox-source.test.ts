@@ -8,7 +8,6 @@ const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const shellState = readFileSync(new URL("../src/shell-state.ts", import.meta.url), "utf8");
 const server = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-const draftReview = readFileSync(new URL("../src/draft-review.ts", import.meta.url), "utf8");
 
 test("inbox is a first-class view with a draggable sidebar entry", () => {
   assert.match(shellState, /"chats",\s*"inbox",\s*"contexts"/);
@@ -24,8 +23,6 @@ test("inbox access rides the existing permissions plumbing", () => {
   assert.match(server, /process\.env\.INBOX_USERS/);
   assert.match(server, /INBOX_USERS\.has\("all"\) \|\| INBOX_USERS\.has\(principalId\.trim\(\)\.toLowerCase\(\)\)/);
   assert.match(server, /if \(isInboxUser\(user\)\) permissions\.push\("inbox"\);/);
-  assert.match(draftReview, /if \(!can\("inbox"\)\)/);
-  assert.match(draftReview, /can\("inbox"\) \? inboxOpenCount\(id\) : 0/);
   assert.match(inbox, /if \(!can\("inbox"\)\) return;/);
 });
 
@@ -49,11 +46,6 @@ test("an inbox drag paints drop zones on every existing pane", () => {
     /render\(paneDrag \? paneZonesTpl\(this\.panelId\) : nothing/,
     "zones render for any pane drag, inbox included",
   );
-  assert.match(
-    inbox,
-    /beginPaneKindDrag\("draftReview", surface\.viewId\)/,
-    "draft review enters the shared drag path",
-  );
   assert.match(shell, /beginPaneKindDrag\("inboxView", "all"\)/, "the sidebar row drags the whole inbox");
   assert.doesNotMatch(inbox, /beginPaneKindDrag\("inboxView"/, "view chips are plain tabs, not drag handles");
 });
@@ -71,7 +63,7 @@ test("email items edit like an email; slack items like slack", () => {
 test("the address keeps naming the open item, even after switchView writes the bare view path", () => {
   assert.match(
     inbox,
-    /if \(fullSurface\.selectedId && !openItem && inboxState\.loaded\) fullSurface\.selectedId = null;\s*(\/\*[\s\S]*?\*\/\s*)?syncItemUrl\(fullSurface\.selectedId\);/,
+    /if \(fullSurface\.selectedId && !openItem && inboxState\.loaded\) fullSurface\.selectedId = null;\s*(\/\*[\s\S]*?\*\/\s*)?syncInboxUrl\(fullSurface\.selectedId\);/,
     "every draw re-states the URL from the selection it just rendered",
   );
   assert.match(
@@ -81,8 +73,17 @@ test("the address keeps naming the open item, even after switchView writes the b
   );
   const draw = inbox.match(/function drawFull\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(draw, /pendingItemId/, "a deep link reaches the draw as pendingItemId");
-  assert.match(inbox, /function syncItemUrl\(itemId: string \| null, push = false\)/);
+  assert.match(inbox, /function syncInboxUrl\(itemId: string \| null, push = false\)/);
   assert.match(inbox, /if \(appState\.currentView !== "inbox"\) return;/, "and never writes from another view");
+});
+
+test("inbox pills own stable routes that survive refresh and history navigation", () => {
+  assert.match(inbox, /itemId \?\? inboxViewSegment\(fullViewId\)/);
+  assert.match(inbox, /if \(segment === "email"\) return "gmail"/);
+  assert.match(inbox, /if \(surface === fullSurface\) selectInboxView\(v\.id, true\)/);
+  assert.match(inbox, /export function routeInboxHistory\(segment: string \| null\)/);
+  assert.match(shell, /if \(wanted === "inbox"\) routeInboxHistory\(wantedItem\)/);
+  assert.match(shell, /else routeInboxHistory\(item\)/);
 });
 
 test("every draft links back to the session that produced it", () => {
@@ -123,7 +124,9 @@ test("localhost can overlay private inbox seed data without checking it into sou
     inbox,
     /if \(!\["localhost", "127\.0\.0\.1", "\[::1\]"\]\.includes\(location\.hostname\)\) return \[\];/,
   );
-  assert.match(inbox, /return local\.length \? local : payload\.items\.map\(toInboxItem\);/);
+  assert.match(inbox, /const localItems = await fetchLocalInboxItems\(\);/);
+  assert.match(inbox, /inboxState\.items = localItems\.length/);
+  assert.match(inbox, /if \(!inboxState\.items\.length && inboxState\.loopId\) inboxState\.items = await fetchItems/);
 });
 
 test("each item carries a follow-up chat with the agent", () => {
