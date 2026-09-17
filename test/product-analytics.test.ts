@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 
 test("disabled analytics makes no requests", async () => {
+  let requests = 0;
   const analytics = createProductAnalytics("company", {}, async () => {
-    throw new Error("unexpected request");
+    requests += 1;
+    return new Response("ok");
   });
   await analytics.appPublished("person", "app", 1);
+  assert.equal(requests, 0);
 });
 
 test("publication has matching company identity, groups and deduplication without app content", async () => {

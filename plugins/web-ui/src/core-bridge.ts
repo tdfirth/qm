@@ -1,4 +1,4 @@
-import { captureMessage } from "./product-analytics";
+import { captureMessage } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
 import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
