@@ -1113,12 +1113,6 @@ const LEGACY_SESSION_COLORS = new Map([
   ["#3b82f6", SESSION_COLORS[3]],
   ["#a855f7", SESSION_COLORS[4]],
   ["#ec4899", SESSION_COLORS[5]],
-  ["#d2664d", SESSION_COLORS[0]],
-  ["#b98a52", SESSION_COLORS[1]],
-  ["#7d884f", SESSION_COLORS[2]],
-  ["#5f8b83", SESSION_COLORS[2]],
-  ["#527d99", SESSION_COLORS[3]],
-  ["#8b5d52", SESSION_COLORS[5]],
 ]);
 
 function displaySessionColor(color: string | null | undefined): string | null {

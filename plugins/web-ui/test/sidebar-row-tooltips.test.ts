@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
-const shellCss = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 function block(marker: string): string {
   const at = sessions.indexOf(marker);
@@ -33,9 +32,4 @@ test("row tooltips reuse the wording the chats page already uses for the same ac
 test("every sidebar control uses the app tooltip, never the native title attribute", () => {
   assert.doesNotMatch(sessions, /\n\s*title="/);
   assert.doesNotMatch(sessions, /\n\s*title=\$\{/);
-});
-
-test("clipped conversation titles do not become native hover targets", () => {
-  const title = shellCss.match(/\.session \.title \.tl \{[^}]+\}/)?.[0] ?? "";
-  assert.match(title, /pointer-events:\s*none;/);
 });

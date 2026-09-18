@@ -565,7 +565,6 @@ a.chat-row-open {
   min-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
-  pointer-events: none;
 }
 
 .session .row-context {
