@@ -105,7 +105,9 @@ export async function awsCoreRequest(
   init: RequestInit,
   maxResponseBytes?: number,
 ): Promise<{ status: number; body: string }> {
-  const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+  const target = (await awsPublicFrontDoorAsync(config, init.signal ?? undefined)).dnsName
+    .toLowerCase()
+    .replace(/\.$/, "");
   if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
   if (awsPublicOrigin(config).protocol === "http:") {
     assertCloudFrontLayerTarget(config, url, target);
@@ -304,6 +306,31 @@ function awsArgs(aws: AwsConfig, args: string[]): string[] {
 
 function awsJson<T>(aws: AwsConfig, args: string[]): T {
   const raw = capture(process.env.AWS_BIN ?? "aws", awsArgs(aws, [...args, "--output", "json"]));
+  if (!raw.trim()) return {} as T;
+  return JSON.parse(raw) as T;
+}
+
+async function awsJsonAsync<T>(aws: AwsConfig, args: string[], signal?: AbortSignal): Promise<T> {
+  const command = process.env.AWS_BIN ?? "aws";
+  const commandArgs = awsArgs(aws, [...args, "--output", "json"]);
+  const raw = await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      stdio: ["ignore", "pipe", "pipe"],
+      killSignal: "SIGKILL",
+      ...(signal ? { signal } : {}),
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new CliError(`${command} ${commandArgs.join(" ")} failed: ${stderr.trim() || stdout.trim()}`));
+    });
+  });
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
 }
@@ -4156,6 +4183,40 @@ function awsPublicFrontDoor(config: QmConfig): AwsPublicFrontDoor {
       "--load-balancer-arn",
       loadBalancer.LoadBalancerArn,
     ]).Listeners ?? [];
+  return validatedAwsPublicFrontDoor(config, loadBalancer, listeners);
+}
+
+async function awsPublicFrontDoorAsync(config: QmConfig, signal?: AbortSignal): Promise<AwsPublicFrontDoor> {
+  const aws = requireAws(config);
+  const albName =
+    aws.alb ?? `${aws.cluster.slice(0, 23)}-${createHash("sha1").update(aws.cluster).digest("hex").slice(0, 8)}`;
+  const loadBalancer = (
+    await awsJsonAsync<{
+      LoadBalancers?: Array<{ LoadBalancerArn?: string; DNSName?: string; State?: { Code?: string } }>;
+    }>(aws, ["elbv2", "describe-load-balancers", "--names", albName], signal)
+  ).LoadBalancers?.[0];
+  if (!loadBalancer?.LoadBalancerArn || !loadBalancer.DNSName || loadBalancer.State?.Code !== "active") {
+    throw new Error(`load balancer is ${loadBalancer?.State?.Code ?? "missing"}`);
+  }
+  const listeners =
+    (
+      await awsJsonAsync<{ Listeners?: AwsPublicListener[] }>(
+        aws,
+        ["elbv2", "describe-listeners", "--load-balancer-arn", loadBalancer.LoadBalancerArn],
+        signal,
+      )
+    ).Listeners ?? [];
+  return validatedAwsPublicFrontDoor(config, loadBalancer, listeners);
+}
+
+function validatedAwsPublicFrontDoor(
+  config: QmConfig,
+  loadBalancer: { LoadBalancerArn?: string; DNSName?: string; State?: { Code?: string } } | undefined,
+  listeners: AwsPublicListener[],
+): AwsPublicFrontDoor {
+  if (!loadBalancer?.LoadBalancerArn || !loadBalancer.DNSName || loadBalancer.State?.Code !== "active") {
+    throw new Error(`load balancer is ${loadBalancer?.State?.Code ?? "missing"}`);
+  }
   const origin = awsPublicOrigin(config);
   const httpsFrontDoor = origin.protocol === "https:";
   const redirects = httpsFrontDoor ? listeners.filter(isHttpsRedirectListener) : [];

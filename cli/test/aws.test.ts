@@ -2584,11 +2584,8 @@ test("AWS secret upload rejects active services when no deployment manifest exis
 
 test("AWS secret rotation holds the deploy lease across the complete write set", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-lease-"));
-  const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
-  const operator = computedSecrets(secretsConfig).filter(
-    (secret) => secret.managedBy === "operator" && secret.required,
-  );
-  writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
+  const base = oneServiceConfig();
+  const secretsConfig: QmConfig = { ...base, env: {}, sandbox: { ...base.sandbox!, secretEnv: [] } };
   const fake = statefulAws(dir, secretsConfig);
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
   const taskArn = state.services["acme-core"].taskDefinition;
@@ -2602,6 +2599,16 @@ test("AWS secret rotation holds the deploy lease across the complete write set",
   state.definitions[taskArn] = renderTaskDefinition(secretsConfig, "core", image, arns);
   state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks: { core: taskArn } }], "current");
   writeFileSync(fake.state, JSON.stringify(state));
+  const operator = computedSecrets(secretsConfig).filter(
+    (secret) => secret.managedBy === "operator" && secret.required,
+  );
+  writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
+  const ambient = new Map(
+    computedSecrets(secretsConfig)
+      .filter((secret) => secret.managedBy === "operator")
+      .map((secret) => [secret.name, process.env[secret.name]]),
+  );
+  for (const name of ambient.keys()) delete process.env[name];
   try {
     await awsSecretsPush(secretsConfig, dir);
     const calls = readFileSync(fake.log, "utf8");
@@ -2616,6 +2623,10 @@ test("AWS secret rotation holds the deploy lease across the complete write set",
     assert.match(calls, /ecs update-service --cluster acme-qm --service acme-core --force-new-deployment/);
     assert.equal(calls.match(/secretsmanager put-secret-value/g)?.length, operator.length);
   } finally {
+    for (const [name, value] of ambient) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -5341,6 +5352,38 @@ test("AWS layer deadline includes signing-secret acquisition", async () => {
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   process.env.AWS_BIN = bin;
   delete process.env.CORE_SIGNING_SECRET;
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      () =>
+        awsDeploymentLayerTransport({
+          config,
+          configDir: dir,
+          method: "PUT",
+          body: "{}",
+          timeoutMs: 50,
+        }),
+      /abort/i,
+    );
+    assert.ok(Date.now() - started < 1_000);
+  } finally {
+    if (priorBin === undefined) delete process.env.AWS_BIN;
+    else process.env.AWS_BIN = priorBin;
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS layer deadline includes ALB discovery", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-alb-timeout-"));
+  const bin = join(dir, "aws-hang");
+  writeFileSync(bin, `#!${process.execPath}\nsetTimeout(() => {}, 20_000);\n`);
+  chmodSync(bin, 0o755);
+  const priorBin = process.env.AWS_BIN;
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  process.env.AWS_BIN = bin;
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
   const started = Date.now();
   try {
     await assert.rejects(
