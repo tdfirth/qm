@@ -107,28 +107,24 @@ function isPolicyNotice(summary: Record<string, unknown>): boolean {
   return summary.blocked !== undefined || summary.denied !== undefined;
 }
 
-const MAX_TOOL_RESULT_CHARS = 100_000;
 const PRESSURE_WARN_FULL60 = 50;
 const TRUNCATED_TAIL_CHARS = 10_000;
 
-function capResultText(t: string): string {
-  if (t.length <= MAX_TOOL_RESULT_CHARS) return t;
+function capResultText(t: string, maxChars: number): string {
+  if (t.length <= maxChars) return t;
   const notice =
     `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
     `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`;
-  return (
-    headSlice(t, MAX_TOOL_RESULT_CHARS - TRUNCATED_TAIL_CHARS - notice.length) +
-    notice +
-    tailSlice(t, TRUNCATED_TAIL_CHARS)
-  );
+  const tailChars = Math.min(TRUNCATED_TAIL_CHARS, Math.floor((maxChars - notice.length) / 2));
+  return headSlice(t, maxChars - tailChars - notice.length) + notice + tailSlice(t, tailChars);
 }
 
-function capPayloadStrings(v: unknown): unknown {
-  if (typeof v === "string") return capResultText(v);
+function capPayloadStrings(v: unknown, maxChars: number): unknown {
+  if (typeof v === "string") return capResultText(v, maxChars);
   if (Array.isArray(v)) {
     let out: unknown[] | null = null;
     for (let i = 0; i < v.length; i++) {
-      const c = capPayloadStrings(v[i]);
+      const c = capPayloadStrings(v[i], maxChars);
       if (c !== v[i]) (out ??= v.slice())[i] = c;
     }
     return out ?? v;
@@ -138,7 +134,7 @@ function capPayloadStrings(v: unknown): unknown {
     if (proto !== Object.prototype && proto !== null) return v;
     let out: Record<string, unknown> | null = null;
     for (const [k, x] of Object.entries(v)) {
-      const c = capPayloadStrings(x);
+      const c = capPayloadStrings(x, maxChars);
       if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
     }
     return out ?? v;
@@ -147,7 +143,9 @@ function capPayloadStrings(v: unknown): unknown {
 }
 
 function capText(t: string): string {
-  return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
+  return t.length > CONFIG_DEFAULTS.maxToolResultChars
+    ? `${t.slice(0, CONFIG_DEFAULTS.maxToolResultChars)}…[truncated]`
+    : t;
 }
 
 function contentFactLines(content: string): string[] {
@@ -320,6 +318,7 @@ export interface AgentToolsOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  maxToolResultChars?: number;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -342,6 +341,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
+    maxToolResultChars: config.maxToolResultChars,
   };
 }
 
@@ -393,6 +393,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
+  const maxToolResultChars = opts?.maxToolResultChars ?? CONFIG_DEFAULTS.maxToolResultChars;
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
   const capabilityTtlMin = Math.round(CAPABILITY_TTL_MS / 60_000);
@@ -433,14 +434,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
-      let result = capResultText(t);
-      const resultTruncated = result !== t;
-      if (result !== t) {
-        const firstText = ret.content.findIndex((c) => c.type === "text");
-        (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content
-          .map((c, i) => (i === firstText ? { type: "text", text: result } : c))
-          .filter((c, i) => c.type !== "text" || i === firstText);
-      }
+      let result = capResultText(t, maxToolResultChars);
+      let resultTruncated = result !== t;
       let persistedSummary = summary;
       const tool = String(summary.tool ?? "");
       const provenance = screenAs?.provenance ?? toolResultProvenance(originalTool);
@@ -492,7 +487,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
         } else if (screen.outcome === "unscreened") {
           if (!result.startsWith(UNSCREENED_PREFIX)) {
-            result = `${unscreenedNotice("tool output")}\n${result}`;
+            result = `${unscreenedNotice("tool output")}\n${t}`;
             (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
               { type: "text", text: result },
               ...ret.content.filter((c) => c.type !== "text"),
@@ -534,10 +529,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result += `\n\n${text}`;
         delivered.push(message.id);
       }
+      const assembled = ret.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text ?? "")
+        .join("\n");
+      result = capResultText(assembled, maxToolResultChars);
+      if (result !== assembled) {
+        resultTruncated = true;
+        const firstText = ret.content.findIndex((part) => part.type === "text");
+        (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content
+          .map((part, index) => (index === firstText ? { type: "text", text: result } : part))
+          .filter((part, index) => part.type !== "text" || index === firstText);
+      }
       await log(
         "tool_result",
         {
-          ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
+          ...(capPayloadStrings(persistedSummary, maxToolResultChars) as Record<string, unknown>),
           callId,
           isError,
           ...(resultTruncated ? { resultTruncated: true } : {}),

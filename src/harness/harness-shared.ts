@@ -24,6 +24,7 @@ export interface HarnessToolPlumbing {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  maxToolResultChars?: number;
 }
 
 export type BridgedTool = {
@@ -96,6 +97,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
+    maxToolResultChars: opts.maxToolResultChars,
     ...(turn
       ? {
           readOnly: turn.readOnly,

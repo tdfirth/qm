@@ -137,6 +137,7 @@ export interface PiHarnessOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
+  maxToolResultChars?: number;
   signals?: RunSignalStore;
 }
 
@@ -1606,6 +1607,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
           ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
+          ...(opts?.maxToolResultChars !== undefined ? { maxToolResultChars: opts.maxToolResultChars } : {}),
           sandboxResources: opts?.sandboxResources,
         }),
         noTools: "builtin",

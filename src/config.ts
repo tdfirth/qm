@@ -95,6 +95,7 @@ export interface Config {
   modelGateway?: ModelGatewayTransportConfig;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
+  maxToolResultChars: number;
   sessionTapeMode: "shadow" | "serve";
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
@@ -819,6 +820,7 @@ export const CONFIG_DEFAULTS = {
   approvalSummaryTimeoutMs: 6_000,
   turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
+  maxToolResultChars: 100_000,
   workers: 16,
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
@@ -1196,6 +1198,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error("SECURITY_SCREEN_TIMEOUT_MS must be a positive integer no greater than 2147483647");
   }
+  const maxToolResultChars =
+    numEnvStrict("QM_MAX_TOOL_RESULT_CHARS", env.QM_MAX_TOOL_RESULT_CHARS) ?? CONFIG_DEFAULTS.maxToolResultChars;
+  if (!Number.isSafeInteger(maxToolResultChars) || maxToolResultChars < 200 || maxToolResultChars > 2_147_483_647) {
+    throw new Error("QM_MAX_TOOL_RESULT_CHARS must be an integer from 200 through 2147483647");
+  }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
   const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
@@ -1360,6 +1367,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
     piSystemCacheSplit: boolEnvStrict("PI_SYSTEM_CACHE_SPLIT", env.PI_SYSTEM_CACHE_SPLIT) ?? false,
+    maxToolResultChars,
     sessionTapeMode: env.SESSION_TAPE_MODE === "shadow" ? "shadow" : "serve",
     rateLimitPerWindow:
       numEnvStrict("RATE_LIMIT_PER_WINDOW", env.RATE_LIMIT_PER_WINDOW) ?? CONFIG_DEFAULTS.rateLimitPerWindow,

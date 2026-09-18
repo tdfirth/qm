@@ -75,6 +75,16 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
+test("tool result character caps preserve the default and reject unsafe values", () => {
+  assert.equal(loadConfig({}).maxToolResultChars, 100_000);
+  assert.equal(loadConfig({ QM_MAX_TOOL_RESULT_CHARS: "200" }).maxToolResultChars, 200);
+  assert.equal(loadConfig({ QM_MAX_TOOL_RESULT_CHARS: "16000" }).maxToolResultChars, 16_000);
+  assert.equal(loadConfig({ QM_MAX_TOOL_RESULT_CHARS: "2147483647" }).maxToolResultChars, 2_147_483_647);
+  for (const value of ["invalid", "0", "-1", "199", "200.5", "2147483648"]) {
+    assert.throws(() => loadConfig({ QM_MAX_TOOL_RESULT_CHARS: value }), /QM_MAX_TOOL_RESULT_CHARS/);
+  }
+});
+
 test("harness security posture defaults to auto and validates named modes", () => {
   assert.equal(loadConfig({}).securityPosture, "auto");
   assert.equal(loadConfig({}).securityScreenBackend, "off");

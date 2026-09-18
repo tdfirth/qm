@@ -245,6 +245,11 @@ upstream source history to merge.
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 
+`QM_MAX_TOOL_RESULT_CHARS` limits each tool result retained for the model and
+persisted replay. It defaults to `100000`; values must be integers from `200`
+through `2147483647`. Truncated results retain their beginning, end, and a notice
+with the original character count.
+
 ## License
 
 Except where otherwise noted, QM is available under the [MIT License](./LICENSE).

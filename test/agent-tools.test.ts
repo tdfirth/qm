@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import {
+  coreToolOptions,
+  createAgentTools,
+  pauseStampAfterToolCall,
+  type ToolContextRef,
+} from "../src/harness/agent-tools.ts";
+import { loadConfig } from "../src/config.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType, SessionEntry } from "../src/types.ts";
@@ -713,6 +719,95 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   assert.equal(payload.result, seen, "the replay record is exactly what the model saw");
   assert.equal(payload.resultTruncated, true, "the entry is flagged so renderers can surface the loss");
   assert.ok((payload.stdout as string).length <= 100_000, "persisted payload strings are capped too");
+});
+
+test("configured tool result caps apply independently to live tool plumbing", async () => {
+  const run = async (configuredChars: number, marker: string) => {
+    const emitted: Emitted[] = [];
+    const ref: ToolContextRef = {
+      current: {
+        ...fakeToolContext(),
+        execute: async () => ({
+          stdout: `${marker}${"x".repeat(2_000)}${marker}`,
+          stderr: "",
+          code: 0,
+          timedOut: false,
+          structured: { marker, count: 2_000 },
+        }),
+      },
+      emit: (entry) => void emitted.push(entry as Emitted),
+      scopeLabel: "personal:U1",
+    };
+    const options = coreToolOptions(loadConfig({ QM_MAX_TOOL_RESULT_CHARS: String(configuredChars) }));
+    const [execute] = createAgentTools(ref, options);
+    const response = (await call(execute, { command: "fixture" })) as {
+      content: Array<{ type: string; text?: string; data?: unknown }>;
+      details: { code: number; structured: { marker: string; count: number } };
+    };
+    const modelText = response.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    const payload = emitted.find((entry) => entry.type === "tool_result")!.payload;
+    return { modelText, payload, response };
+  };
+
+  const [small, boundary] = await Promise.all([run(500, "small"), run(200, "edge")]);
+  assert.equal(small.modelText.length, 500);
+  assert.equal(boundary.modelText.length, 200);
+  for (const result of [small, boundary]) {
+    assert.match(result.modelText, /…\[truncated — full result was \d+ chars/);
+    assert.equal(result.payload.result, result.modelText);
+    assert.equal(result.payload.resultTruncated, true);
+    assert.ok(result.modelText.endsWith("[exit 0]"));
+    assert.deepEqual(result.response.details.structured, {
+      marker: result === small ? "small" : "edge",
+      count: 2_000,
+    });
+    assert.equal(result.response.details.code, 0);
+    assert.deepEqual(result.payload.structured, result.response.details.structured);
+  }
+  assert.match(small.modelText, /^small/);
+  assert.match(boundary.modelText, /^edge/);
+});
+
+test("late security and mailbox additions remain inside the effective cap", async () => {
+  const tc = fakeToolContext();
+  tc.execute = async () => ({ stdout: "external output", stderr: "", code: 0, timedOut: false });
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => [
+      {
+        id: "mail",
+        senderId: "child",
+        recipientId: "parent",
+        actor: { id: "U1", type: "internal" },
+        audience: [],
+        text: "m".repeat(2_000),
+        createdAt: 1,
+      },
+    ],
+    acknowledge: async () => {},
+  };
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (entry) => void emitted.push(entry as Emitted),
+    scopeLabel: "personal:U1",
+    screenToolResult: async () => ({ outcome: "unscreened" }),
+  };
+  const [execute] = createAgentTools(ref, { maxToolResultChars: 200 });
+  const response = (await call(execute, { command: "fixture" })) as {
+    content: Array<{ type: string; text?: string }>;
+  };
+  const modelText = response.content.map((part) => part.text ?? "").join("\n");
+  const payload = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  assert.equal(modelText.length, 200);
+  assert.equal(payload.result, modelText);
+  assert.equal(payload.resultTruncated, true);
+  assert.match(modelText, /…\[truncated — full result was \d+ chars/);
 });
 
 test("Auto can quarantine a tool result before the model or durable replay sees it", async () => {
