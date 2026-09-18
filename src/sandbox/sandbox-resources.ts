@@ -91,6 +91,22 @@ export function createSandboxResources(opts: {
 }): SandboxResources {
   const legacyId = (scopeId: string, backend: SandboxBackendName): string =>
     `legacy-${createHash("sha256").update(`${backend}:${scopeId}`).digest("hex").slice(0, 24)}`;
+  const adoptLegacy = (binding: LegacySandboxBinding): Promise<SandboxResource> => {
+    const id = legacyId(binding.scopeId, binding.backend);
+    return opts.records.putIfAbsent(id, {
+      id,
+      backend: binding.backend,
+      ownerScopeId: binding.scopeId,
+      backingScopeId: binding.scopeId,
+      name: "Existing scoped computer",
+      createdBy: "system",
+      createdAt: new Date().toISOString(),
+      legacy: true,
+      state: "unverified",
+      ...(binding.machineId ? { machineId: binding.machineId } : {}),
+      ...(opts.backends[binding.backend]?.profile.spec ? { spec: opts.backends[binding.backend]!.profile.spec } : {}),
+    });
+  };
   let activated = false;
   const isActivated = async (): Promise<boolean> => {
     if (!activated) activated = (await opts.rollout.get("explicit-defaults")) !== null;
@@ -128,23 +144,7 @@ export function createSandboxResources(opts: {
         const id = legacyId(scope, backend);
         if (!candidates.has(id)) candidates.set(id, { scopeId: scope, backend });
       }
-      for (const [id, binding] of candidates) {
-        await opts.records.putIfAbsent(id, {
-          id,
-          backend: binding.backend,
-          ownerScopeId: binding.scopeId,
-          backingScopeId: binding.scopeId,
-          name: "Existing scoped computer",
-          createdBy: "system",
-          createdAt: new Date().toISOString(),
-          legacy: true,
-          state: "unverified",
-          ...(binding.machineId ? { machineId: binding.machineId } : {}),
-          ...(opts.backends[binding.backend]?.profile.spec
-            ? { spec: opts.backends[binding.backend]!.profile.spec }
-            : {}),
-        });
-      }
+      for (const binding of candidates.values()) await adoptLegacy(binding);
       for (const scope of scopes) {
         const id = legacyId(
           scope,
@@ -273,8 +273,21 @@ export function createSandboxResources(opts: {
     },
     async resolve(scopeId) {
       await initialize();
-      const route = await opts.defaults.get(scopeId);
-      if (!route) return (await isActivated()) ? null : undefined;
+      let route = await opts.defaults.get(scopeId);
+      if (!route) {
+        if (!(await isActivated())) return undefined;
+        const { kind, ref } = parseScopeId(scopeId);
+        if (!kind || !ref) return null;
+        route = await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
+          const selected = await opts.defaults.get(scopeId);
+          if (selected) return selected;
+          const backend =
+            (await opts.routes.get(scopeId))?.backend ??
+            sandboxDefaultForScope(scopeId, opts.defaultBackend, opts.scopeDefaults);
+          const record = await adoptLegacy({ scopeId, backend });
+          return opts.defaults.putIfAbsent(scopeId, { sandboxId: record.state === "retired" ? null : record.id });
+        });
+      }
       return route.sandboxId === null ? null : get(route.sandboxId);
     },
     async list(actorId, scopeId) {

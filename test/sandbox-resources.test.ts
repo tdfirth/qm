@@ -124,7 +124,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   const listed = await resources.list("alice", "personal:alice");
   assert.equal(listed.defaultSandboxId, null);
   assert.equal(listed.defaultMode, "none");
-  assert.equal(await resources.resolve("personal:new"), null);
+  assert.ok((await resources.resolve("personal:new"))?.id);
 });
 
 test("legacy adoption is deterministic and reconnects the existing backing identity", async () => {
@@ -526,7 +526,8 @@ test("activation preserves routes, cold identities and explicit nulls without ca
   assert.equal((await resources.resolve("personal:old-session"))?.machineId, undefined);
   assert.equal(await resources.resolve("personal:unset"), null);
   assert.equal((await resources.resolve(managed.ownerScopeId))?.id, "managed");
-  assert.equal(await resources.resolve("personal:new-after-activation"), null);
+  const added = await resources.resolve("personal:new-after-activation");
+  assert.equal(added?.backingScopeId, "personal:new-after-activation");
   assert.ok(await rollout.get("explicit-defaults"));
   const inventory = await resources.list("admin", "personal:routed");
   assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.machineId === "e2b-cold"));
@@ -535,7 +536,7 @@ test("activation preserves routes, cold identities and explicit nulls without ca
   assert.deepEqual(provisioned, []);
   assert.equal((await routes.get("personal:routed"))?.backend, "modal");
   const rollbackReader = createSandboxResources({ ...options, enabled: false });
-  assert.equal(await rollbackReader.resolve("personal:new-after-activation"), null);
+  assert.equal((await rollbackReader.resolve("personal:new-after-activation"))?.id, added?.id);
   assert.equal((await rollbackReader.resolve("personal:routed"))?.id, routed?.id);
 });
 
@@ -564,17 +565,104 @@ test("activation retries partial durable writes without losing defaults or creat
   assert.deepEqual(provisioned, []);
 });
 
-test("boot activation freezes legacy scope adoption before a new session arrives", async () => {
-  const known = ["personal:old"];
-  const { options, defaults, provisioned } = fixture(undefined, known);
+test("scopes arriving after activation receive durable defaults without eager provisioning", async () => {
+  const { options, defaults, records, provisioned } = fixture(undefined, []);
   const resources = createSandboxResources(options);
   await resources.initialize();
-  known.push("personal:new-session");
-  assert.equal(await resources.resolve("personal:new-session"), null);
-  assert.equal(await defaults.get("personal:new-session"), null);
-  assert.ok((await resources.resolve("personal:old"))?.id);
+  for (const scope of ["personal:new", "channel:new", "group:new", "team:new", "org:new"]) {
+    const resolved = await Promise.all(Array.from({ length: 8 }, () => resources.resolve(scope)));
+    const record = resolved[0]!;
+    assert.ok(record);
+    assert.ok(resolved.every((r) => r?.id === record.id));
+    assert.equal(record.backingScopeId, scope);
+    assert.equal(record.state, "unverified");
+    assert.deepEqual(await defaults.get(scope), { sandboxId: record.id });
+    assert.equal((await createSandboxResources(options).resolve(scope))?.id, record.id);
+  }
+  assert.equal((await records.all()).length, 5);
   assert.deepEqual(provisioned, []);
 });
+
+test("late defaults honor configured providers and explicit routes without replacing existing workspace data", async () => {
+  const { options, backend, routes, provisioned } = fixture(undefined, []);
+  const backends = { local: backend, modal: backend, sprites: backend };
+  const resources = createSandboxResources({
+    ...options,
+    backends,
+    defaultBackend: "sprites",
+    scopeDefaults: { personal: "modal" },
+  });
+  await resources.initialize();
+  await routes.put("personal:routed", { backend: "local", pinned: true });
+  const old = await backend.provision([{ scopeId: "personal:routed", mode: "rw", mountPath: "/" }]);
+  await backend.writeFile(old, "keep", "existing workspace");
+  assert.equal((await resources.resolve("personal:new"))?.backend, "modal");
+  assert.equal((await resources.resolve("channel:new"))?.backend, "sprites");
+  const routed = await resources.resolve("personal:routed");
+  assert.equal(routed?.backend, "local");
+  const router = createSandboxRouter({ resources, backends, routes, defaultBackend: "sprites" });
+  const handle = await router.provision([{ scopeId: "personal:routed", mode: "rw", mountPath: "/" }]);
+  assert.equal(handle.resourceId, routed?.id);
+  assert.equal(await router.readFile(handle, "keep"), "existing workspace");
+  assert.deepEqual(await routes.get("personal:routed"), { backend: "local", pinned: true });
+  const fresh = await router.provision([{ scopeId: "channel:fresh", mode: "rw", mountPath: "/" }]);
+  assert.equal(fresh.backend, "sprites");
+  assert.equal(fresh.scopeId, "channel:fresh");
+  assert.ok(fresh.resourceId);
+  assert.deepEqual(provisioned, ["personal:routed", "personal:routed", "channel:fresh"]);
+});
+
+test("late resolution preserves explicit nulls, selected resources and retired legacy identities", async () => {
+  const { resources, defaults, records, options, provisioned } = fixture(undefined, []);
+  await resources.initialize();
+  await resources.setDefault("alice", "personal:alice", null);
+  assert.equal(await createSandboxResources(options).resolve("personal:alice"), null);
+  assert.deepEqual(await records.all(), []);
+  const selected = await resources.create("bob", "personal:bob", "local");
+  await resources.setDefault("bob", "personal:bob", selected.id);
+  assert.deepEqual(await resources.resolve("personal:bob"), selected);
+  const legacy = await resources.resolve("personal:retired");
+  assert.ok(legacy);
+  await resources.setDefault("admin", "personal:retired", null);
+  await resources.retire("admin", legacy.id);
+  await defaults.delete("personal:retired");
+  assert.equal(await resources.resolve("personal:retired"), null);
+  assert.equal((await records.get(legacy.id))?.state, "retired");
+  assert.deepEqual(provisioned, [selected.backingScopeId]);
+});
+
+test("late resolution does not adopt managed backing identities or malformed scopes", async () => {
+  const { resources, records, defaults } = fixture(undefined, []);
+  await resources.initialize();
+  for (const scope of ["sandbox-managed", "scratch-123", "unknown:name", "personal:", ""]) {
+    assert.equal(await resources.resolve(scope), null);
+    assert.equal(await defaults.get(scope), null);
+  }
+  assert.deepEqual(await records.all(), []);
+});
+
+for (const clear of [false, true])
+  test(`explicit default ${clear ? "clear" : "selection"} wins a concurrent implicit seed`, async () => {
+    const { resources, options, records, defaults } = fixture(undefined, []);
+    await resources.initialize();
+    const selected = clear ? null : (await resources.create("alice", "personal:alice", "local")).id;
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const put = records.putIfAbsent;
+    records.putIfAbsent = async (id, value) => {
+      entered.resolve();
+      await resume.promise;
+      return put(id, value);
+    };
+    const resolving = resources.resolve("personal:alice");
+    await entered.promise;
+    const other = createSandboxResources(options);
+    const changing = other.setDefault("alice", "personal:alice", selected);
+    resume.resolve();
+    await Promise.all([resolving, changing]);
+    assert.deepEqual(await defaults.get("personal:alice"), { sandboxId: selected });
+    assert.equal((await resources.resolve("personal:alice"))?.id ?? null, selected);
+  });
 
 test("activation and a compatible reader publish a late legacy computer without losing its default", async () => {
   const { options, defaults, records } = fixture(undefined, []);
