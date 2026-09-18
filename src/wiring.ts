@@ -367,7 +367,7 @@ import {
   modelSupportedByHarness,
 } from "./model/pi-models.ts";
 import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
-import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
+import { createAdminGrantStore, createMapAdminGrantPersistence } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { withErrorReporting, createErrorLog, type ErrorLog } from "./admin/error-log.ts";
@@ -581,6 +581,8 @@ export function buildApp(
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
   const artifactMap = <T>(table: string): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table) : createMemoryMap<T>();
+  const pgOrMemory = <T>(postgres: (databaseUrl: string) => T, memory: () => T): T =>
+    config.databaseUrl ? postgres(config.databaseUrl) : memory();
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
@@ -680,7 +682,7 @@ export function buildApp(
   const credentialTools = deploymentLayer.credentialTools;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
-  const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
+  const auditLog = pgOrMemory(createPostgresAuditLog, createAuditLog);
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
@@ -787,9 +789,7 @@ export function buildApp(
           files,
         })
       : undefined;
-  const defaultMemory: MemoryService = config.databaseUrl
-    ? createPostgresMemoryService(config.databaseUrl)
-    : createMemoryService(workspace);
+  const defaultMemory: MemoryService = pgOrMemory(createPostgresMemoryService, () => createMemoryService(workspace));
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = createConfiguredMemoryService({
@@ -801,7 +801,7 @@ export function buildApp(
     },
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
+  const errors = withErrorReporting(pgOrMemory(createPostgresErrorLog, createErrorLog));
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
       category: e.category,
@@ -1146,7 +1146,7 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunSignalStore();
-  const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
+  const tasks = pgOrMemory(createPostgresTaskStore, createMemoryTaskStore);
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1388,16 +1388,14 @@ export function buildApp(
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
-    processes = config.databaseUrl ? createPostgresProcessRegistry(config.databaseUrl) : createMemoryProcessRegistry();
+    processes = pgOrMemory(createPostgresProcessRegistry, createMemoryProcessRegistry);
   }
 
   const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
-  const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
-  const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
-  const credentialUsage = config.databaseUrl
-    ? createPostgresCredentialUsageSink(config.databaseUrl)
-    : createCredentialUsageSink();
-  const egressAudit = config.databaseUrl ? createPostgresEgressAuditSink(config.databaseUrl) : createEgressAuditSink();
+  const replayDedupe = pgOrMemory(createPostgresReplayDedupe, createMemoryReplayDedupe);
+  const metrics = pgOrMemory(createPostgresMetricsSink, createMetricsSink);
+  const credentialUsage = pgOrMemory(createPostgresCredentialUsageSink, createCredentialUsageSink);
+  const egressAudit = pgOrMemory(createPostgresEgressAuditSink, createEgressAuditSink);
   const runStreamEvents = config.databaseUrl
     ? createPostgresNotifyBus<RunStreamEvent>(config.databaseUrl, "run_stream", "run-stream")
     : createMemoryEventBus<RunStreamEvent>("run-stream");
@@ -1412,12 +1410,8 @@ export function buildApp(
     if (text) emitRunText(runStreamEvents, event.runId, text.slice(event.offset), event.offset);
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
-  const sessionStateBus: SessionStateBus = config.databaseUrl
-    ? createPostgresSessionStateBus(config.databaseUrl)
-    : createMemorySessionStateBus();
-  const ledgerEventBus: LedgerEventBus = config.databaseUrl
-    ? createPostgresLedgerEventBus(config.databaseUrl)
-    : createMemoryLedgerEventBus();
+  const sessionStateBus: SessionStateBus = pgOrMemory(createPostgresSessionStateBus, createMemorySessionStateBus);
+  const ledgerEventBus: LedgerEventBus = pgOrMemory(createPostgresLedgerEventBus, createMemoryLedgerEventBus);
   const activityStore: RunActivityStore =
     runStoreKind === "postgres"
       ? createPostgresRunActivityStore(requireDbUrl("RUN_STORE"))
@@ -1497,9 +1491,7 @@ export function buildApp(
     );
   }
   const approvals = artifactMap<PendingApprovalRecord>("approvals");
-  const adminGrantPersist = config.databaseUrl
-    ? createPostgresAdminGrantStore(config.databaseUrl)
-    : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
+  const adminGrantPersist = pgOrMemory(createPostgresAdminGrantStore, createMapAdminGrantPersistence);
   const adminGrantStore = createAdminGrantStore(adminGrantPersist, {
     seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
   });
@@ -1514,7 +1506,7 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore();
+  const directory = pgOrMemory(createPostgresDirectoryStore, createDirectoryStore);
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -1576,9 +1568,7 @@ export function buildApp(
         }
       : {}),
   });
-  const environments = config.databaseUrl
-    ? createPostgresEnvironmentStore(config.databaseUrl)
-    : createMemoryEnvironmentStore();
+  const environments = pgOrMemory(createPostgresEnvironmentStore, createMemoryEnvironmentStore);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items");
@@ -1596,7 +1586,7 @@ export function buildApp(
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs"));
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
-  const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
+  const cronFires = pgOrMemory(createPostgresCronFireStore, createMemoryCronFireStore);
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
@@ -1628,7 +1618,7 @@ export function buildApp(
     ],
   });
   const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
+    pgOrMemory(createPostgresDeliveryStore, createDeliveryStore),
     sessions,
   );
   let securityScreener = overrides.securityScreener;
@@ -1860,15 +1850,9 @@ export function buildApp(
   const surfaceCache: SurfaceCache = config.databaseUrl
     ? createPostgresSurfaceCache(config.databaseUrl, { liveFallback })
     : createMemorySurfaceCache({ liveFallback });
-  const channelPolicy: ChannelPolicyStore = config.databaseUrl
-    ? createPostgresChannelPolicyStore(config.databaseUrl)
-    : createMemoryChannelPolicyStore();
-  const ambientJudgments: AmbientJudgmentStore = config.databaseUrl
-    ? createPostgresAmbientJudgmentStore(config.databaseUrl)
-    : createMemoryAmbientJudgmentStore();
-  const ackEmojiPicks: AckEmojiPickStore = config.databaseUrl
-    ? createPostgresAckEmojiPickStore(config.databaseUrl)
-    : createMemoryAckEmojiPickStore();
+  const channelPolicy = pgOrMemory(createPostgresChannelPolicyStore, createMemoryChannelPolicyStore);
+  const ambientJudgments = pgOrMemory(createPostgresAmbientJudgmentStore, createMemoryAmbientJudgmentStore);
+  const ackEmojiPicks: AckEmojiPickStore = pgOrMemory(createPostgresAckEmojiPickStore, createMemoryAckEmojiPickStore);
   const providerKeys = directProviderAvailability;
   const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
     ? ({ payload, harnessId, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
