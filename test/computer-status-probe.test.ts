@@ -1,26 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { type ToolContextDeps } from "../src/tools/primitives.ts";
+import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 const healthy = { machine: "healthy", listed: "warm", provisioned: true, guestResponsive: true };
 
 function ctxFor(sandbox: Partial<Sandbox>, provision: ToolContextDeps["provision"]) {
-  const scope = scopeId("channel", "C1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
-  return createToolContext({
+  return toolContext({
     sandbox: { profile: { backend: "sprites" }, ...sandbox } as unknown as Sandbox,
     provision,
-    layers,
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
+    layers: [{ scopeId: scopeId("channel", "C1"), mountPath: "", mode: "rw" }],
   });
 }
 

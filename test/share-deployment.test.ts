@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, deploymentView } from "../src/api/app.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createToolContext, type ToolContext } from "../src/tools/primitives.ts";
+import { type ToolContext } from "../src/tools/primitives.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -24,7 +24,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, toolContext } from "./support/fakes.ts";
 
 type Dir = { resolve: (orgId: string, q: string) => Promise<RecipientResolution> };
 
@@ -372,21 +372,15 @@ const appSandbox = (): Sandbox => {
 };
 
 function toolCtx(deploy: DeployService): ToolContext {
-  return createToolContext({
+  return toolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
     layers: [
       { scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" },
       { scopeId: scopeId("org", "default-org"), mountPath: "global", mode: "ro" },
     ],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
     deploy,
-    acl: {} as never,
-    createdBy: "U1",
-  } as never);
+  });
 }
 
 test('publish share:[{scope:"org"}] resolves to the org — truthful readback, real reach (the QM bug)', async () => {

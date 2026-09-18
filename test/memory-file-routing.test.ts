@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { MEMORY_FILE, type MemoryService } from "../src/memory/memory-service.ts";
-import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const personal = scopeId("personal", "U1");
 
@@ -48,18 +48,9 @@ function harness(opts: { memoryStart?: string; recall?: boolean } = {}) {
     },
   } as unknown as Sandbox;
 
-  const layers: WorkspaceLayer[] = [{ scopeId: personal, mountPath: "", mode: "rw" }];
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers,
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
     workspace,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     memory,
     memoryScopeId: personal,
     memoryAccess: { write: personal, read: opts.recall === false ? [] : [personal] },

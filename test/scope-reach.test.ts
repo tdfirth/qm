@@ -7,20 +7,15 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import {
-  createToolContext,
-  type ToolContext,
-  type ToolContextDeps,
-  CommandDenied,
-  NeedsApproval,
-} from "../src/tools/primitives.ts";
+import { type ToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { resolveReachableChannel } from "../src/resolution/scope-reach.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
-import { scopeId, type Principal, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type Principal, type TurnRequest } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
+import { toolContext } from "./support/fakes.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createDirectoryStore();
@@ -110,7 +105,6 @@ function collectingAudit(): { log: AuditLog; events: AuditEvent[] } {
 
 function reachCtx(extra: Partial<ToolContextDeps> = {}) {
   const calls = { provision: 0, reachProvision: [] as string[], ranOn: [] as string[], resolved: [] as string[] };
-  const layers: WorkspaceLayer[] = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }];
   const sandbox = {
     async run(handle: SandboxHandle) {
       calls.ranOn.push(handle.id);
@@ -134,20 +128,12 @@ function reachCtx(extra: Partial<ToolContextDeps> = {}) {
       return reachHandle;
     },
   };
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox,
     provision: async () => {
       calls.provision++;
       return scopedHandle;
     },
-    layers,
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     reach,
     ...extra,
   });

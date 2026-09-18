@@ -1,15 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
+import { type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { toolContext } from "./support/fakes.ts";
 
 function setup(overrides: Partial<ToolContextDeps> = {}) {
   const pending = Promise.withResolvers<string | null>();
   const started = Promise.withResolvers<void>();
   let reads = 0;
-  const tc = createToolContext({
+  const tc = toolContext({
     sandbox: {
       readFile: async () => {
         reads++;
@@ -17,18 +18,10 @@ function setup(overrides: Partial<ToolContextDeps> = {}) {
         return pending.promise;
       },
     } as unknown as Sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }),
     layers: [
       { scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" },
       { scopeId: scopeId("org", "o"), mountPath: "global", mode: "ro" },
     ],
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     ...overrides,
   });
   return { tc, pending, started, reads: () => reads };

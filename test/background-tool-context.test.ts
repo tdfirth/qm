@@ -1,13 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
-import type { CommandPolicy } from "../src/types.ts";
+import { CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
 import type { ToolLedger } from "../src/runs/tool-ledger.ts";
-import type { SandboxHandle, Sandbox } from "../src/sandbox/sandbox.ts";
 import type { BackgroundExecBroker, BackgroundPollResult } from "../src/connectors/background-exec-broker.ts";
-
-const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
+import { toolContext } from "./support/fakes.ts";
 
 function recordingBroker() {
   const calls = { start: 0, poll: 0, write: 0, stop: 0, list: 0 };
@@ -56,28 +52,9 @@ function memoryLedger() {
   return { ledger, store };
 }
 
-function ctxFor(extra: Partial<ToolContextDeps>) {
-  const scope = scopeId("personal", "U1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
-  const policy: CommandPolicy = extra.commandPolicy?.() ?? { mode: "denylist", rules: [] };
-  return createToolContext({
-    sandbox: {} as unknown as Sandbox,
-    provision: async () => handle,
-    layers,
-    commandPolicy: () => policy,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
-    ...extra,
-  });
-}
-
 test("backgroundStart routes a denied command to CommandDenied BEFORE the broker (no bypass of HiLO)", async () => {
   const { broker, calls } = recordingBroker();
-  const ctx = ctxFor({
+  const ctx = toolContext({
     backgroundBroker: broker,
     commandPolicy: () => ({
       mode: "denylist",
@@ -90,7 +67,7 @@ test("backgroundStart routes a denied command to CommandDenied BEFORE the broker
 
 test("backgroundStart routes a require_approval command to NeedsApproval BEFORE the broker", async () => {
   const { broker, calls } = recordingBroker();
-  const ctx = ctxFor({
+  const ctx = toolContext({
     backgroundBroker: broker,
     commandPolicy: () => ({
       mode: "denylist",
@@ -103,7 +80,7 @@ test("backgroundStart routes a require_approval command to NeedsApproval BEFORE 
 
 test("an already-approved require_approval command DOES reach the broker", async () => {
   const { broker, calls } = recordingBroker();
-  const ctx = ctxFor({
+  const ctx = toolContext({
     backgroundBroker: broker,
     authorizeCommand: (c: string) => c === "deploy prod",
     commandPolicy: () => ({
@@ -120,10 +97,10 @@ test("ledger replay: a start result is CACHED — a crash-replay returns the sam
   const { broker, calls } = recordingBroker();
   const run = "run-1";
 
-  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
+  const first = await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
   assert.equal(calls.start, 1);
 
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
+  const replay = await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test");
   assert.equal(calls.start, 1, "no second startProcess on replay");
   assert.deepEqual(replay, first);
 });
@@ -134,11 +111,11 @@ test("ledger replay: a STILL-RUNNING poll is NOT cached (replay reattaches + re-
   const run = "run-2";
   setPollState("running");
 
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
+  await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
   assert.equal(calls.poll, 1);
 
   setPollState("exited");
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
+  const replay = await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
   assert.equal(calls.poll, 2, "a still-running poll is not cached → replay re-reads");
   assert.equal(replay.status.state, "exited");
 });
@@ -149,11 +126,11 @@ test("ledger replay: a TERMINAL (exited) poll IS cached — replay returns final
   const run = "run-3";
   setPollState("exited");
 
-  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
+  const first = await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
   assert.equal(calls.poll, 1);
   assert.equal(first.status.state, "exited");
 
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
+  const replay = await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
   assert.equal(calls.poll, 1, "a terminal poll is cached → no re-read on replay");
   assert.deepEqual(replay, first);
 });
@@ -163,8 +140,8 @@ test("ledger replay: a stop result IS cached (idempotent)", async () => {
   const { broker, calls } = recordingBroker();
   const run = "run-4";
 
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
+  await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
+  await toolContext({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
   assert.equal(calls.stop, 1, "the cached stop replays without re-signalling");
 });
 
@@ -173,7 +150,7 @@ test("callIndex advances on every once() — a non-cached poll between two cache
   const { broker, calls, setPollState } = recordingBroker();
   const run = "run-5";
 
-  const ctx1 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
+  const ctx1 = toolContext({ backgroundBroker: broker, ledger, runId: run });
   await ctx1.backgroundStart("npm test");
   setPollState("running");
   await ctx1.backgroundPoll("p-1");
@@ -183,7 +160,7 @@ test("callIndex advances on every once() — a non-cached poll between two cache
   assert.equal(calls.poll, 2);
 
   setPollState("exited");
-  const ctx2 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
+  const ctx2 = toolContext({ backgroundBroker: broker, ledger, runId: run });
   await ctx2.backgroundStart("npm test");
   await ctx2.backgroundPoll("p-1");
   await ctx2.backgroundPoll("p-1");
@@ -192,7 +169,7 @@ test("callIndex advances on every once() — a non-cached poll between two cache
 });
 
 test("off-Fly degradation: with NO broker the four mutating methods throw the 'use execute' guidance (never fake a success the agent misreads as done); list is empty", async () => {
-  const ctx = ctxFor({});
+  const ctx = toolContext({});
   const guidance = /isn't available.*execute/s;
 
   await assert.rejects(ctx.backgroundStart("npm test"), guidance);
@@ -206,7 +183,7 @@ test("off-Fly degradation: with NO broker the four mutating methods throw the 'u
 
 test("registerLogin passes through createToolContext to the tool layer", async () => {
   const calls: string[] = [];
-  const ctx = ctxFor({
+  const ctx = toolContext({
     registerLogin: async (service, paths) => {
       calls.push(`${service}:${paths.map((p) => p.path).join(",")}`);
       return { service, captured: true };

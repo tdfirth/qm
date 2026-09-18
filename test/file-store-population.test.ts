@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
@@ -12,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
@@ -172,18 +172,13 @@ test("write+share registers an artifact keyed on the SAME (owner, path) as the g
   const grantee = scopeId("personal", "U2");
   const { sandbox } = memSandbox({ "redline.md": "v1 redline" });
 
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox,
     provision: async () => HANDLE,
     layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
     workspace,
-    deploy: {} as never,
     acl,
     files: store,
-    createdBy: "U1",
     persistWritesToStore: { excludeDirs: ["inbox"] },
   });
 
@@ -202,18 +197,13 @@ test("intentional write+share after deletion creates a fresh visible artifact ge
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "republish-")));
   const grantee = scopeId("personal", "U2");
   const { sandbox } = memSandbox();
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox,
     provision: async () => HANDLE,
     layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
     workspace,
-    deploy: {} as never,
     acl,
     files: store,
-    createdBy: "U1",
     persistWritesToStore: { excludeDirs: ["inbox"] },
   });
   const share = [{ scope: grantee, permission: "read" as const }];

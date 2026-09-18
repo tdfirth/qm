@@ -18,7 +18,9 @@ import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
 import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
-import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import { createToolContext, type ToolContextDeps } from "../../src/tools/primitives.ts";
+import { scopeId } from "../../src/types.ts";
 
 const ORG = "default-org";
 
@@ -80,4 +82,22 @@ export function testOrchestrator<O extends Partial<OrchestratorDeps> & Pick<Orch
   };
   const deps = { ...defaults, ...overrides } as O & OrchestratorDeps;
   return { ...deps, orchestrator: createOrchestrator(deps) };
+}
+
+const toolHandle: SandboxHandle = { id: "h", rootDir: "/workspace" };
+
+export function toolContext(extra: Partial<ToolContextDeps> = {}) {
+  return createToolContext({
+    sandbox: {} as unknown as Sandbox,
+    provision: async () => toolHandle,
+    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+    ...extra,
+  });
 }

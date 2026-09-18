@@ -3,16 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const at = Date.UTC(2026, 4, 31);
-
-const noSandbox = {} as unknown as Sandbox;
 
 function ctxFor(opts: {
   scope: ScopeId;
@@ -20,19 +17,12 @@ function ctxFor(opts: {
   memory: ReturnType<typeof createMemoryService>;
   memoryScopeId?: ScopeId;
 }) {
-  const layers: WorkspaceLayer[] = [{ scopeId: opts.scope, mountPath: "", mode: "rw" }];
-  return createToolContext({
-    sandbox: noSandbox,
+  return toolContext({
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers,
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
+    layers: [{ scopeId: opts.scope, mountPath: "", mode: "rw" }],
     workspace: opts.workspace,
-    deploy: {} as never,
-    acl: {} as never,
     createdBy: opts.scope.split(":")[1] ?? opts.scope,
     memory: opts.memory,
     memoryScopeId: opts.memoryScopeId ?? opts.scope,
@@ -73,19 +63,7 @@ test("memorySearch() honors the explicit limit and never the model's scope (no s
 
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-none-")));
-  const personal = scopeId("personal", "U1");
-  const ctx = createToolContext({
-    sandbox: noSandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
-  });
+  const ctx = toolContext({ workspace });
   assert.equal(await ctx.memorySearch("anything"), null);
   assert.equal(await ctx.memoryRead(), null);
   assert.equal(await ctx.memoryRemember(["a fact"]), null);
@@ -224,19 +202,11 @@ test("capture-off policy: search still works, but read/remember/rewrite are unav
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
-  const ctx = createToolContext({
-    sandbox: noSandbox,
+  const ctx = toolContext({
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
     workspace,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     memory,
     memoryScopeId: personal,
     memoryAccess: { read: [personal] },
@@ -257,19 +227,11 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   await workspace.ensureScope(org);
   await memory.capture(personal, ["deploys happen on Fridays"], at);
   await memory.capture(org, ["deploys are frozen in December"], at);
-  const ctx = createToolContext({
-    sandbox: noSandbox,
+  const ctx = toolContext({
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
     workspace,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     memory,
     memoryScopeId: personal,
     memoryAccess: { write: personal, read: [personal, org] },

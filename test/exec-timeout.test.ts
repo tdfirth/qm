@@ -1,10 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { ExecOptions, ExecResult, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-
-const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
+import { toolContext } from "./support/fakes.ts";
 
 function recordingSandbox(): { sandbox: Sandbox; lastOpts: () => ExecOptions | undefined } {
   let captured: ExecOptions | undefined;
@@ -18,21 +16,7 @@ function recordingSandbox(): { sandbox: Sandbox; lastOpts: () => ExecOptions | u
 }
 
 function ctxFor(sandbox: Sandbox, extra: Partial<ToolContextDeps> = {}) {
-  const scope = scopeId("personal", "U1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
-  return createToolContext({
-    sandbox,
-    provision: async () => handle,
-    layers,
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
-    ...extra,
-  });
+  return toolContext({ sandbox, ...extra });
 }
 
 test("the agent's timeout_seconds is converted to ms and passed to sandbox.run", async () => {

@@ -7,24 +7,24 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
+import { type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
 
 function routingCtx(extra: Partial<ToolContextDeps> = {}) {
   const calls = { provision: 0, scratch: 0, ranOn: [] as string[] };
-  const layers: WorkspaceLayer[] = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }];
   const sandbox = {
     async run(handle: SandboxHandle) {
       calls.ranOn.push(handle.id);
       return { stdout: "ok", stderr: "", code: 0, timedOut: false };
     },
   } as unknown as Sandbox;
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox,
     provision: async () => {
       calls.provision++;
@@ -34,14 +34,6 @@ function routingCtx(extra: Partial<ToolContextDeps> = {}) {
       calls.scratch++;
       return scratchHandle;
     },
-    layers,
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
     ...extra,
   });
   return { ctx, calls };

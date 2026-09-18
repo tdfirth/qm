@@ -4,7 +4,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { artifactPath, createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
@@ -13,6 +12,7 @@ import { createAuditLog } from "../src/audit/audit-log.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { toolContext } from "./support/fakes.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
@@ -57,16 +57,12 @@ function toolCtx(opts: {
   sharedMaterializeDir?: string;
   createdBy?: string;
 }) {
-  return createToolContext({
+  return toolContext({
     sandbox: opts.sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     layers: opts.layers ?? [{ scopeId: opts.scope, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
     grantedHandles: opts.grantedHandles ?? [],
     ...(opts.sharedMaterializeDir ? { sharedMaterializeDir: opts.sharedMaterializeDir } : {}),
     workspace: opts.workspace,
-    deploy: {} as never,
     acl: opts.acl,
     ...(opts.auditLog ? { auditLog: opts.auditLog } : {}),
     createdBy: opts.createdBy ?? opts.scope.split(":")[1] ?? opts.scope,
@@ -348,16 +344,12 @@ test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its
   const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
   assert.equal(handles.length, 1, "the grant materializes as a handle");
 
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox: memSandbox().sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
     grantedHandles: handles,
     workspace,
     files,
-    deploy: {} as never,
     acl,
     createdBy: "U2",
   });
@@ -394,16 +386,12 @@ test("a workspace-backed share is never served from a stale artifact snapshot", 
     grantedBy: "U1",
   });
   const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
-  const ctx = createToolContext({
+  const ctx = toolContext({
     sandbox: memSandbox().sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
     grantedHandles: handles,
     workspace,
     files,
-    deploy: {} as never,
     acl,
     createdBy: "U2",
   });

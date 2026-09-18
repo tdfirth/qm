@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { toolContext } from "./support/fakes.ts";
 
 function ctx(onEnsure: (dir: string) => void) {
   const materialized = new Set<string>();
@@ -29,22 +28,13 @@ function ctx(onEnsure: (dir: string) => void) {
       };
     },
   };
-  return createToolContext({
+  return toolContext({
     sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     ensureSkillTree: async (dir: string) => {
       materialized.add(dir);
       onEnsure(dir);
     },
     backgroundBroker: backgroundBroker as never,
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({ mode: "denylist", rules: [] }),
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: {} as never,
-    acl: {} as never,
-    createdBy: "U1",
   });
 }
 
