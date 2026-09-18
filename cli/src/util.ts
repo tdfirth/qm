@@ -57,6 +57,83 @@ export function captureBoth(cmd: string, args: string[], opts: { cwd?: string; e
   return `${r.stdout ?? ""}${r.stderr ?? ""}`;
 }
 
+export class ProcessOutputLimitError extends CliError {}
+
+export function captureAsync(
+  cmd: string,
+  args: string[],
+  opts: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    input?: string;
+    signal?: AbortSignal;
+    maxStdoutBytes: number;
+    maxStderrBytes: number;
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) return reject(opts.signal.reason ?? new CliError(`${cmd} cancelled`));
+    const grouped = process.platform !== "win32";
+    const child = spawn(cmd, args, {
+      stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      detached: grouped,
+      ...procOpts(opts),
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let failure: unknown;
+    const terminate = (): void => {
+      if (!child.pid || child.exitCode !== null) return;
+      if (grouped) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") failure ??= error;
+        }
+      }
+      child.kill("SIGKILL");
+    };
+    const exceed = (stream: "stdout" | "stderr", limit: number): void => {
+      failure ??= new ProcessOutputLimitError(`${cmd} ${stream} exceeded its ${limit}-byte limit`);
+      terminate();
+    };
+    child.stdout!.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.byteLength;
+      if (stdoutBytes > opts.maxStdoutBytes) return exceed("stdout", opts.maxStdoutBytes);
+      stdout.push(chunk);
+    });
+    child.stderr!.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes > opts.maxStderrBytes) return exceed("stderr", opts.maxStderrBytes);
+      stderr.push(chunk);
+    });
+    const abort = (): void => {
+      failure ??= opts.signal?.reason ?? new CliError(`${cmd} cancelled`);
+      terminate();
+    };
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    child.stdin?.on("error", (error) => {
+      failure ??= error;
+      terminate();
+    });
+    child.once("error", (error) => {
+      failure ??= error;
+    });
+    child.once("close", (code, signal) => {
+      opts.signal?.removeEventListener("abort", abort);
+      if (failure) return reject(failure);
+      const out = Buffer.concat(stdout, stdoutBytes).toString("utf8");
+      const err = Buffer.concat(stderr, stderrBytes).toString("utf8");
+      if (code === 0) resolve({ stdout: out, stderr: err });
+      else reject(new CliError(`${cmd} ${args.join(" ")} failed: ${err.trim() || out.trim() || signal || code}`));
+    });
+    child.stdin?.end(opts.input);
+  });
+}
+
 export function runInherit(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): void {
   execFileSync(cmd, args, {
     stdio: "inherit",

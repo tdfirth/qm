@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   capture,
+  captureAsync,
   deploymentSecretValue,
   flyBin,
   isInvalidSecret,
   promptHidden,
+  ProcessOutputLimitError,
   readEnvFile,
   settleAll,
   streamLabeled,
@@ -70,6 +72,9 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
 const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
 const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
 const FLY_REQUEST_TIMEOUT_MS = 120_000;
+const FLY_REMOTE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const FLY_SSH_STDOUT_MAX_BYTES = 32 * 1024 * 1024;
+const FLY_SSH_STDERR_MAX_BYTES = 1024 * 1024;
 
 async function flyRequest(
   config: QmConfig,
@@ -79,40 +84,21 @@ async function flyRequest(
   signal?: AbortSignal,
 ): Promise<{ status: number; body: string }> {
   const app = `${appPrefixOf(config)}-core`;
-  const script = `const fs=require("node:fs"),{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=fs.readFileSync(0,"utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
+  const script = `const fs=require("node:fs"),{createHmac}=require("node:crypto"),limit=${FLY_REMOTE_RESPONSE_MAX_BYTES};const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))},read=async response=>{const chunks=[];let size=0;if(response.body){for await(const chunk of response.body){size+=chunk.byteLength;if(size>limit)throw new Error("deployment-layer response exceeded its "+limit+"-byte limit");chunks.push(chunk)}}return Buffer.concat(chunks,size).toString("utf8")};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=fs.readFileSync(0,"utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await read(response)}))).catch(fail)}catch(error){fail(error)}`;
   const encoded = Buffer.from(script).toString("base64");
   const command = `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
   const requestSignal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
-  let output = "";
-  let stderr = "";
+  let output: string;
   try {
-    await new Promise<void>((resolve, reject) => {
-      let failure: unknown;
-      const child = spawn(flyBin(), ["ssh", "console", "-a", app, "-C", command], {
-        stdio: ["pipe", "pipe", "pipe"],
-        killSignal: "SIGKILL",
-        signal: requestSignal,
-      });
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => (output += chunk));
-      child.stderr.on("data", (chunk: string) => (stderr += chunk));
-      child.on("error", (error) => (failure = error));
-      child.stdin.on("error", (error) => {
-        failure ??= error;
-        child.kill("SIGKILL");
-      });
-      child.on("close", (code) => {
-        if (code === 0 && !failure) resolve();
-        else
-          reject(
-            failure ?? new Error(stderr.trim() || output.trim() || `fly ssh exited ${code ?? "without a status"}`),
-          );
-      });
-      child.stdin.end(body);
-    });
+    ({ stdout: output } = await captureAsync(flyBin(), ["ssh", "console", "-a", app, "-C", command], {
+      input: body,
+      signal: requestSignal,
+      maxStdoutBytes: FLY_SSH_STDOUT_MAX_BYTES,
+      maxStderrBytes: FLY_SSH_STDERR_MAX_BYTES,
+    }));
   } catch (error) {
-    const text = `${stderr}${output}`.trim() || errMessage(error);
+    if (error instanceof ProcessOutputLimitError) throw error;
+    const text = errMessage(error);
     if (/could not find app|app not found/i.test(text)) throw new CliError(`Fly app ${app} not found: ${text}`);
     if (
       (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") ||

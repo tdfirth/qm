@@ -1,7 +1,7 @@
 import { awsCoreHostnames, awsPortalAppsDomain, validAlbHostname } from "../aws-routing.ts";
 import https from "node:https";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
 import {
   accessSync,
@@ -59,6 +59,7 @@ import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import {
   canonicalJson,
   capture,
+  captureAsync,
   deploymentSecretValue,
   envNum,
   isInvalidSecret,
@@ -72,6 +73,7 @@ import {
   sleep,
   streamLabeled,
 } from "../util.ts";
+
 import { doctorCommon } from "./doctor.ts";
 import { checkControlledLiveSession } from "../live-session.ts";
 import {
@@ -99,6 +101,10 @@ import {
   type BackgroundWorkTransport,
 } from "../background-work.ts";
 
+const AWS_CLI_STDOUT_MAX_BYTES = 16 * 1024 * 1024;
+const AWS_CLI_STDERR_MAX_BYTES = 1024 * 1024;
+const DEPLOYMENT_LAYER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
 export async function awsCoreRequest(
   config: QmConfig,
   url: URL,
@@ -110,7 +116,7 @@ export async function awsCoreRequest(
     .replace(/\.$/, "");
   if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
   if (awsPublicOrigin(config).protocol === "http:") {
-    assertCloudFrontLayerTarget(config, url, target);
+    await assertCloudFrontLayerTarget(config, url, target, init.signal ?? undefined);
     const response = await fetch(url, init);
     if (maxResponseBytes === undefined) return { status: response.status, body: await response.text() };
     const chunks: Uint8Array[] = [];
@@ -177,13 +183,13 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
     return url;
   },
-  request: awsCoreRequest,
+  request: (config, url, init) => awsCoreRequest(config, url, init, DEPLOYMENT_LAYER_RESPONSE_MAX_BYTES),
   secretFallback: (config, signal) => {
     const aws = config.aws;
     return aws
-      ? new Promise<string>((resolve, reject) => {
-          const command = process.env.AWS_BIN ?? "aws";
-          const args = [
+      ? captureAsync(
+          process.env.AWS_BIN ?? "aws",
+          [
             "secretsmanager",
             "get-secret-value",
             "--secret-id",
@@ -194,24 +200,13 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
             "text",
             "--region",
             aws.region,
-          ];
-          const child = spawn(command, args, {
-            stdio: ["ignore", "pipe", "pipe"],
-            killSignal: "SIGKILL",
-            ...(signal ? { signal } : {}),
-          });
-          let stdout = "";
-          let stderr = "";
-          child.stdout.setEncoding("utf8");
-          child.stderr.setEncoding("utf8");
-          child.stdout.on("data", (chunk: string) => (stdout += chunk));
-          child.stderr.on("data", (chunk: string) => (stderr += chunk));
-          child.on("error", reject);
-          child.on("close", (code) => {
-            if (code === 0) resolve(stdout.trim());
-            else reject(new CliError(`${command} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`));
-          });
-        })
+          ],
+          {
+            signal,
+            maxStdoutBytes: AWS_CLI_STDOUT_MAX_BYTES,
+            maxStderrBytes: AWS_CLI_STDERR_MAX_BYTES,
+          },
+        ).then(({ stdout }) => stdout.trim())
       : undefined;
   },
   timeoutMs: 60_000,
@@ -313,23 +308,10 @@ function awsJson<T>(aws: AwsConfig, args: string[]): T {
 async function awsJsonAsync<T>(aws: AwsConfig, args: string[], signal?: AbortSignal): Promise<T> {
   const command = process.env.AWS_BIN ?? "aws";
   const commandArgs = awsArgs(aws, [...args, "--output", "json"]);
-  const raw = await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, commandArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-      killSignal: "SIGKILL",
-      ...(signal ? { signal } : {}),
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new CliError(`${command} ${commandArgs.join(" ")} failed: ${stderr.trim() || stdout.trim()}`));
-    });
+  const { stdout: raw } = await captureAsync(command, commandArgs, {
+    signal,
+    maxStdoutBytes: AWS_CLI_STDOUT_MAX_BYTES,
+    maxStderrBytes: AWS_CLI_STDERR_MAX_BYTES,
   });
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
@@ -4238,7 +4220,12 @@ function validatedAwsPublicFrontDoor(
   return { loadBalancerArn: loadBalancer.LoadBalancerArn, dnsName: loadBalancer.DNSName, listener };
 }
 
-function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string): void {
+async function assertCloudFrontLayerTarget(
+  config: QmConfig,
+  url: URL,
+  target: string,
+  signal?: AbortSignal,
+): Promise<void> {
   interface Distribution {
     DomainName?: string;
     Status?: string;
@@ -4262,8 +4249,13 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
     };
   }
   const distributions =
-    awsJson<{ DistributionList?: { Items?: Distribution[] } }>(requireAws(config), ["cloudfront", "list-distributions"])
-      .DistributionList?.Items ?? [];
+    (
+      await awsJsonAsync<{ DistributionList?: { Items?: Distribution[] } }>(
+        requireAws(config),
+        ["cloudfront", "list-distributions"],
+        signal,
+      )
+    ).DistributionList?.Items ?? [];
   const matches = distributions.filter((distribution) => distribution.DomainName === url.hostname);
   const distribution = matches.length === 1 ? matches[0] : undefined;
   const behavior = distribution?.DefaultCacheBehavior;

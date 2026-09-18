@@ -1,9 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import {
+  canonicalJson,
+  captureAsync,
+  runInheritAsync,
+  flyBin,
+  isInvalidSecret,
+  ProcessOutputLimitError,
+  readEnvFile,
+  writeEnvValue,
+} from "../src/util.ts";
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
@@ -189,4 +198,63 @@ test("promptHidden treats Ctrl-D as enter on a non-empty buffer and as cancel on
 test("async inherited processes reject spawn errors and signal termination", async () => {
   await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
   await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
+});
+
+test("async capture counts multibyte output bytes and terminates stdout overflow", async () => {
+  const exact = await captureAsync(process.execPath, ["-e", `process.stdout.write("é".repeat(4))`], {
+    maxStdoutBytes: 8,
+    maxStderrBytes: 8,
+  });
+  assert.equal(exact.stdout, "é".repeat(4));
+  await assert.rejects(
+    captureAsync(process.execPath, ["-e", `process.stdout.write("é".repeat(4));setInterval(()=>{},1000)`], {
+      maxStdoutBytes: 7,
+      maxStderrBytes: 8,
+    }),
+    (error) => error instanceof ProcessOutputLimitError && /stdout exceeded its 7-byte limit/.test(error.message),
+  );
+});
+
+test("async capture bounds stderr and cancellation leaves no child", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-capture-"));
+  const pidFile = join(dir, "pid");
+  const cancelPidFile = join(dir, "cancel-pid");
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    await assert.rejects(
+      captureAsync(
+        process.execPath,
+        [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.stderr.write("é".repeat(4));setInterval(()=>{},1000)`,
+        ],
+        { maxStdoutBytes: 8, maxStderrBytes: 7 },
+      ),
+      /stderr exceeded its 7-byte limit/,
+    );
+    const overflowPid = Number(readFileSync(pidFile, "utf8"));
+    assert.equal(alive(overflowPid), false);
+    const controller = new AbortController();
+    const pending = captureAsync(
+      process.execPath,
+      [
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(cancelPidFile)},String(process.pid));setInterval(()=>{},1000)`,
+      ],
+      { signal: controller.signal, maxStdoutBytes: 8, maxStderrBytes: 8 },
+    );
+    while (!existsSync(cancelPidFile)) await new Promise((resolve) => setTimeout(resolve, 5));
+    controller.abort();
+    await assert.rejects(pending, /abort/i);
+    assert.equal(alive(Number(readFileSync(cancelPidFile, "utf8"))), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

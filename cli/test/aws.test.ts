@@ -43,6 +43,7 @@ import {
 import type { QmConfig } from "../src/config.ts";
 import { runnableServices } from "../src/services.ts";
 import { computedSecrets } from "../src/secrets.ts";
+import { syncDeploymentLayerBody } from "../src/deployment-layer.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
@@ -5404,6 +5405,99 @@ test("AWS layer deadline includes ALB discovery", async () => {
     if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function cloudFrontDiscoveryFake(dir: string, mode: "hang" | "stdout" | "stderr") {
+  const bin = join(dir, `aws-cloudfront-${mode}`);
+  const pidFile = join(dir, `${mode}.pid`);
+  writeFileSync(
+    bin,
+    `#!${process.execPath}
+const fs=require("node:fs"),args=process.argv.slice(2).join(" ");
+if(args.includes("elbv2 describe-load-balancers"))console.log(JSON.stringify({LoadBalancers:[{LoadBalancerArn:"arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/test/1",DNSName:"agent.acme.example",State:{Code:"active"}}]}));
+else if(args.includes("elbv2 describe-listeners"))console.log(JSON.stringify({Listeners:[{ListenerArn:"arn:aws:elasticloadbalancing:us-west-2:123456789012:listener/app/test/1/2",Protocol:"HTTP",Port:80,DefaultActions:[{Type:"forward",TargetGroupArn:"arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/test/1"}]}]}));
+else if(args.includes("cloudfront list-distributions")){fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));${mode === "hang" ? "setInterval(()=>{},1000)" : `process.${mode}.write("é".repeat(${mode === "stdout" ? 8 * 1024 * 1024 + 1 : 512 * 1024 + 1}));setInterval(()=>{},1000)`}}
+else process.exit(2);
+`,
+  );
+  chmodSync(bin, 0o755);
+  return { bin, pidFile };
+}
+
+function cloudFrontLayerConfig(): QmConfig {
+  return {
+    ...config,
+    publicUrl: "https://test.cloudfront.net",
+    env: { ...config.env, core: { ...config.env.core, AWS_PUBLIC_ORIGIN_URL: "http://acme-qm.elb.example" } },
+  };
+}
+
+test("AWS layer deadline and caller cancellation terminate hung CloudFront discovery", async () => {
+  for (const kind of ["deadline", "caller"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), `qm-aws-cloudfront-${kind}-`));
+    const fake = cloudFrontDiscoveryFake(dir, "hang");
+    const priorBin = process.env.AWS_BIN;
+    const priorSecret = process.env.CORE_SIGNING_SECRET;
+    process.env.AWS_BIN = fake.bin;
+    process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+    const controller = new AbortController();
+    try {
+      const pending = awsDeploymentLayerTransport({
+        config: cloudFrontLayerConfig(),
+        configDir: dir,
+        method: "GET",
+        body: "",
+        ...(kind === "deadline" ? { timeoutMs: 1_000 } : { signal: controller.signal }),
+      });
+      while (!existsSync(fake.pidFile)) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (kind === "caller") controller.abort();
+      await assert.rejects(pending, /abort/i);
+      const pid = Number(readFileSync(fake.pidFile, "utf8"));
+      assert.throws(() => process.kill(pid, 0), /ESRCH/);
+    } finally {
+      if (priorBin === undefined) delete process.env.AWS_BIN;
+      else process.env.AWS_BIN = priorBin;
+      if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+      else process.env.CORE_SIGNING_SECRET = priorSecret;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("AWS discovery stdout and stderr overflow are terminal sync failures", async (t) => {
+  for (const mode of ["stdout", "stderr"] as const) {
+    await t.test(mode, async () => {
+      const dir = mkdtempSync(join(tmpdir(), `qm-aws-cloudfront-${mode}-`));
+      const fake = cloudFrontDiscoveryFake(dir, mode);
+      const priorBin = process.env.AWS_BIN;
+      const priorSecret = process.env.CORE_SIGNING_SECRET;
+      process.env.AWS_BIN = fake.bin;
+      process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+      try {
+        await assert.rejects(
+          syncDeploymentLayerBody(
+            {
+              config: cloudFrontLayerConfig(),
+              configDir: dir,
+              transport: awsDeploymentLayerTransport,
+              allowUnavailable: true,
+              retryDelayMs: 1,
+            },
+            EMPTY_LAYER_BODY,
+          ),
+          new RegExp(`${mode} exceeded its \\d+-byte limit`),
+        );
+        const pid = Number(readFileSync(fake.pidFile, "utf8"));
+        assert.throws(() => process.kill(pid, 0), /ESRCH/);
+      } finally {
+        if (priorBin === undefined) delete process.env.AWS_BIN;
+        else process.env.AWS_BIN = priorBin;
+        if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+        else process.env.CORE_SIGNING_SECRET = priorSecret;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   }
 });
 

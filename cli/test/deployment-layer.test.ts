@@ -864,6 +864,56 @@ test("fly sync bounds a large stdin when SSH never reads it", async () => {
   }
 });
 
+test("fly SSH stdout and stderr overflow are terminal and terminate the process", async (t) => {
+  for (const mode of ["stdout", "stderr"] as const) {
+    await t.test(mode, async () => {
+      const dir = mkdtempSync(join(tmpdir(), `qm-layer-fly-${mode}-`));
+      const pidFile = join(dir, "pid");
+      try {
+        writeLayer(dir);
+        const repeats = mode === "stdout" ? 16 * 1024 * 1024 + 1 : 512 * 1024 + 1;
+        const bin = fakeFly(
+          dir,
+          `fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.${mode}.write("é".repeat(${repeats}));setInterval(()=>{},1000);`,
+        );
+        await withEnv({ FLY_BIN: bin }, () =>
+          assert.rejects(
+            () => syncDeploymentLayer(flySyncOpts(dir, true)),
+            new RegExp(`${mode} exceeded its \\d+-byte limit`),
+          ),
+        );
+        assert.throws(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0), /ESRCH/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("fly remote response overflow is terminal before the SSH output boundary", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-remote-limit-"));
+  const server = createServer((_request, response) => {
+    response.writeHead(200);
+    response.end("é".repeat(4 * 1024 * 1024 + 1));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    writeLayer(dir);
+    const bin = fakeFly(
+      dir,
+      `const {spawnSync}=require("node:child_process"),args=process.argv.slice(2),command=args[args.indexOf("-C")+1],result=spawnSync("/bin/sh",["-c",command],{input:fs.readFileSync(0),encoding:"utf8",maxBuffer:64*1024*1024,env:{...process.env,PORT:${JSON.stringify(String(address.port))},CORE_SIGNING_SECRET:${JSON.stringify("x".repeat(32))}}});process.stdout.write(result.stdout||"");process.stderr.write(result.stderr||"");process.exit(result.status??1);`,
+    );
+    await withEnv({ FLY_BIN: bin }, () =>
+      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /response exceeded its \d+-byte limit/),
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("explicit HTTP and Fly syncs allow healthy responses after five seconds", async () => {
   const httpDir = mkdtempSync(join(tmpdir(), "qm-layer-http-slow-"));
   const flyDir = mkdtempSync(join(tmpdir(), "qm-layer-fly-slow-"));
