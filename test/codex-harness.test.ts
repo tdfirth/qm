@@ -663,7 +663,12 @@ for (const terminal of ["failed", "interrupted"] as const)
       recordModelCall: () => {},
     });
     assert.deepEqual((await tasks.list()).map(({ status }) => status), ["failed"]);
-    assert.deepEqual(entries.filter((entry) => entry.type === "tool_result").map((entry) => entry.payload.isError), [true]);
+    assert.deepEqual(
+      entries
+        .filter((entry) => entry.type === "tool_result")
+        .map((entry) => (entry.payload as { isError?: unknown }).isError),
+      [true],
+    );
   });
 
 for (const [protocol, binary] of [
