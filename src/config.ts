@@ -795,7 +795,7 @@ function optNum<K extends string>(env: NodeJS.ProcessEnv, name: string, key: K):
 const lowercased = (value: string): string => value.trim().toLowerCase();
 
 const orList = (items: readonly string[]): string =>
-  items.length === 2 ? items.join(" or ") : `${items.slice(0, -1).join(", ")}, or ${items.at(-1)}`;
+  items.length < 3 ? items.join(" or ") : `${items.slice(0, -1).join(", ")}, or ${items.at(-1)}`;
 
 function enumEnvStrict<T extends string, F extends T | undefined>(
   name: string,

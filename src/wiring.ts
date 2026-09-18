@@ -1852,7 +1852,7 @@ export function buildApp(
     : createMemorySurfaceCache({ liveFallback });
   const channelPolicy = pgOrMemory(createPostgresChannelPolicyStore, createMemoryChannelPolicyStore);
   const ambientJudgments = pgOrMemory(createPostgresAmbientJudgmentStore, createMemoryAmbientJudgmentStore);
-  const ackEmojiPicks: AckEmojiPickStore = pgOrMemory(createPostgresAckEmojiPickStore, createMemoryAckEmojiPickStore);
+  const ackEmojiPicks = pgOrMemory(createPostgresAckEmojiPickStore, createMemoryAckEmojiPickStore);
   const providerKeys = directProviderAvailability;
   const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
     ? ({ payload, harnessId, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
