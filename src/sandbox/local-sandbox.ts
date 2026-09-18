@@ -11,7 +11,8 @@ import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps } from "./exec-file-ops.ts";
+import { createExecSandboxIo } from "./exec-sandbox-base.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -233,6 +234,14 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     return Buffer.from((JSON.parse(res.text) as { b64: string }).b64, "base64");
   }
 
+  const { writeFileBytes, writeFile, readFileBytes, readFile } = createExecSandboxIo({
+    label: "local",
+    defaultTimeoutSec,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+  });
+
   async function ensureNetwork(name: string): Promise<string> {
     const net = localNetworkName(name);
     if ((await dexec(["network", "inspect", net])).code !== 0) {
@@ -422,8 +431,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
           layers,
           handle,
           {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
+            readFile,
+            writeFileBytes,
             exec: (script, t) => execRaw(name, script, t),
           },
           { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "local" },
@@ -459,19 +468,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       }
     },
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
+    writeFileBytes,
+    writeFile,
+    readFileBytes,
+    readFile,
 
     exportFiles: execExport.exportFiles,
 
