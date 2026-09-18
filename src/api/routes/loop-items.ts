@@ -2,7 +2,7 @@ import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
 import { canonicalJson } from "../../util/objects.ts";
 import { errMessage } from "../../util/errors.ts";
 import { badRequest, conflict, forbidden, notFound, sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, stringField } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
 import { parseScopeId } from "../../types.ts";
@@ -54,7 +54,7 @@ function parseIngestEntry(loop: Loop, raw: unknown): IngestEntryInput | { error:
   if (typeof raw.source === "string" && raw.source.trim()) {
     return { error: `unknown source "${raw.source}"` };
   }
-  const dedupeKey = typeof raw.dedupeKey === "string" ? raw.dedupeKey.trim() : "";
+  const dedupeKey = stringField(raw, "dedupeKey");
   if (!dedupeKey || dedupeKey.length > 300) return { error: "dedupeKey (<=300 chars) required" };
   if (!isObj(raw.sourcePayload)) return { error: "sourcePayload must be an object" };
   if (jsonSize(raw.sourcePayload) > MAX_SOURCE_PAYLOAD_BYTES) {
@@ -235,7 +235,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const { deps, loop } = loaded;
   let item = loaded.item;
   const body = isObj(ctx.body) ? ctx.body : {};
-  const kind = typeof body.kind === "string" ? body.kind.trim() : "";
+  const kind = stringField(body, "kind");
   const proposalAuthor = ctx.capability ? ("agent" as const) : ("human" as const);
   if (!kind) return badRequest(ctx.res, "kind required");
   const args = isObj(body.args) ? body.args : {};
@@ -363,7 +363,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, item } = loaded;
   const body = isObj(ctx.body) ? ctx.body : {};
-  const message = typeof body.message === "string" ? body.message.trim() : "";
+  const message = stringField(body, "message");
   if (!message) return badRequest(ctx.res, "message required");
   if (message.length > MAX_FOLLOWUP_CHARS) {
     return badRequest(ctx.res, `message must be under ${MAX_FOLLOWUP_CHARS} chars`);
@@ -417,7 +417,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
   if (!deps) return notFound(ctx.res);
   const body = isObj(ctx.body) ? ctx.body : {};
-  const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
+  const threadId = stringField(body, "threadId");
   if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES) return badRequest(ctx.res);
   const text = (key: string, max: number): string => (typeof body[key] === "string" ? body[key].slice(0, max) : "");
   const accountType = body.accountType === undefined ? "default" : body.accountType;

@@ -5,7 +5,7 @@ import { errMessage } from "../../util/errors.ts";
 import { badRequest, notFound, sendJson, unauthorized } from "../http.ts";
 import { validateProviderApiKey } from "./admin/model-providers.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit } from "./shared.ts";
+import { audit, stringField } from "./shared.ts";
 
 function caller(ctx: ApiCtx): string | null {
   return ctx.actor?.p ?? null;
@@ -84,7 +84,7 @@ async function putApiKey(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.userModelCredentials) return notFound(ctx.res);
   const body = bodyObj(ctx);
   const provider = connectProvider(body.provider);
-  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const apiKey = stringField(body, "apiKey");
   if (!provider) return badRequest(ctx.res, "provider must be claude or chatgpt");
   if (!apiKey) return badRequest(ctx.res, "API key is required");
   if (!(await validateProviderApiKey(ctx, provider, apiKey))) {

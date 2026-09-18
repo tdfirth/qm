@@ -1,7 +1,7 @@
 import { errMessage } from "../../util/errors.ts";
 import { samePerson } from "../../directory/person.ts";
 import { badRequest, forbidden, sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { stringField } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 async function listEnvironments(ctx: ApiCtx): Promise<void> {
@@ -21,7 +21,7 @@ async function listEnvironments(ctx: ApiCtx): Promise<void> {
 async function createEnvironment(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   if (!capability) return forbidden(res, "environments require an agent capability token");
-  const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
+  const name = stringField(body, "name");
   if (!name) return badRequest(res, "name (string) required");
   try {
     const env = await app.createEnvironment({ scopeId: capability.scopeId, name, actorId: capability.actorId });
@@ -34,7 +34,7 @@ async function createEnvironment(ctx: ApiCtx): Promise<void> {
 async function attachEnvironment(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   if (!capability) return forbidden(res, "environments require an agent capability token");
-  const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
+  const name = stringField(body, "name");
   if (!name) return badRequest(res, "name (string) required");
   const env = await app.resolveEnvironmentByName(name);
   if (!env) return sendJson(res, 404, { error: "environment_not_found", message: `no environment named "${name}"` });

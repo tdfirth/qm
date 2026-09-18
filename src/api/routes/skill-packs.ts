@@ -1,6 +1,6 @@
 import { badRequest, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, orgScope, orgAdmin } from "./shared.ts";
+import { audit, orgScope, orgAdmin, stringField } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
@@ -66,7 +66,7 @@ const registerPack = orgAdmin(async (ctx, actor) => {
   const input: NewSkillPack = {
     kind: "git",
     url: b.url.trim(),
-    ref: typeof b.ref === "string" ? b.ref.trim() : "",
+    ref: stringField(b, "ref"),
 
     syncMode: "pinned",
     trustTier: b.trustTier === "internal" ? "internal" : "third-party",

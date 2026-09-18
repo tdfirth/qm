@@ -1,7 +1,7 @@
 import { parseScopeId } from "../../types.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { badRequest, conflict, forbidden, notFound, sendJson } from "../http.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, stringField } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const MAX_ORDERS_CHARS = 20_000;
@@ -39,8 +39,8 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
 export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   const b = isObj(body) ? body : {};
-  const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
-  const scope = typeof b.scope === "string" ? b.scope.trim() : "";
+  const principalId = stringField(b, "principalId");
+  const scope = stringField(b, "scope");
   if (!principalId || !scope) return badRequest(res, "principalId and scope required");
   const container = channelContainer(scope);
   if (!container) return badRequest(res, "ambient policy applies to channel and group scopes only");

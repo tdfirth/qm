@@ -7,10 +7,16 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { badRequest, forbidden, headerValue, notFound } from "../http.ts";
+import { isObj } from "../../util/objects.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
-export { isObj } from "../../util/objects.ts";
+export { isObj };
+
+export function stringField(body: unknown, key: string): string {
+  const value = isObj(body) ? body[key] : undefined;
+  return typeof value === "string" ? value.trim() : "";
+}
 
 export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });

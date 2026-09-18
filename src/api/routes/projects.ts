@@ -1,5 +1,5 @@
 import { badRequest, forbidden, notFound, sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { stringField } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
@@ -20,11 +20,9 @@ async function listProjects(ctx: ApiCtx): Promise<void> {
 }
 
 async function createProject(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
-  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const name = stringField(ctx.body, "name");
   if (!principalId || !name) return badRequest(ctx.res, "principalId and name required");
   const project = await ctx.app.createProject(principalId, name);
   return project ? sendJson(ctx.res, 201, { project }) : forbidden(ctx.res);
@@ -54,29 +52,23 @@ function mutationResponse(ctx: ApiCtx, result: Awaited<ReturnType<ApiCtx["app"][
 }
 
 async function addProjectMember(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
-  const memberId = typeof body.memberId === "string" ? body.memberId.trim() : "";
+  const memberId = stringField(ctx.body, "memberId");
   if (!principalId || !memberId) return badRequest(ctx.res, "principalId and memberId required");
   return mutationResponse(ctx, await ctx.app.addProjectMember(ctx.params.id!, principalId, memberId));
 }
 
 async function renameProject(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
-  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const name = stringField(ctx.body, "name");
   if (!principalId || !name) return badRequest(ctx.res, "principalId and name required");
   return mutationResponse(ctx, await ctx.app.renameProject(ctx.params.id!, principalId, name));
 }
 
 async function removeProjectMember(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
   const memberId = ctx.params.memberId?.trim() ?? "";
   if (!principalId || !memberId) return badRequest(ctx.res, "principalId and memberId required");
@@ -84,19 +76,15 @@ async function removeProjectMember(ctx: ApiCtx): Promise<void> {
 }
 
 async function setProjectSlackChannel(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
-  const channel = typeof body.channel === "string" ? body.channel.trim() : "";
+  const channel = stringField(ctx.body, "channel");
   if (!principalId || !channel) return badRequest(ctx.res, "principalId and channel required");
   return mutationResponse(ctx, await ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, channel));
 }
 
 async function clearProjectSlackChannel(ctx: ApiCtx): Promise<void> {
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
-  const principalId = capabilityPrincipal(ctx, requested);
+  const principalId = capabilityPrincipal(ctx, stringField(ctx.body, "principalId"));
   if (principalId === null) return;
   if (!principalId) return badRequest(ctx.res, "principalId required");
   return mutationResponse(ctx, await ctx.app.setProjectSlackChannel(ctx.params.id!, principalId, null));

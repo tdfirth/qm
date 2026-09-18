@@ -28,7 +28,7 @@ import {
   unauthorized,
 } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, stringField } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -338,8 +338,8 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const b = isObj(body) ? body : {};
-  const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
-  const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
+  const principalId = stringField(b, "principalId");
+  const blobId = stringField(b, "blobId");
   const name = typeof b.name === "string" ? b.name : "";
   const mimetype = typeof b.mimetype === "string" ? b.mimetype : undefined;
   const scopeId = typeof b.scopeId === "string" && b.scopeId ? (b.scopeId as ScopeId) : undefined;

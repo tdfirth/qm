@@ -34,7 +34,7 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
-import { audit } from "./shared.ts";
+import { audit, stringField } from "./shared.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -782,8 +782,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         selfLabel?: unknown;
         orgName?: unknown;
       };
-      const accentInput = typeof body.accent === "string" ? body.accent.trim() : "";
-      const markUrlInput = typeof body.markUrl === "string" ? body.markUrl.trim() : "";
+      const accentInput = stringField(body, "accent");
+      const markUrlInput = stringField(body, "markUrl");
       const value = sanitizeBranding(body);
       if (accentInput && !value?.accent) {
         return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
