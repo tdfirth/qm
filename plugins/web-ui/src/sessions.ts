@@ -133,10 +133,6 @@ export function clearSessionSelection(): boolean {
   return true;
 }
 
-export function hasSessionSelection(): boolean {
-  return selection.ids.size > 0;
-}
-
 let selectColorOpen = false;
 
 function redrawSelection(): void {

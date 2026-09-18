@@ -275,10 +275,6 @@ export function resetInboxState(): void {
   chatDrafts.clear();
 }
 
-export function inboxViews(): InboxView[] {
-  return VIEWS;
-}
-
 export function inboxViewName(viewId: string): string {
   return VIEWS.find((v) => v.id === viewId)?.name ?? "All";
 }

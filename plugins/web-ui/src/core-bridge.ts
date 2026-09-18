@@ -360,13 +360,6 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
 
-export async function adoptSession(id: string, parentSessionId: string): Promise<{ adopted: true }> {
-  return api<{ adopted: true }>(`/api/sessions/${encodeURIComponent(id)}/adopt`, {
-    method: "POST",
-    body: JSON.stringify({ parentSessionId }),
-  });
-}
-
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
 }
