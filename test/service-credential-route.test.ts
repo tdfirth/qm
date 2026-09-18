@@ -11,6 +11,7 @@ import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -958,12 +959,7 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
 });
 
 const internalActor = { externalId: "U1" };
-const dm = (text: string): TurnRequest => ({
-  surface: "test",
-  actor: internalActor,
-  conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-  text,
-});
+const dm = (text: string): TurnRequest => dmTurn(text, internalActor, "dm:U1:t1");
 
 function buildWithCapture() {
   const built = buildApp(
@@ -1003,21 +999,21 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
   const actor = { externalId: "B-LEGACY", isBot: true };
-  await built.app.turn({
-    surface: "slack",
-    actor,
-    botActor: true,
-    liveActor: true,
-    conversation: {
-      kind: "channel",
-      threadRef: "ch:C1:bot",
-      channelRef: "C1",
-      isPrivate: true,
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: "!run echo bot",
-  });
+  await built.app.turn(
+    turnRequest(
+      "!run echo bot",
+      actor,
+      {
+        kind: "channel",
+        threadRef: "ch:C1:bot",
+        channelRef: "C1",
+        isPrivate: true,
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      { surface: "slack", botActor: true, liveActor: true },
+    ),
+  );
   const botClaims = await verifyCapabilityToken(env()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
   assert.equal(botClaims?.liveActor, true);
@@ -1061,18 +1057,19 @@ test("a channel grantee stamps the credential in that channel's conversations an
     grantedBy: "admin",
   });
 
-  const channelTurn = (channelRef: string): TurnRequest => ({
-    surface: "slack",
-    actor: internalActor,
-    conversation: {
-      kind: "channel",
-      threadRef: `ch:${channelRef}:t1`,
-      channelRef,
-      audience: [internalActor, { externalId: "U2" }],
-      publishMembers: [internalActor, { externalId: "U2" }],
-    },
-    text: "!run echo hi",
-  });
+  const channelTurn = (channelRef: string): TurnRequest =>
+    turnRequest(
+      "!run echo hi",
+      internalActor,
+      {
+        kind: "channel",
+        threadRef: `ch:${channelRef}:t1`,
+        channelRef,
+        audience: [internalActor, { externalId: "U2" }],
+        publishMembers: [internalActor, { externalId: "U2" }],
+      },
+      { surface: "slack" },
+    );
 
   let res = await built.app.turn(channelTurn("C1"));
   assert.equal(res.status, "ok", res.reason);

@@ -9,6 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -301,14 +302,13 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
     assert.ok(surfaceBody.webuiModels.includes("stealth/ox-alpha"));
     assert.equal(surfaceBody.baseModel, "stealth/ox-alpha");
 
-    const turn = await srv.built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "web:alice:openrouter-catalog" },
-      text: "hello",
-      model: "stealth/ox-alpha",
-      async: true,
-    });
+    const turn = await srv.built.app.turn(
+      dmTurn("hello", { externalId: "alice" }, "web:alice:openrouter-catalog", {
+        surface: "web",
+        model: "stealth/ox-alpha",
+        async: true,
+      }),
+    );
     assert.equal(turn.status, "queued");
     assert.equal(catalogRequests, 1);
   } finally {
@@ -331,14 +331,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
   try {
     srv.built.config.setBaseModel("org:default-org", "anthropic/claude-sonnet-4.5");
     const turn = (threadRef: string, model: string) =>
-      srv.built.app.turn({
-        surface: "web",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef },
-        text: "hello",
-        model,
-        async: true,
-      });
+      srv.built.app.turn(dmTurn("hello", { externalId: "alice" }, threadRef, { surface: "web", model, async: true }));
 
     const persisted = await turn("web:alice:persisted-openrouter-model", "anthropic/claude-sonnet-4.5");
     assert.equal(persisted.status, "queued");

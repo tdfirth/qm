@@ -26,6 +26,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -792,17 +793,14 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     const ask = list.asks.find((a: any) => a.credentialId === gh.id && a.status === "pending");
     assert.ok(ask, "the pending ask is visible from the asking conversation");
 
-    const seeded = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U_BOB" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C_INFRA-thread",
-        channelRef: "C_INFRA",
-        audience: [{ externalId: "U_BOB" }],
-      },
-      text: "waiting on alice",
-    } as TurnRequest);
+    const seeded = await built.app.turn(
+      turnRequest(
+        "waiting on alice",
+        { externalId: "U_BOB" },
+        { kind: "channel", threadRef: "ch:C_INFRA-thread", channelRef: "C_INFRA", audience: [{ externalId: "U_BOB" }] },
+        { surface: "slack" },
+      ),
+    );
     assert.equal(seeded.status, "ok");
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
@@ -993,18 +991,19 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
           ...(scopeVersion ? { scopeVersion } : {}),
         });
         const liveOwner = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
-        const seed = await built.app.turn({
-          surface: "cron",
-          triggered: true,
-          actor: { externalId: requesterId },
-          conversation: {
-            kind: kind === "channel" ? "channel" : "group",
-            threadRef,
-            channelRef: scope.slice(scope.indexOf(":") + 1),
-            audience: [{ externalId: "U_ALICE" }, { externalId: "U_BOB" }],
-          },
-          text: "waiting for permission for a synthetic shared job",
-        } as TurnRequest);
+        const seed = await built.app.turn(
+          turnRequest(
+            "waiting for permission for a synthetic shared job",
+            { externalId: requesterId },
+            {
+              kind: kind === "channel" ? "channel" : "group",
+              threadRef,
+              channelRef: scope.slice(scope.indexOf(":") + 1),
+              audience: [{ externalId: "U_ALICE" }, { externalId: "U_BOB" }],
+            },
+            { surface: "cron", triggered: true },
+          ),
+        );
         assert.equal(seed.status, "ok");
         const session = await built.sessions.getByThread(threadRef);
         assert.ok(session);
@@ -1131,12 +1130,9 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
           live,
         )
       ).json()) as any;
-      const seed = await built.app.turn({
-        surface: "slack",
-        actor: { externalId: "U_ALICE" },
-        conversation: { kind: "dm", threadRef },
-        text: "waiting for scheduled credential approval",
-      } as TurnRequest);
+      const seed = await built.app.turn(
+        dmTurn("waiting for scheduled credential approval", { externalId: "U_ALICE" }, threadRef, { surface: "slack" }),
+      );
       assert.equal(seed.status, "ok");
       const session = await built.sessions.getByThread(threadRef);
       assert.ok(session);

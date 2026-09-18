@@ -18,6 +18,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, orchestratorTurn, turnRequest } from "./support/turns.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1118,13 +1119,12 @@ describe("/v1/keychain routes (capability-authed)", () => {
     const THREAD = "ch:C7:1700000000.000100";
     const { run } = await built.runs.enqueue({
       sessionId: THREAD,
-      request: {
-        surface: "slack",
-        actor: { id: "U3", type: "internal" },
-        conversation: { kind: "channel", threadRef: THREAD, audience: [] },
-        origin: { kind: "human" },
-        text: "@bot file the ticket",
-      } as any,
+      request: orchestratorTurn(
+        "@bot file the ticket",
+        { id: "U3", type: "internal" },
+        { kind: "channel", threadRef: THREAD, audience: [] },
+        { surface: "slack", origin: { kind: "human" } },
+      ),
     });
     await built.signals.send(run.id, {
       kind: "steer",
@@ -1133,13 +1133,12 @@ describe("/v1/keychain routes (capability-authed)", () => {
     });
     const { run: queued } = await built.runs.enqueue({
       sessionId: THREAD,
-      request: {
-        surface: "slack",
-        actor: { id: "U3", type: "internal" },
-        conversation: { kind: "channel", threadRef: THREAD, audience: [] },
-        origin: { kind: "human" },
-        text: "any update?",
-      } as any,
+      request: orchestratorTurn(
+        "any update?",
+        { id: "U3", type: "internal" },
+        { kind: "channel", threadRef: THREAD, audience: [] },
+        { surface: "slack", origin: { kind: "human" } },
+      ),
     });
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "linear", secret: "lin_owner" }, await capFor("OWNER"))
@@ -1509,12 +1508,12 @@ function channelTurn(
   actorId: string,
   audience: Array<{ externalId: string; displayName?: string }>,
 ): TurnRequest {
-  return {
-    surface: "slack",
-    actor: { externalId: actorId },
-    conversation: { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience },
+  return turnRequest(
     text,
-  } as TurnRequest;
+    { externalId: actorId },
+    { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience },
+    { surface: "slack" },
+  );
 }
 
 function execScriptsMention(needle: string, since = 0): boolean {
@@ -1571,12 +1570,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.match(sys2.reply ?? "", new RegExp(`kc_${cred.id.slice(0, 12)}`));
 
   mark = fakeSprites.execScripts().length;
-  const dm: TurnRequest = {
-    surface: "test",
-    actor: { externalId: "U_OWNER" },
-    conversation: { kind: "dm", threadRef: "dm:U_OWNER" },
-    text: "!run true",
-  } as TurnRequest;
+  const dm: TurnRequest = dmTurn("!run true", { externalId: "U_OWNER" }, "dm:U_OWNER");
   assert.equal((await built.app.turn(dm)).status, "ok");
   assert.ok(execScriptsMention("ghp_e2e", mark), "an unlisted scope keeps legacy behavior");
 });

@@ -8,6 +8,7 @@ import { coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -182,12 +183,7 @@ test("an address that already belongs to an org member cannot be invited", async
     const alice = s.built.admin.resolveActor(ALICE)!;
     await s.built.admin.createGrant(alice, { principalId: "ceo@other.example", role: "org_admin", scopeId: ORG });
     await s.built.directory.replace([{ principalId: "dana@slack.example", displayName: "Dana", type: "internal" }]);
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "seen@elsewhere.example" },
-      conversation: { kind: "dm", threadRef: "dm:seen:t1" },
-      text: "hello",
-    };
+    const dm: TurnRequest = dmTurn("hello", { externalId: "seen@elsewhere.example" }, "dm:seen:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     for (const email of [

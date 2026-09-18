@@ -7,6 +7,7 @@ import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -309,12 +310,9 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval" }],
     });
-    const pending = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "web:U2:private" },
-      text: "!run printf private",
-    });
+    const pending = await built.app.turn(
+      dmTurn("!run printf private", { externalId: "U2" }, "web:U2:private", { surface: "web" }),
+    );
     assert.equal(pending.status, "pending_approval");
     const requestId = pending.pendingApprovals![0]!.requestId;
     assert.equal((await fetch(`${base}/v1/approvals/${requestId}`, { headers: aliceHeaders })).status, 404);
@@ -327,21 +325,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
-    const r = await post(
-      "/v1/turns",
-      { surface: "web", text: "hi", actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "t" } },
-      { "x-portal-identity": await token("U1") },
-    );
+    const r = await post("/v1/turns", dmTurn("hi", { externalId: "U2" }, "t", { surface: "web" }), {
+      "x-portal-identity": await token("U1"),
+    });
     assert.equal(r.status, 403);
   });
 
   it("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {
-    const r = await post("/v1/turns", {
-      surface: "slack",
-      text: "hi",
-      actor: { externalId: "U9" },
-      conversation: { kind: "dm", threadRef: "t" },
-    });
+    const r = await post("/v1/turns", dmTurn("hi", { externalId: "U9" }, "t", { surface: "slack" }));
     assert.notEqual(r.status, 401);
     assert.notEqual(r.status, 403);
   });

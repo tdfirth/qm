@@ -7,6 +7,7 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function freshApp() {
   const config: Config = testConfig({ dataDir: tmpDir("ap-title-") });
@@ -15,7 +16,7 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, actor, thread);
 }
 
 test("names a conversation from its first completed turn (auto-title)", async () => {
@@ -131,13 +132,11 @@ test("the title is generated ONCE — a later turn does not rewrite it", async (
 
 test("the title ignores assembled-turn boilerplate (conversation header / manifests)", async () => {
   const { app } = freshApp();
-  const r = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "web:U1:tctx" },
-    text: "Optimize the checkout flow",
-    conversationHeader: "You are in #ops. People here: @alice, @bob.",
-  });
+  const r = await app.turn(
+    dmTurn("Optimize the checkout flow", actor, "web:U1:tctx", {
+      conversationHeader: "You are in #ops. People here: @alice, @bob.",
+    }),
+  );
   assert.equal(r.status, "ok");
   assert.equal((await app.getSession(r.sessionId!))?.session.title, "Chat: Optimize the checkout flow");
 });

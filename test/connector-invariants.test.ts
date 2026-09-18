@@ -9,6 +9,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -143,13 +144,13 @@ test("status/selector parity — a personal-only connection reports connected (m
 function turn(kind: "dm" | "channel", text: string): TurnRequest {
   const actor = { externalId: "U1" };
   return kind === "dm"
-    ? { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1" }, text }
-    : {
-        surface: "slack",
-        actor,
-        conversation: { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience: [actor] },
+    ? dmTurn(text, actor, "dm:U1")
+    : turnRequest(
         text,
-      };
+        actor,
+        { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience: [actor] },
+        { surface: "slack" },
+      );
 }
 
 function execScriptsMention(needle: string): boolean {

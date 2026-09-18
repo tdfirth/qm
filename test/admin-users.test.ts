@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -66,12 +67,7 @@ const start = () =>
 test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied; audited", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello",
-    };
+    const dm: TurnRequest = dmTurn("hello", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
@@ -98,12 +94,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
 test("/v1/admin/users/:principalId: per-user detail — stats, conversations, personal-scope artifacts; non-admin denied; audited", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello",
-    };
+    const dm: TurnRequest = dmTurn("hello", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
@@ -133,12 +124,7 @@ test("/v1/admin/users/:principalId: per-user detail — stats, conversations, pe
 test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, reflected in detail; bad input + non-admin rejected; audited", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hi",
-    };
+    const dm: TurnRequest = dmTurn("hi", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
     const detail = async () =>
@@ -170,12 +156,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
 test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions + clears onboarding; non-admin denied; audited", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hi",
-    };
+    const dm: TurnRequest = dmTurn("hi", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org" };
     const detail = async () =>
@@ -281,12 +262,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
 test("/v1/admin/users: a freshly promoted user shows as admin in the roster", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U9" },
-      conversation: { kind: "dm", threadRef: "dm:U9:t1" },
-      text: "hi",
-    };
+    const dm: TurnRequest = dmTurn("hi", { externalId: "U9" }, "dm:U9:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     await fetch(`${s.base}/v1/admin/grants`, {
       method: "POST",

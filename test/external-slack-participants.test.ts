@@ -7,18 +7,19 @@ import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolu
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
 const guest = { externalId: "G9", isExternalGuest: true };
 
 function externalChannelTurn(surface: string): TurnRequest {
-  return {
-    surface,
-    actor: internalActor,
-    conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [internalActor, guest] },
-    text: "hello channel",
-  };
+  return turnRequest(
+    "hello channel",
+    internalActor,
+    { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [internalActor, guest] },
+    { surface },
+  );
 }
 
 function freshApp() {
@@ -75,24 +76,23 @@ test("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
   built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
-  const res = await built.app.turn({
-    surface: "slack",
-    actor: guest,
-    conversation: { kind: "channel", threadRef: "ch:C1:t2", channelRef: "C1", audience: [internalActor, guest] },
-    text: "hi",
-  });
+  const res = await built.app.turn(
+    turnRequest(
+      "hi",
+      guest,
+      { kind: "channel", threadRef: "ch:C1:t2", channelRef: "C1", audience: [internalActor, guest] },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
 });
 
 test("a bot assertion can enter the turn pipeline", async () => {
   const built = freshApp();
-  const res = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "B1", isBot: true },
-    conversation: { kind: "dm", threadRef: "dm:B1:t1" },
-    text: "hello",
-  });
+  const res = await built.app.turn(
+    dmTurn("hello", { externalId: "B1", isBot: true }, "dm:B1:t1", { surface: "slack" }),
+  );
   assert.equal(res.status, "ok");
   assert.equal((await built.runs.list()).length, 1);
 });

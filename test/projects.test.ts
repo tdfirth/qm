@@ -17,6 +17,7 @@ import {
 import { buildApp } from "../src/wiring.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { turnRequest } from "./support/turns.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -269,19 +270,21 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(await built.app.listScopeResources("owner", scope));
 
   const turn = (actor: string, threadRef: string, text = "hello project") =>
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: actor },
-      conversation: {
-        kind: "group",
-        channelRef: groupRef,
-        channelName: "forged name",
-        threadRef,
-        audience: [{ externalId: "outsider" }],
-        publishMembers: [{ externalId: "outsider" }],
-      },
-      text,
-    });
+    built.app.turn(
+      turnRequest(
+        text,
+        { externalId: actor },
+        {
+          kind: "group",
+          channelRef: groupRef,
+          channelName: "forged name",
+          threadRef,
+          audience: [{ externalId: "outsider" }],
+          publishMembers: [{ externalId: "outsider" }],
+        },
+        { surface: "web" },
+      ),
+    );
 
   assert.equal((await turn("owner", "web:owner:first", "secret-before-join")).status, "ok");
   assert.equal((await built.runs.list())[0]?.request.scopeVersion, await built.projects.version(groupRef));
@@ -359,13 +362,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     "ok",
     "a roster change invalidates approvals minted for the previous Project audience",
   );
-  const forgedApproval = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "member" },
-    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:approval", audience: [] },
-    text: "!run git push --force origin main",
-    approval: { requestId: pendingApproval.requestId, approved: true },
-  });
+  const forgedApproval = await built.app.turn(
+    turnRequest(
+      "!run git push --force origin main",
+      { externalId: "member" },
+      { kind: "group", channelRef: groupRef, threadRef: "web:owner:approval", audience: [] },
+      { surface: "web", approval: { requestId: pendingApproval.requestId, approved: true } },
+    ),
+  );
   assert.equal(forgedApproval.status, "refused");
   const deployAcl = createAclStore();
   const deploy = createDeployService({
@@ -406,13 +410,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(sharedPending);
   assert.equal((await built.app.listSessionApprovals(sharedApproval.sessionId!, "owner")).length, 1);
   assert.deepEqual(await built.app.listSessionApprovals(sharedApproval.sessionId!, "member"), []);
-  const crossMemberApproval = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "member" },
-    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:shared-approval", audience: [] },
-    text: "!run git push --force origin main",
-    approval: { requestId: sharedPending.requestId, approved: true },
-  });
+  const crossMemberApproval = await built.app.turn(
+    turnRequest(
+      "!run git push --force origin main",
+      { externalId: "member" },
+      { kind: "group", channelRef: groupRef, threadRef: "web:owner:shared-approval", audience: [] },
+      { surface: "web", approval: { requestId: sharedPending.requestId, approved: true } },
+    ),
+  );
   assert.equal(crossMemberApproval.status, "refused");
 
   const globalTitle = (await built.sessions.get(first.id))?.title ?? null;
@@ -524,18 +529,19 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     assert.ok((await built.sessions.listByParticipant("member")).some((candidate) => candidate.id === session.id));
   }
   const background = () =>
-    built.app.turn({
-      surface: "cron",
-      actor: { externalId: "member" },
-      conversation: {
-        kind: "group",
-        channelRef: groupRef,
-        threadRef: `cron:${project.id}:fire`,
-        audience: [{ externalId: "outsider" }],
-      },
-      text: "background project work",
-      triggered: true,
-    });
+    built.app.turn(
+      turnRequest(
+        "background project work",
+        { externalId: "member" },
+        {
+          kind: "group",
+          channelRef: groupRef,
+          threadRef: `cron:${project.id}:fire`,
+          audience: [{ externalId: "outsider" }],
+        },
+        { surface: "cron", triggered: true },
+      ),
+    );
   assert.equal((await background()).status, "ok");
   const removableApprovalThread = "web:member:approval-to-cancel";
   const removableApproval = await turn("member", removableApprovalThread, "!run git push --force origin main");
@@ -611,13 +617,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(reopened.every((window) => window.validTo === null && window.validFrom === 0));
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
-  const queued = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "member" },
-    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:queued-before-removal", audience: [] },
-    text: "work that must not cross membership tenures",
-    async: true,
-  });
+  const queued = await built.app.turn(
+    turnRequest(
+      "work that must not cross membership tenures",
+      { externalId: "member" },
+      { kind: "group", channelRef: groupRef, threadRef: "web:member:queued-before-removal", audience: [] },
+      { surface: "web", async: true },
+    ),
+  );
   assert.equal(queued.status, "queued");
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
@@ -662,17 +669,19 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
   };
 
   const threadRef = "web:owner:roster-race";
-  const turn = built.app.turn({
-    surface: "web",
-    actor: { externalId: "owner" },
-    conversation: {
-      kind: "group",
-      channelRef: projectGroupRef(project.id),
-      threadRef,
-      audience: [],
-    },
-    text: "old-roster-prompt",
-  });
+  const turn = built.app.turn(
+    turnRequest(
+      "old-roster-prompt",
+      { externalId: "owner" },
+      {
+        kind: "group",
+        channelRef: projectGroupRef(project.id),
+        threadRef,
+        audience: [],
+      },
+      { surface: "web" },
+    ),
+  );
 
   try {
     await turnPaused;
@@ -777,19 +786,23 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   const quarantined = await request("initial-marker", true);
   assert.equal(quarantined.status, "pending_approval");
   assert.equal(quarantined.pendingApprovals?.[0]?.kind, "input");
-  const denied = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "owner" },
-    conversation: {
-      kind: "group",
-      channelRef: projectGroupRef(project.id),
-      threadRef,
-      audience: [],
-    },
-    text: "!security-risk initial-marker",
-    unprompted: true,
-    approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
-  });
+  const denied = await built.app.turn(
+    turnRequest(
+      "!security-risk initial-marker",
+      { externalId: "owner" },
+      {
+        kind: "group",
+        channelRef: projectGroupRef(project.id),
+        threadRef,
+        audience: [],
+      },
+      {
+        surface: "web",
+        unprompted: true,
+        approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
+      },
+    ),
+  );
   assert.equal(denied.status, "refused");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
@@ -977,12 +990,14 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   });
 
   // a session predating the link, so channel-derived members should inherit it
-  await built.app.turn({
-    surface: "web",
-    actor: { externalId: "owner" },
-    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:pre", audience: [] },
-    text: "before the link",
-  });
+  await built.app.turn(
+    turnRequest(
+      "before the link",
+      { externalId: "owner" },
+      { kind: "group", channelRef: groupRef, threadRef: "web:owner:pre", audience: [] },
+      { surface: "web" },
+    ),
+  );
 
   // a non-member of the project can't link even a channel they can see
   assert.equal((await put(project.id, "outsider", "eng")).status, 403);

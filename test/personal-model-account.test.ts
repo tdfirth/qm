@@ -8,6 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const SECRET = "personal-account-test-signing-secret";
 
@@ -88,16 +89,15 @@ test("personal provider choice is durable and controls the submitted run indepen
   await built.userModelCredentials.setApiKey("U1", "anthropic", "test-anthropic-key");
   await built.userModelCredentials.setApiKey("U1", "openai", "test-openai-key");
   await built.config.setPersonalModelAuth("U1", true, "openai");
-  const submitted = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "personal-provider-choice" },
-    text: "hello",
-    liveActor: true,
-    async: true,
-    model: "company-only-custom-model",
-    harness: "pi",
-  });
+  const submitted = await built.app.turn(
+    dmTurn("hello", { externalId: "U1" }, "personal-provider-choice", {
+      surface: "slack",
+      liveActor: true,
+      async: true,
+      model: "company-only-custom-model",
+      harness: "pi",
+    }),
+  );
   const run = await built.runs.get(submitted.runId!);
   assert.equal(run?.request.modelAccount, "openai");
   assert.equal(run?.request.model, undefined);
@@ -112,14 +112,13 @@ test("personal provider choice is durable and controls the submitted run indepen
 
 test("shared chat messages queue instead of borrowing another person's account", async () => {
   const built = buildApp(testConfig({ dataDir: tmpDir("personal-steering-") }));
-  const message = (user: string) => ({
-    surface: "slack",
-    actor: { externalId: user },
-    conversation: { kind: "channel" as const, threadRef: "account-steering", channelRef: "C1" },
-    text: "hello",
-    liveActor: true,
-    async: true,
-  });
+  const message = (user: string) =>
+    turnRequest(
+      "hello",
+      { externalId: user },
+      { kind: "channel", threadRef: "account-steering", channelRef: "C1" },
+      { surface: "slack", liveActor: true, async: true },
+    );
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
   const first = await built.app.turn(message("U1"));
   const other = await built.app.turn(message("U2"));

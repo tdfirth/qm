@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ContextSummary } from "../src/api/app.ts";
 import { type Served, startApi, tmpDir } from "./support/api.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const start = () => startApi({ dataDir: tmpDir("webctx-") });
 
@@ -96,14 +97,14 @@ test("web turns into a shared scope are membership-checked; sessions then count 
 test("a web turn carrying fastMode on a non-fast model is accepted; dispatch masks the flag", async () => {
   const s = start();
   try {
-    const res = await s.post(`/v1/turns`, {
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "web:alice:fast1" },
-      text: "hi",
-      model: "claude-fable-5",
-      fastMode: true,
-    });
+    const res = await s.post(
+      `/v1/turns`,
+      dmTurn("hi", { externalId: "alice" }, "web:alice:fast1", {
+        surface: "web",
+        model: "claude-fable-5",
+        fastMode: true,
+      }),
+    );
     assert.equal(res.status, 200);
   } finally {
     await s.close();
@@ -113,12 +114,15 @@ test("a web turn carrying fastMode on a non-fast model is accepted; dispatch mas
 test("prior participation never authorizes a shared scope after directory membership is absent", async () => {
   const s = start();
   try {
-    const slack = await s.post(`/v1/turns`, {
-      surface: "slack",
-      actor: { externalId: "alice" },
-      conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
-      text: "hello",
-    });
+    const slack = await s.post(
+      `/v1/turns`,
+      turnRequest(
+        "hello",
+        { externalId: "alice" },
+        { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
+        { surface: "slack" },
+      ),
+    );
     assert.equal(slack.status, 200);
 
     assert.equal(

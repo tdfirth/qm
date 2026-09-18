@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import type { TurnRequest } from "../src/types.ts";
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { capMinter, startApi } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, { externalId }, thread);
 }
 
 describe("conversation pins self-API", async () => {
@@ -120,13 +121,10 @@ describe("conversation pins self-API", async () => {
 
   it("mirrors an entry pin to a native Slack pin in a DM — and only there", async () => {
     const SLACK_DM = "dm:D0PINCHAN";
-    const slackTurn: TurnRequest = {
+    const slackTurn: TurnRequest = dmTurn("the venue is booked for Sept 4", { externalId: "U9" }, SLACK_DM, {
       surface: "slack",
-      actor: { externalId: "U9" },
-      conversation: { kind: "dm", threadRef: SLACK_DM },
       origin: { kind: "human", messageTs: "1723497600.000100" },
-      text: "the venue is booked for Sept 4",
-    };
+    });
     await built.app.turn(slackTurn);
     const token = await capFor("U9", SLACK_DM);
     const res = await call("POST", "/v1/pins", { seq: 0 }, token);

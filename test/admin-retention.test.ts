@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { computeRetention } from "../src/admin/retention.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -68,12 +69,7 @@ const get = (base: string, path: string, headers: Record<string, string> = ALICE
 test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rejected", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello there",
-    };
+    const dm: TurnRequest = dmTurn("hello there", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const ok = await get(s.base, "/v1/admin/retention");

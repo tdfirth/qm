@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { TurnRequest } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const start = () =>
   startApi({ dataDir: tmpDir("admin-metrics-") }, (built) => ({
@@ -21,12 +22,7 @@ const getJson = async (base: string, path: string, headers: Record<string, strin
 test("metrics: TTFT + latency populate after a driven turn, org-wide", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello there",
-    };
+    const dm: TurnRequest = dmTurn("hello there", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
@@ -80,19 +76,9 @@ test("metrics: empty scope yields null percentiles, not an error", async () => {
 test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) turns", async () => {
   const s = start();
   try {
-    const chat: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:chat" },
-      text: "hello there",
-    };
+    const chat: TurnRequest = dmTurn("hello there", { externalId: "U1" }, "dm:U1:chat");
     assert.equal((await s.built.app.turn(chat)).status, "ok");
-    const tool: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "dm:U2:tool" },
-      text: "!run echo hi",
-    };
+    const tool: TurnRequest = dmTurn("!run echo hi", { externalId: "U2" }, "dm:U2:tool");
     assert.equal((await s.built.app.turn(tool)).status, "ok");
 
     const m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
@@ -152,12 +138,7 @@ test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) t
 test("metrics: session+lease measured per turn; detached post-turn capture recorded separately", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U9" },
-      conversation: { kind: "dm", threadRef: "dm:U9:cap" },
-      text: "remember my favorite color is blue",
-    };
+    const dm: TurnRequest = dmTurn("remember my favorite color is blue", { externalId: "U9" }, "dm:U9:cap");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     let m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");

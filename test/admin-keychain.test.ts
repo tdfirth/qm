@@ -7,6 +7,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function start() {
   const keychain = createKeychain({
@@ -27,12 +28,7 @@ function start() {
 test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non-admin denied; audited", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello",
-    };
+    const dm: TurnRequest = dmTurn("hello", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const cred = await s.keychain.save({

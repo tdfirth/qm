@@ -10,6 +10,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -74,13 +75,10 @@ test("core route: signals for a pending run are accepted (abort, steer)", async 
 });
 
 function steererRequest(externalId: string, threadRef: string, text: string, displayName?: string): TurnRequest {
-  return {
+  return dmTurn(text, { externalId, ...(displayName ? { displayName } : {}) }, threadRef, {
     surface: "web",
-    actor: { externalId, ...(displayName ? { displayName } : {}) },
-    conversation: { kind: "dm", threadRef },
     liveActor: true,
-    text,
-  };
+  });
 }
 
 test("core route: a steer's ts and request thread through to the signal store", async () => {
@@ -240,13 +238,12 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
     kind: "steer",
     text: "still matters",
     ts: "1712.004",
-    request: {
-      surface: "web",
-      actor: { externalId: "web-eve" },
-      conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
-      text: "still matters",
-    },
+    request: turnRequest(
+      "still matters",
+      { externalId: "web-eve" },
+      { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
+      { surface: "web", liveActor: true },
+    ),
   });
   const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
   assert.ok(claimed);

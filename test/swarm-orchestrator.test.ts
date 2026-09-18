@@ -13,6 +13,7 @@ import { startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -123,13 +124,9 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
     }),
   );
   try {
-    const rootTurn = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "swarm-integration-root" },
-      origin: { kind: "human" },
-      text: "Coordinate work",
-    });
+    const rootTurn = await built.app.turn(
+      dmTurn("Coordinate work", { externalId: "U1" }, "swarm-integration-root", { origin: { kind: "human" } }),
+    );
     assert.equal(rootTurn.status, "ok");
     const root = (await built.sessions.get(rootTurn.sessionId!))!;
     await built.memory.replace(root.scopeId, "# Memory\n- Root memory remains in the authorized notebook.");
@@ -309,12 +306,9 @@ for (const storage of ["memory", "postgres"] as const) {
       try {
         const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
         await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
-        const body = JSON.stringify({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: "http-swarm-root" },
-          text: "http-swarm-root",
-        });
+        const body = JSON.stringify(
+          dmTurn("http-swarm-root", { externalId: "U1" }, "http-swarm-root", { surface: "web" }),
+        );
         const rootResponse = await fetch(`${server.base}/v1/turns`, {
           method: "POST",
           headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
@@ -447,12 +441,9 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
-  const request: TurnRequest = {
+  const request: TurnRequest = dmTurn("!run printf approval-isolation", { externalId: "U1" }, "web:U1:approval-hint", {
     surface: "web",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "web:U1:approval-hint" },
-    text: "!run printf approval-isolation",
-  };
+  });
   const turns: HarnessTurnInput[] = [];
   exerciseTurn = async (turn) => {
     turns.push(turn);
@@ -493,13 +484,9 @@ test("a resolved command approval informs the model without changing its request
 test("disabled swarms park queued notifications once without running the model or writing failures", async () => {
   const built = buildApp(testConfig({ swarmsEnabled: false }));
   try {
-    const rootTurn = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "disabled-swarm-root" },
-      origin: { kind: "human" },
-      text: "Initialize",
-    });
+    const rootTurn = await built.app.turn(
+      dmTurn("Initialize", { externalId: "U1" }, "disabled-swarm-root", { origin: { kind: "human" } }),
+    );
     assert.equal(rootTurn.status, "ok");
     const root = (await built.sessions.get(rootTurn.sessionId!))!;
     const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;

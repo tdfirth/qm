@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -436,11 +437,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("refuses a capability token on a non-self-service route (e.g. /v1/turns) with 403", async () => {
-    const res = await post(
-      "/v1/turns",
-      { surface: "x", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef: "t" }, text: "hi" },
-      { "x-agent-capability": await capFor("U1") },
-    );
+    const res = await post("/v1/turns", dmTurn("hi", { externalId: "U1" }, "t", { surface: "x" }), {
+      "x-agent-capability": await capFor("U1"),
+    });
     assert.equal(res.status, 403);
   });
 

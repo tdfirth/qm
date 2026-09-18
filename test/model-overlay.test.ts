@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { serveApp, stubHttp } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -254,14 +255,9 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.ok(body.modelsByHarness.pi?.includes(MODEL_ID));
     const wire = JSON.stringify(body.modelCatalog);
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
-    const turn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-live-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const turn = await built.app.turn(
+      dmTurn("hello", { externalId: "alice" }, "overlay-live-test", { surface: "web", model: MODEL_ID, async: true }),
+    );
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
@@ -281,14 +277,13 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.match(unavailable.unavailableReason, /deleted/);
     assert.ok(unavailable.modelsByHarness.pi.includes("gpt-5.6-sol"));
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
-    const deletedTurn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const deletedTurn = await built.app.turn(
+      dmTurn("hello", { externalId: "alice" }, "overlay-deleted-test", {
+        surface: "web",
+        model: MODEL_ID,
+        async: true,
+      }),
+    );
     assert.equal(deletedTurn.status, "refused");
     assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
     const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });

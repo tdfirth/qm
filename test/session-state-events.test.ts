@@ -8,6 +8,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { dmTurn, orchestratorTurn } from "./support/turns.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: tmpDir("ap-state-"), orgId: "acme" }));
@@ -15,7 +16,7 @@ function freshApp() {
 
 const actor = { externalId: "U1", orgId: "acme" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, actor, thread);
 }
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
@@ -59,13 +60,7 @@ test("resolving the approval emits working, then idle once the resumed turn sett
   const requestId = paused.pendingApprovals?.[0]?.requestId;
   assert.ok(requestId);
   const got = record(built.sessionStateBus);
-  await built.app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "web:U1:resolve" },
-    text: "",
-    approval: { requestId: requestId!, approved: false },
-  });
+  await built.app.turn(dmTurn("", actor, "web:U1:resolve", { approval: { requestId: requestId!, approved: false } }));
   assert.deepEqual(statesFor(got, "web:U1:resolve"), ["working", "idle"]);
 });
 
@@ -187,13 +182,11 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
 });
 
 function resolvedDm(text: string, thread: string): OrchestratorInput {
-  return {
-    surface: "test",
-    actor: { id: "user:U1", type: "user", orgId: "acme", externalId: "U1" } as unknown as OrchestratorInput["actor"],
-    conversation: { kind: "dm", threadRef: thread, audience: [] },
-    origin: { kind: "direct" },
+  return orchestratorTurn(
     text,
-  };
+    { id: "user:U1", type: "user", orgId: "acme", externalId: "U1" } as unknown as OrchestratorInput["actor"],
+    { kind: "dm", threadRef: thread, audience: [] },
+  );
 }
 
 async function waitFor(cond: () => boolean, ms = 2000): Promise<boolean> {

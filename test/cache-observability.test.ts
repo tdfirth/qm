@@ -7,6 +7,7 @@ import { cacheHitRatio, isStablePrefixMiss } from "../src/admin/metrics-sink.ts"
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function loadViewerCacheHelpers(): {
   callCacheUsage: (q: unknown) => { cacheRead: number; cacheWrite: number; uncachedInput: number } | null;
@@ -84,24 +85,9 @@ test("isStablePrefixMiss: flags a big-write/near-zero-read turn, not a small col
 test("metrics: the cache aggregate reflects warm turns and flags a stable-prefix miss", async () => {
   const s = start();
   try {
-    const warm1: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:w1" },
-      text: "hello there",
-    };
-    const warm2: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "dm:U2:w2" },
-      text: "how are you",
-    };
-    const miss: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U3" },
-      conversation: { kind: "dm", threadRef: "dm:U3:m1" },
-      text: "!cachemiss",
-    };
+    const warm1: TurnRequest = dmTurn("hello there", { externalId: "U1" }, "dm:U1:w1");
+    const warm2: TurnRequest = dmTurn("how are you", { externalId: "U2" }, "dm:U2:w2");
+    const miss: TurnRequest = dmTurn("!cachemiss", { externalId: "U3" }, "dm:U3:m1");
     assert.equal((await s.built.app.turn(warm1)).status, "ok");
     assert.equal((await s.built.app.turn(warm2)).status, "ok");
     assert.equal((await s.built.app.turn(miss)).status, "ok");
@@ -142,12 +128,7 @@ test("metrics: empty scope yields a present-but-empty cache block (null ratios, 
 test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to the viewer", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:llm" },
-      text: "what's the weather",
-    };
+    const dm: TurnRequest = dmTurn("what's the weather", { externalId: "U1" }, "dm:U1:llm");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");

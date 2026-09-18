@@ -6,6 +6,7 @@ import { ENTRY_STRING_BUDGET, TRANSCRIPT_BYTE_BUDGET, windowedTranscript } from 
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
   return {
@@ -177,7 +178,7 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     const threadRef = "web:U1:window-test";
     let sessionId = "";
     for (const text of ["first turn", "second turn", "third turn"]) {
-      const r = await srv.post("/v1/turns", { surface: "test", actor, conversation: { kind: "dm", threadRef }, text });
+      const r = await srv.post("/v1/turns", dmTurn(text, actor, threadRef));
       const body = (await r.json()) as { status: string; sessionId?: string };
       assert.equal(body.status, "ok");
       sessionId = body.sessionId!;

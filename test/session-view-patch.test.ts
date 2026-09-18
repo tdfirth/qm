@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Session } from "../src/types.ts";
 import { type Served, startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function start() {
   return startApi({ dataDir: tmpDir("session-view-patch-") }, (built) => ({
@@ -14,12 +15,7 @@ function start() {
 }
 
 async function newSession(srv: Served, threadRef: string): Promise<string> {
-  const r = await srv.post("/v1/turns", {
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef },
-    text: "hello",
-  });
+  const r = await srv.post("/v1/turns", dmTurn("hello", { externalId: "U1" }, threadRef));
   const body = (await r.json()) as { status: string; sessionId?: string };
   assert.equal(body.status, "ok");
   return body.sessionId!;

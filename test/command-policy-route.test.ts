@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startApi, tmpDir } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -24,12 +25,9 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
   const srv = start();
   try {
     const command = "git push --force origin main";
-    const turn = {
+    const turn = dmTurn(`!run ${command}`, { externalId: "U1", displayName: "Alice" }, "dm:U1:t-approval-recovery", {
       surface: "slack",
-      actor: { externalId: "U1", displayName: "Alice" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t-approval-recovery" },
-      text: `!run ${command}`,
-    };
+    });
     const first = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -97,12 +95,9 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
   const srv = start();
   try {
     const command = "git push --force origin main";
-    const turn = {
+    const turn = dmTurn(`!run ${command}`, { externalId: "U2", displayName: "Bob" }, "dm:U2:t-approvals-list", {
       surface: "slack",
-      actor: { externalId: "U2", displayName: "Bob" },
-      conversation: { kind: "dm", threadRef: "dm:U2:t-approvals-list" },
-      text: `!run ${command}`,
-    };
+    });
     const first = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
       headers: { "content-type": "application/json" },

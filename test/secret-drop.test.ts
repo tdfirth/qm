@@ -14,6 +14,7 @@ import { verifyCapabilityToken, SECRET_DROP_AUD } from "../src/auth/capability-t
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 
@@ -242,13 +243,12 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const THREAD = "ch:C1:1700000000.000200";
     const { run } = await built.runs.enqueue({
       sessionId: THREAD,
-      request: {
-        surface: "slack",
-        actor: { id: "U_A", type: "internal" },
-        conversation: { kind: "channel", threadRef: THREAD, audience: [] },
-        origin: { kind: "human" },
-        text: "@bot connect linear",
-      } as any,
+      request: orchestratorTurn(
+        "@bot connect linear",
+        { id: "U_A", type: "internal" },
+        { kind: "channel", threadRef: THREAD, audience: [] },
+        { surface: "slack", origin: { kind: "human" } },
+      ),
     });
     await built.signals.send(run.id, {
       kind: "steer",

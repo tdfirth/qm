@@ -8,6 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
@@ -28,13 +29,7 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
   };
 }
 
-const turnBody = (actorId: string) =>
-  JSON.stringify({
-    surface: "test",
-    actor: { externalId: actorId },
-    conversation: { kind: "dm", threadRef: `t-${actorId}` },
-    text: "hello",
-  });
+const turnBody = (actorId: string) => JSON.stringify(dmTurn("hello", { externalId: actorId }, `t-${actorId}`));
 
 test("with a signing secret, an UNSIGNED turn is rejected 401 (no impersonation)", async () => {
   const srv = start(SECRET);

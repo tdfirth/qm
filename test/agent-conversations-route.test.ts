@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { capMinter, serveApp, startApi } from "./support/api.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, { externalId }, thread);
 }
 
 describe("agent conversations self-API", async () => {

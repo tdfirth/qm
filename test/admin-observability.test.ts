@@ -7,6 +7,7 @@ import { serveApp, startApi, tmpDir } from "./support/api.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   return startApi({ dataDir: tmpDir("admin-obs-"), ...overrides }, (built) => ({
@@ -31,12 +32,7 @@ const getJson = async (base: string, path: string, headers: Record<string, strin
 test("an org admin sees conversations, transcripts, files, and runs top-down", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hello there",
-    };
+    const dm: TurnRequest = dmTurn("hello there", { externalId: "U1" }, "dm:U1:t1");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
@@ -162,12 +158,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
 test("an org admin sees EXACTLY what we sent the model per turn (captured request sidecar)", async () => {
   const s = start();
   try {
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:llm" },
-      text: "what's the weather",
-    };
+    const dm: TurnRequest = dmTurn("what's the weather", { externalId: "U1" }, "dm:U1:llm");
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
@@ -628,12 +619,9 @@ test("principal deliveries render as delivery events and later DM turns get stru
       "origin context outside the requested scope fails closed",
     );
 
-    const turn: TurnRequest = {
+    const turn: TurnRequest = dmTurn("what was that deploy note?", { externalId: "U-alice" }, "dm:D-alice", {
       surface: "slack",
-      actor: { externalId: "U-alice" },
-      conversation: { kind: "dm", threadRef: "dm:D-alice" },
-      text: "what was that deploy note?",
-    };
+    });
     assert.equal((await s.built.app.turn(turn)).status, "ok");
     const reqs = await s.built.sessions.listLlmRequests(session!.id);
     const latest = reqs[reqs.length - 1] as any;
@@ -734,12 +722,7 @@ test("conversation listing pages by limit/offset; aggregates span the whole scop
   const s = start();
   try {
     for (let i = 0; i < 5; i++) {
-      const dm: TurnRequest = {
-        surface: "test",
-        actor: { externalId: `U${i}` },
-        conversation: { kind: "dm", threadRef: `dm:U${i}:t` },
-        text: `hi ${i}`,
-      };
+      const dm: TurnRequest = dmTurn(`hi ${i}`, { externalId: `U${i}` }, `dm:U${i}:t`);
       assert.equal((await s.built.app.turn(dm)).status, "ok");
     }
 
