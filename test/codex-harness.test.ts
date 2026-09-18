@@ -641,7 +641,11 @@ for (const terminal of ["failed", "interrupted"] as const)
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-terminal-"));
     const tasks = createMemoryTaskStore();
     const entries: SessionEntry[] = [];
-    const harness = createCodexHarness({ binaryPath: terminalNativeChildCodexBinary(dir, terminal), env: testHarnessEnv(dir), tasks });
+    const harness = createCodexHarness({
+      binaryPath: terminalNativeChildCodexBinary(dir, terminal),
+      env: testHarnessEnv(dir),
+      tasks,
+    });
     t.after(async () => {
       await harness.turns.close?.();
       rmSync(dir, { recursive: true, force: true });
@@ -656,13 +660,21 @@ for (const terminal of ["failed", "interrupted"] as const)
       scopeLabel: scope,
       orgScopeId: scope,
       emit: async (entry) => {
-        const saved = { ...entry, sessionId: `child-${terminal}`, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+        const saved = {
+          ...entry,
+          sessionId: `child-${terminal}`,
+          seq: entries.length + 1,
+          createdAt: Date.now(),
+        } as SessionEntry;
         entries.push(saved);
         return saved;
       },
       recordModelCall: () => {},
     });
-    assert.deepEqual((await tasks.list()).map(({ status }) => status), ["failed"]);
+    assert.deepEqual(
+      (await tasks.list()).map(({ status }) => status),
+      ["failed"],
+    );
     assert.deepEqual(
       entries
         .filter((entry) => entry.type === "tool_result")
@@ -676,53 +688,53 @@ for (const [protocol, binary] of [
   ["legacy", delayedLegacyChildRoutingCodexBinary],
 ] as const)
   test(`Codex ${protocol} child tool routing waits for durable task registration`, { timeout: 5000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-routing-"));
-  const storedTasks = createMemoryTaskStore();
-  const registrationStarted = Promise.withResolvers<void>();
-  const releaseRegistration = Promise.withResolvers<void>();
-  const tasks: TaskStore = {
-    ...storedTasks,
-    async create(input) {
-      registrationStarted.resolve();
-      await releaseRegistration.promise;
-      return storedTasks.create(input);
-    },
-  };
-  const harness = createCodexHarness({
-    binaryPath: binary(dir),
-    env: testHarnessEnv(dir),
-    tasks,
-    turnWallClockMs: 2_000,
-  });
-  t.after(async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-routing-"));
+    const storedTasks = createMemoryTaskStore();
+    const registrationStarted = Promise.withResolvers<void>();
+    const releaseRegistration = Promise.withResolvers<void>();
+    const tasks: TaskStore = {
+      ...storedTasks,
+      async create(input) {
+        registrationStarted.resolve();
+        await releaseRegistration.promise;
+        return storedTasks.create(input);
+      },
+    };
+    const harness = createCodexHarness({
+      binaryPath: binary(dir),
+      env: testHarnessEnv(dir),
+      tasks,
+      turnWallClockMs: 2_000,
+    });
+    t.after(async () => {
+      releaseRegistration.resolve();
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+    const turn = harness.turns.runTurn({
+      session: { id: "child-routing" } as Session,
+      input: "route child",
+      systemPrompt: "test",
+      history: [],
+      tools: {
+        execute: async () => ({ stdout: "child-ok", stderr: "", code: 0, timedOut: false }),
+      } as unknown as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => ({ ...entry, sessionId: "child-routing", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    });
+    await registrationStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
     releaseRegistration.resolve();
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const turn = harness.turns.runTurn({
-    session: { id: "child-routing" } as Session,
-    input: "route child",
-    systemPrompt: "test",
-    history: [],
-    tools: {
-      execute: async () => ({ stdout: "child-ok", stderr: "", code: 0, timedOut: false }),
-    } as unknown as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    emit: async (entry) => ({ ...entry, sessionId: "child-routing", seq: 1, createdAt: Date.now() }) as SessionEntry,
-    recordModelCall: () => {},
-  });
-  await registrationStarted.promise;
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  releaseRegistration.resolve();
-  const result = await turn;
-  assert.equal(result.reply, "CHILD-OK");
-  assert.deepEqual(
-    (await tasks.list()).map(({ title, status }) => ({ title, status })),
-    [{ title: protocol === "current" ? "Subagent /root/child" : "run child tool", status: "completed" }],
-  );
-  assert.deepEqual(readFileSync(join(dir, "deleted"), "utf8").trim().split("\n").sort(), ["child", "parent"]);
+    const result = await turn;
+    assert.equal(result.reply, "CHILD-OK");
+    assert.deepEqual(
+      (await tasks.list()).map(({ title, status }) => ({ title, status })),
+      [{ title: protocol === "current" ? "Subagent /root/child" : "run child tool", status: "completed" }],
+    );
+    assert.deepEqual(readFileSync(join(dir, "deleted"), "utf8").trim().split("\n").sort(), ["child", "parent"]);
   });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {
