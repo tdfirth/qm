@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
 import {
@@ -14,6 +13,7 @@ import {
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
+import { tempDir } from "./support.ts";
 
 const SECRET = "conformance-test-secret";
 
@@ -47,89 +47,73 @@ function coreNormalizedHash(dir: string): string {
   return createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
 }
 
-test("the CLI bundle hashes byte-identically to the core's full-path normalization (a vs a-b siblings)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-"));
-  try {
-    writeLayer(dir);
-    const bundle = deploymentLayerBundle(join(dir, "sandbox"));
-    assert.deepEqual(
-      bundle.skills.map((file) => file.path),
-      ["skills/a-b/SKILL.md", "skills/a/SKILL.md"],
-      "full-path order, not per-directory walk order",
-    );
-    const cliHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
-    assert.equal(cliHash, coreNormalizedHash(dir));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("the CLI bundle hashes byte-identically to the core's full-path normalization (a vs a-b siblings)", (t) => {
+  const dir = tempDir(t, "qm-layer-");
+  writeLayer(dir);
+  const bundle = deploymentLayerBundle(join(dir, "sandbox"));
+  assert.deepEqual(
+    bundle.skills.map((file) => file.path),
+    ["skills/a-b/SKILL.md", "skills/a/SKILL.md"],
+    "full-path order, not per-directory walk order",
+  );
+  const cliHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
+  assert.equal(cliHash, coreNormalizedHash(dir));
 });
 
-test("expectedDescriptors canonicalizes tool.json through the parser (key order never matters)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-"));
-  try {
-    writeLayer(dir);
-    const descriptors = expectedDescriptors(deploymentLayerBundle(join(dir, "sandbox")));
-    assert.deepEqual(descriptors, [{ id: "t", advertise: "runs t", install: { binary: "t" } }]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("expectedDescriptors canonicalizes tool.json through the parser (key order never matters)", (t) => {
+  const dir = tempDir(t, "qm-layer-");
+  writeLayer(dir);
+  const descriptors = expectedDescriptors(deploymentLayerBundle(join(dir, "sandbox")));
+  assert.deepEqual(descriptors, [{ id: "t", advertise: "runs t", install: { binary: "t" } }]);
 });
 
-test("the deployment layer sync rejects a bundle over the core's 1 MB limit before any request", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-big-"));
+test("the deployment layer sync rejects a bundle over the core's 1 MB limit before any request", async (t) => {
+  const dir = tempDir(t, "qm-layer-big-");
+  mkdirSync(join(dir, "sandbox", "skills", "big"), { recursive: true });
+  writeFileSync(
+    join(dir, "sandbox", "skills", "big", "SKILL.md"),
+    `---\nname: big\ndescription: big\n---\n${"x".repeat(1_100_000)}\n`,
+  );
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "http://localhost:8080",
+    target: "docker",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: {},
+    imageOverrides: {},
+    sandbox: { app: "acme-sandboxes" },
+  };
+  process.env.CORE_SIGNING_SECRET = SECRET;
   try {
-    mkdirSync(join(dir, "sandbox", "skills", "big"), { recursive: true });
-    writeFileSync(
-      join(dir, "sandbox", "skills", "big", "SKILL.md"),
-      `---\nname: big\ndescription: big\n---\n${"x".repeat(1_100_000)}\n`,
+    await assert.rejects(
+      () =>
+        syncDeploymentLayer({
+          config,
+          transport: dockerDeploymentLayerTransport,
+          configDir: dir,
+          sandboxDir: join(dir, "sandbox"),
+        }),
+      /1 MB/,
     );
-    const config: QmConfig = {
-      contract: 1,
-      orgId: "acme",
-      publicUrl: "http://localhost:8080",
-      target: "docker",
-      services: ["core"],
-      plugins: [],
-      skills: [],
-      env: {},
-      imageOverrides: {},
-      sandbox: { app: "acme-sandboxes" },
-    };
-    process.env.CORE_SIGNING_SECRET = SECRET;
-    try {
-      await assert.rejects(
-        () =>
-          syncDeploymentLayer({
-            config,
-            transport: dockerDeploymentLayerTransport,
-            configDir: dir,
-            sandboxDir: join(dir, "sandbox"),
-          }),
-        /1 MB/,
-      );
-    } finally {
-      delete process.env.CORE_SIGNING_SECRET;
-    }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    delete process.env.CORE_SIGNING_SECRET;
   }
 });
 
 test("a missing sandbox directory skips sync instead of replacing the deployed layer with empty", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-missing-"));
+  const dir = tempDir(t, "qm-layer-missing-");
   const lines: string[] = [];
   t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
-  try {
-    await syncDeploymentLayer({
-      config: makeConfig("http://example.invalid"),
-      transport: dockerDeploymentLayerTransport,
-      configDir: dir,
-      sandboxDir: join(dir, "sandbox"),
-    });
-    assert.ok(lines.some((line) => /skipped \(no sandbox directory/.test(line)));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  await syncDeploymentLayer({
+    config: makeConfig("http://example.invalid"),
+    transport: dockerDeploymentLayerTransport,
+    configDir: dir,
+    sandboxDir: join(dir, "sandbox"),
+  });
+  assert.ok(lines.some((line) => /skipped \(no sandbox directory/.test(line)));
 });
 
 interface CapturedRequest {
@@ -210,8 +194,8 @@ async function freeUnboundPort(): Promise<number> {
   return port;
 }
 
-test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC signing headers", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC signing headers", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
   const captured: CapturedRequest[] = [];
   const { server, port } = await startCoreStub(
     () => ({ body: JSON.stringify({ version: 3, contentHash: "abc123" }) }),
@@ -239,12 +223,11 @@ test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC s
     assert.equal(request.signature, `v0=${expected}`);
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("conformance passes against a live core: base-port override, signed request, canonical hash + descriptors", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-conf-"));
+test("conformance passes against a live core: base-port override, signed request, canonical hash + descriptors", async (t) => {
+  const dir = tempDir(t, "qm-conf-");
   const captured: CapturedRequest[] = [];
   const descriptor = {
     id: "t",
@@ -312,12 +295,11 @@ test("conformance passes against a live core: base-port override, signed request
     assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\nbody");
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("conformance fails when the stored layer matches but the core still serves a previous resolved layer", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-conf-"));
+test("conformance fails when the stored layer matches but the core still serves a previous resolved layer", async (t) => {
+  const dir = tempDir(t, "qm-conf-");
   const bundle = (() => {
     writeLayer(dir);
     return deploymentLayerBundle(join(dir, "sandbox"));
@@ -370,12 +352,11 @@ test("conformance fails when the stored layer matches but the core still serves 
     });
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("conformance reports a non-JSON layer response as a contract failure, not a raw SyntaxError", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-conf-"));
+test("conformance reports a non-JSON layer response as a contract failure, not a raw SyntaxError", async (t) => {
+  const dir = tempDir(t, "qm-conf-");
   writeLayer(dir);
   const { server, port } = await startCoreStub(() => ({ body: "<html>bad gateway</html>" }), []);
   try {
@@ -414,12 +395,11 @@ test("conformance reports a non-JSON layer response as a contract failure, not a
     });
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("a successful memory-backed sync warns that the layer will not survive restart", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+  const dir = tempDir(t, "qm-layer-sync-");
   const warnings: string[] = [];
   t.mock.method(console, "warn", (...parts: unknown[]) => warnings.push(parts.join(" ")));
   const { server, port } = await startCoreStub(
@@ -441,12 +421,11 @@ test("a successful memory-backed sync warns that the layer will not survive rest
     assert.ok(warnings.some((line) => /memory-backed.*will not survive a core restart/.test(line)));
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a publicUrl with a base path keeps it in the request path and the signed canonical string", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+test("a publicUrl with a base path keeps it in the request path and the signed canonical string", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
   const captured: CapturedRequest[] = [];
   const { server, port } = await startCoreStub(() => ({ body: "{}" }), captured);
   try {
@@ -467,12 +446,11 @@ test("a publicUrl with a base path keeps it in the request path and the signed c
     assert.equal(request.signature, `v0=${expected}`);
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a non-2xx sync response is a CliError carrying the status and body", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+test("a non-2xx sync response is a CliError carrying the status and body", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
   const { server, port } = await startCoreStub(() => ({ status: 503, body: "core warming up" }), []);
   try {
     writeLayer(dir);
@@ -490,12 +468,11 @@ test("a non-2xx sync response is a CliError carrying the status and body", async
     );
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a 2xx response with unparseable JSON is a CliError with a body snippet, not a stack trace", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+test("a 2xx response with unparseable JSON is a CliError with a body snippet, not a stack trace", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
   const { server, port } = await startCoreStub(() => ({ body: "<html>gateway</html>" }), []);
   try {
     writeLayer(dir);
@@ -513,12 +490,11 @@ test("a 2xx response with unparseable JSON is a CliError with a body snippet, no
     );
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a 2xx response with an invalid durability shape fails instead of suppressing the warning", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
+test("a 2xx response with an invalid durability shape fails instead of suppressing the warning", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
   let body = JSON.stringify({ version: 1, contentHash: "abc", durable: "false" });
   const { server, port } = await startCoreStub(() => ({ body }), []);
   try {
@@ -550,52 +526,47 @@ test("a 2xx response with an invalid durability shape fails instead of suppressi
     );
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("allowUnavailable swallows an unreachable core but NOT a local config error", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-sync-"));
-  try {
-    writeLayer(dir);
-    const port = await freeUnboundPort();
-    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
-      syncDeploymentLayer({
-        config: makeConfig("http://example.invalid"),
-        transport: dockerDeploymentLayerTransport,
-        configDir: dir,
-        sandboxDir: join(dir, "sandbox"),
-        allowUnavailable: true,
-      }),
-    );
-    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
-      assert.rejects(
-        () =>
-          syncDeploymentLayer({
-            config: makeConfig("http://example.invalid"),
-            transport: dockerDeploymentLayerTransport,
-            configDir: dir,
-            sandboxDir: join(dir, "sandbox"),
-          }),
-        /could not sync deployment layer/,
-      ),
-    );
-    await withEnv({ CORE_SIGNING_SECRET: undefined, QM_BASE_PORT: String(port) }, () =>
-      assert.rejects(
-        () =>
-          syncDeploymentLayer({
-            config: makeConfig("http://example.invalid"),
-            transport: dockerDeploymentLayerTransport,
-            configDir: dir,
-            sandboxDir: join(dir, "sandbox"),
-            allowUnavailable: true,
-          }),
-        /CORE_SIGNING_SECRET is required/,
-      ),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("allowUnavailable swallows an unreachable core but NOT a local config error", async (t) => {
+  const dir = tempDir(t, "qm-layer-sync-");
+  writeLayer(dir);
+  const port = await freeUnboundPort();
+  await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+    syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport: dockerDeploymentLayerTransport,
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+    }),
+  );
+  await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+    assert.rejects(
+      () =>
+        syncDeploymentLayer({
+          config: makeConfig("http://example.invalid"),
+          transport: dockerDeploymentLayerTransport,
+          configDir: dir,
+          sandboxDir: join(dir, "sandbox"),
+        }),
+      /could not sync deployment layer/,
+    ),
+  );
+  await withEnv({ CORE_SIGNING_SECRET: undefined, QM_BASE_PORT: String(port) }, () =>
+    assert.rejects(
+      () =>
+        syncDeploymentLayer({
+          config: makeConfig("http://example.invalid"),
+          transport: dockerDeploymentLayerTransport,
+          configDir: dir,
+          sandboxDir: join(dir, "sandbox"),
+          allowUnavailable: true,
+        }),
+      /CORE_SIGNING_SECRET is required/,
+    ),
+  );
 });
 
 function fakeFly(dir: string, body: string): string {
@@ -615,142 +586,114 @@ function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof
   };
 }
 
-test("fly sync succeeds on the response marker, piping the exact bundle over stdin", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
-  try {
-    writeLayer(dir);
-    const stdinLog = join(dir, "stdin.log");
-    const argsLog = join(dir, "args.log");
-    const bin = fakeFly(
-      dir,
-      [
-        `fs.writeFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)));`,
-        `fs.writeFileSync(${JSON.stringify(stdinLog)}, fs.readFileSync(0, "utf8"));`,
-        `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 200, body: JSON.stringify({ version: 7, contentHash: "abcdef123456" }) }));`,
-      ].join("\n"),
-    );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
-    assert.equal(
-      readFileSync(stdinLog, "utf8"),
-      JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))),
-      "the full bundle reaches the remote script's stdin",
-    );
-    const args = JSON.parse(readFileSync(argsLog, "utf8")) as string[];
-    assert.deepEqual(args.slice(0, 4), ["ssh", "console", "-a", "acme-core"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("fly sync succeeds on the response marker, piping the exact bundle over stdin", async (t) => {
+  const dir = tempDir(t, "qm-layer-fly-");
+  writeLayer(dir);
+  const stdinLog = join(dir, "stdin.log");
+  const argsLog = join(dir, "args.log");
+  const bin = fakeFly(
+    dir,
+    [
+      `fs.writeFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)));`,
+      `fs.writeFileSync(${JSON.stringify(stdinLog)}, fs.readFileSync(0, "utf8"));`,
+      `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 200, body: JSON.stringify({ version: 7, contentHash: "abcdef123456" }) }));`,
+    ].join("\n"),
+  );
+  await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
+  assert.equal(
+    readFileSync(stdinLog, "utf8"),
+    JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))),
+    "the full bundle reaches the remote script's stdin",
+  );
+  const args = JSON.parse(readFileSync(argsLog, "utf8")) as string[];
+  assert.deepEqual(args.slice(0, 4), ["ssh", "console", "-a", "acme-core"]);
 });
 
 test("a 202 degraded response is accepted and warns with the core's persisted-but-partial message", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-degraded-"));
+  const dir = tempDir(t, "qm-layer-fly-degraded-");
   const warnings: string[] = [];
   t.mock.method(console, "warn", (...parts: unknown[]) => void warnings.push(parts.join(" ")));
-  try {
-    writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 202, body: JSON.stringify({ status: "degraded", version: 8, contentHash: "abc", durable: true, message: "skill collision" }) }));`,
-    );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
-    assert.ok(warnings.some((line) => /persisted but only partially applied: skill collision/.test(line)));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  writeLayer(dir);
+  const bin = fakeFly(
+    dir,
+    `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 202, body: JSON.stringify({ status: "degraded", version: 8, contentHash: "abc", durable: true, message: "skill collision" }) }));`,
+  );
+  await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
+  assert.ok(warnings.some((line) => /persisted but only partially applied: skill collision/.test(line)));
 });
 
-test("a remote-script error (signing secret missing on core) is NOT deferrable as core-unreachable", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
-  try {
-    writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "CORE_SIGNING_SECRET is not set on core" }));`,
-    );
-    await withEnv({ FLY_BIN: bin }, () =>
-      assert.rejects(
-        () => syncDeploymentLayer(flySyncOpts(dir, true)),
-        /could not sync deployment layer: .*CORE_SIGNING_SECRET is not set on core/,
-      ),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("a remote-script error (signing secret missing on core) is NOT deferrable as core-unreachable", async (t) => {
+  const dir = tempDir(t, "qm-layer-fly-");
+  writeLayer(dir);
+  const bin = fakeFly(
+    dir,
+    `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "CORE_SIGNING_SECRET is not set on core" }));`,
+  );
+  await withEnv({ FLY_BIN: bin }, () =>
+    assert.rejects(
+      () => syncDeploymentLayer(flySyncOpts(dir, true)),
+      /could not sync deployment layer: .*CORE_SIGNING_SECRET is not set on core/,
+    ),
+  );
 });
 
-test("a remote connection failure (core process down inside the VM) IS deferrable", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
-  try {
-    writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "fetch failed", code: "ECONNREFUSED" }));`,
-    );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
-    await withEnv({ FLY_BIN: bin }, () =>
-      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not sync deployment layer/),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("a remote connection failure (core process down inside the VM) IS deferrable", async (t) => {
+  const dir = tempDir(t, "qm-layer-fly-");
+  writeLayer(dir);
+  const bin = fakeFly(
+    dir,
+    `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "fetch failed", code: "ECONNREFUSED" }));`,
+  );
+  await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
+  await withEnv({ FLY_BIN: bin }, () =>
+    assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not sync deployment layer/),
+  );
 });
 
-test("a fly-ssh transport failure defers under allowUnavailable, but a missing app never does", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
-  try {
-    writeLayer(dir);
-    const transport = fakeFly(dir, `console.error("Error: tunnel unavailable"); process.exit(1);`);
-    await withEnv({ FLY_BIN: transport }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
-    const missingApp = fakeFly(dir, `console.error("Error: Could not find App 'acme-core'"); process.exit(1);`);
-    await withEnv({ FLY_BIN: missingApp }, () =>
-      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /Fly app acme-core not found/),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("a fly-ssh transport failure defers under allowUnavailable, but a missing app never does", async (t) => {
+  const dir = tempDir(t, "qm-layer-fly-");
+  writeLayer(dir);
+  const transport = fakeFly(dir, `console.error("Error: tunnel unavailable"); process.exit(1);`);
+  await withEnv({ FLY_BIN: transport }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
+  const missingApp = fakeFly(dir, `console.error("Error: Could not find App 'acme-core'"); process.exit(1);`);
+  await withEnv({ FLY_BIN: missingApp }, () =>
+    assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /Fly app acme-core not found/),
+  );
 });
 
-test("junk files (.DS_Store, Thumbs.db, AppleDouble) are excluded from the bundle", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-junk-"));
-  try {
-    writeLayer(dir);
-    const clean = deploymentLayerBundle(join(dir, "sandbox"));
-    writeFileSync(join(dir, "sandbox", "skills", "a", ".DS_Store"), Buffer.from([0x00, 0x01, 0x42, 0x75, 0x64, 0x31]));
-    writeFileSync(join(dir, "sandbox", "skills", "a", "Thumbs.db"), Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
-    writeFileSync(join(dir, "sandbox", "skills", "a", "._SKILL.md"), Buffer.from([0x00, 0x05, 0x16, 0x07]));
-    assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")), clean);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("junk files (.DS_Store, Thumbs.db, AppleDouble) are excluded from the bundle", (t) => {
+  const dir = tempDir(t, "qm-layer-junk-");
+  writeLayer(dir);
+  const clean = deploymentLayerBundle(join(dir, "sandbox"));
+  writeFileSync(join(dir, "sandbox", "skills", "a", ".DS_Store"), Buffer.from([0x00, 0x01, 0x42, 0x75, 0x64, 0x31]));
+  writeFileSync(join(dir, "sandbox", "skills", "a", "Thumbs.db"), Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
+  writeFileSync(join(dir, "sandbox", "skills", "a", "._SKILL.md"), Buffer.from([0x00, 0x05, 0x16, 0x07]));
+  assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")), clean);
 });
 
-test("non-junk tools entries fail loudly unless they are directories with tool.json", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-tools-shape-"));
-  try {
-    mkdirSync(join(dir, "sandbox", "tools"), { recursive: true });
-    writeFileSync(join(dir, "sandbox", "tools", "README.md"), "not a tool\n");
-    assert.throws(
-      () => deploymentLayerBundle(join(dir, "sandbox")),
-      /tools entry must be a directory containing tool\.json/,
-    );
-    rmSync(join(dir, "sandbox", "tools", "README.md"));
-    mkdirSync(join(dir, "sandbox", "tools", "missing"));
-    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /tool directory is missing tool\.json/);
-    rmSync(join(dir, "sandbox", "tools", "missing"), { recursive: true });
-    mkdirSync(join(dir, "sandbox", "tools", "linked"));
-    writeFileSync(join(dir, "descriptor.json"), JSON.stringify({ id: "linked" }));
-    symlinkSync(join(dir, "descriptor.json"), join(dir, "sandbox", "tools", "linked", "tool.json"));
-    assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /deployment layer file must be a regular file/);
-    writeFileSync(join(dir, "sandbox", "tools", ".DS_Store"), "junk");
-    rmSync(join(dir, "sandbox", "tools", "linked"), { recursive: true });
-    assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")).tools, []);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("non-junk tools entries fail loudly unless they are directories with tool.json", (t) => {
+  const dir = tempDir(t, "qm-layer-tools-shape-");
+  mkdirSync(join(dir, "sandbox", "tools"), { recursive: true });
+  writeFileSync(join(dir, "sandbox", "tools", "README.md"), "not a tool\n");
+  assert.throws(
+    () => deploymentLayerBundle(join(dir, "sandbox")),
+    /tools entry must be a directory containing tool\.json/,
+  );
+  rmSync(join(dir, "sandbox", "tools", "README.md"));
+  mkdirSync(join(dir, "sandbox", "tools", "missing"));
+  assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /tool directory is missing tool\.json/);
+  rmSync(join(dir, "sandbox", "tools", "missing"), { recursive: true });
+  mkdirSync(join(dir, "sandbox", "tools", "linked"));
+  writeFileSync(join(dir, "descriptor.json"), JSON.stringify({ id: "linked" }));
+  symlinkSync(join(dir, "descriptor.json"), join(dir, "sandbox", "tools", "linked", "tool.json"));
+  assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /deployment layer file must be a regular file/);
+  writeFileSync(join(dir, "sandbox", "tools", ".DS_Store"), "junk");
+  rmSync(join(dir, "sandbox", "tools", "linked"), { recursive: true });
+  assert.deepEqual(deploymentLayerBundle(join(dir, "sandbox")).tools, []);
 });
 
-test("a core with no durable layer record bootstraps as empty regardless of its live source", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-boot-"));
+test("a core with no durable layer record bootstraps as empty regardless of its live source", async (t) => {
+  const dir = tempDir(t, "qm-layer-boot-");
   const captured: CapturedRequest[] = [];
   const { server } = await startCoreStub(
     () => ({
@@ -788,12 +731,11 @@ test("a core with no durable layer record bootstraps as empty regardless of its 
     assert.equal(captured.length, 1);
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a durable record whose bundle is missing still fails the read", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-durable-"));
+test("a durable record whose bundle is missing still fails the read", async (t) => {
+  const dir = tempDir(t, "qm-layer-durable-");
   const captured: CapturedRequest[] = [];
   const { server } = await startCoreStub(
     () => ({
@@ -814,33 +756,25 @@ test("a durable record whose bundle is missing still fails the read", async () =
     });
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("the bundle carries every file a tool declares under install.files and fails when one is missing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-install-files-"));
-  try {
-    const toolDir = join(dir, "sandbox", "tools", "acme");
-    mkdirSync(toolDir, { recursive: true });
-    writeFileSync(
-      join(toolDir, "tool.json"),
-      JSON.stringify({ id: "acme", install: { binary: "acme", files: [{ from: "acme", to: "/usr/local/bin/acme" }] } }),
-    );
-    assert.throws(
-      () => deploymentLayerBundle(join(dir, "sandbox")),
-      /declares install file acme but .* does not exist/,
-    );
-    writeFileSync(join(toolDir, "acme"), "#!/bin/sh\necho acme\n");
-    chmodSync(join(toolDir, "acme"), 0o755);
-    const bundle = deploymentLayerBundle(join(dir, "sandbox"));
-    assert.deepEqual(
-      bundle.tools.map((file) => file.path),
-      ["tools/acme/acme", "tools/acme/tool.json"],
-    );
-    assert.equal(bundle.tools[0]!.content, "#!/bin/sh\necho acme\n");
-    assert.equal(bundle.tools[0]!.executable, true);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("the bundle carries every file a tool declares under install.files and fails when one is missing", (t) => {
+  const dir = tempDir(t, "qm-layer-install-files-");
+  const toolDir = join(dir, "sandbox", "tools", "acme");
+  mkdirSync(toolDir, { recursive: true });
+  writeFileSync(
+    join(toolDir, "tool.json"),
+    JSON.stringify({ id: "acme", install: { binary: "acme", files: [{ from: "acme", to: "/usr/local/bin/acme" }] } }),
+  );
+  assert.throws(() => deploymentLayerBundle(join(dir, "sandbox")), /declares install file acme but .* does not exist/);
+  writeFileSync(join(toolDir, "acme"), "#!/bin/sh\necho acme\n");
+  chmodSync(join(toolDir, "acme"), 0o755);
+  const bundle = deploymentLayerBundle(join(dir, "sandbox"));
+  assert.deepEqual(
+    bundle.tools.map((file) => file.path),
+    ["tools/acme/acme", "tools/acme/tool.json"],
+  );
+  assert.equal(bundle.tools[0]!.content, "#!/bin/sh\necho acme\n");
+  assert.equal(bundle.tools[0]!.executable, true);
 });

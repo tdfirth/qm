@@ -5,7 +5,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -14,12 +13,12 @@ import {
 } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { tempDir } from "./support.ts";
 
 const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -36,8 +35,8 @@ test("the package uses the organization scope while keeping the qm command", () 
 test(
   "the packed npm artifact creates and operates a standalone deployment repository",
   { timeout: 60_000 },
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-package-"));
+  async (t) => {
+    const dir = tempDir(t, "qm-package-");
     let registry: Server | undefined;
     try {
       const env = { ...process.env, NPM_CONFIG_CACHE: join(dir, "npm-cache") };
@@ -284,7 +283,6 @@ else if (command === "secretsmanager get-secret-value") {
       assert.ok(!packed[0]!.files.some(({ path }) => path === "src/contract.ts" || path === "bin/qm.ts"));
     } finally {
       if (registry) await new Promise<void>((resolve) => registry!.close(() => resolve()));
-      rmSync(dir, { recursive: true, force: true });
     }
   },
 );

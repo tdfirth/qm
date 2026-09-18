@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { adminLoginUrl } from "../src/commands/admin-login.ts";
 import { openAdminLogin } from "../../plugins/portal/src/admin-login.ts";
+import { tempDir } from "./support.ts";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../bin/qm.ts");
 const settings = {
@@ -58,61 +58,53 @@ test("CLI refuses invalid signing keys and unsafe public URLs", () => {
   );
 });
 
-test("the command uses deployment config and local secrets without contacting a provider", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-admin-login-"));
-  try {
-    writeFileSync(
-      join(dir, "qm.config.jsonc"),
-      JSON.stringify({
-        contract: 1,
-        orgId: "acme",
-        publicUrl: settings.publicUrl,
-        target: "docker",
-        services: ["core", "web-ui", "admin", "portal", "auth"],
-        env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
-        secretEnv: { core: { ADMIN_GRANTS: "OPERATOR_ADMINS" }, portal: { PORTAL_SESSION_SECRET: "SESSION_KEY" } },
-      }),
-    );
-    writeFileSync(join(dir, ".env"), `OPERATOR_ADMINS=${settings.adminGrants}\nSESSION_KEY=${settings.secret}\n`);
-    const result = spawnSync(process.execPath, [cli, "admin-login"], { cwd: dir, encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(
-      openAdminLogin(tokenFrom(result.stdout.trim()), settings.secret, settings.publicUrl)?.email,
-      "admin@example.com",
-    );
-    assert.doesNotMatch(result.stdout, new RegExp(settings.secret));
-    const invalid = spawnSync(process.execPath, [cli, "admin-login", "--email", "member@example.com"], {
-      cwd: dir,
-      encoding: "utf8",
-    });
-    assert.notEqual(invalid.status, 0);
-    assert.equal(invalid.stdout, "");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("the command uses deployment config and local secrets without contacting a provider", (t) => {
+  const dir = tempDir(t, "qm-admin-login-");
+  writeFileSync(
+    join(dir, "qm.config.jsonc"),
+    JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: settings.publicUrl,
+      target: "docker",
+      services: ["core", "web-ui", "admin", "portal", "auth"],
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+      secretEnv: { core: { ADMIN_GRANTS: "OPERATOR_ADMINS" }, portal: { PORTAL_SESSION_SECRET: "SESSION_KEY" } },
+    }),
+  );
+  writeFileSync(join(dir, ".env"), `OPERATOR_ADMINS=${settings.adminGrants}\nSESSION_KEY=${settings.secret}\n`);
+  const result = spawnSync(process.execPath, [cli, "admin-login"], { cwd: dir, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    openAdminLogin(tokenFrom(result.stdout.trim()), settings.secret, settings.publicUrl)?.email,
+    "admin@example.com",
+  );
+  assert.doesNotMatch(result.stdout, new RegExp(settings.secret));
+  const invalid = spawnSync(process.execPath, [cli, "admin-login", "--email", "member@example.com"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  assert.notEqual(invalid.status, 0);
+  assert.equal(invalid.stdout, "");
 });
 
-test("the command runs inside a deployment using environment variables alone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-admin-login-env-"));
-  try {
-    const env = {
-      ...process.env,
-      PORTAL_PUBLIC_URL: settings.publicUrl,
-      PORTAL_SESSION_SECRET: settings.secret,
-      ADMIN_GRANTS: settings.adminGrants,
-    };
-    const result = spawnSync(process.execPath, [cli, "admin-login"], { cwd: dir, encoding: "utf8", env });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(
-      openAdminLogin(tokenFrom(result.stdout.trim()), settings.secret, settings.publicUrl)?.email,
-      "admin@example.com",
-    );
-    for (const args of [["--ttl", "999"], ["--secret", "unsafe"], ["unexpected"]]) {
-      const invalid = spawnSync(process.execPath, [cli, "admin-login", ...args], { cwd: dir, encoding: "utf8", env });
-      assert.notEqual(invalid.status, 0);
-      assert.equal(invalid.stdout, "");
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+test("the command runs inside a deployment using environment variables alone", (t) => {
+  const dir = tempDir(t, "qm-admin-login-env-");
+  const env = {
+    ...process.env,
+    PORTAL_PUBLIC_URL: settings.publicUrl,
+    PORTAL_SESSION_SECRET: settings.secret,
+    ADMIN_GRANTS: settings.adminGrants,
+  };
+  const result = spawnSync(process.execPath, [cli, "admin-login"], { cwd: dir, encoding: "utf8", env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    openAdminLogin(tokenFrom(result.stdout.trim()), settings.secret, settings.publicUrl)?.email,
+    "admin@example.com",
+  );
+  for (const args of [["--ttl", "999"], ["--secret", "unsafe"], ["unexpected"]]) {
+    const invalid = spawnSync(process.execPath, [cli, "admin-login", ...args], { cwd: dir, encoding: "utf8", env });
+    assert.notEqual(invalid.status, 0);
+    assert.equal(invalid.stdout, "");
   }
 });

@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { QmConfig } from "../src/config.ts";
 import { flyUp, mpgClusterId, mpgDirectUrl } from "../src/backends/fly.ts";
+import { tempDir } from "./support.ts";
 
 test("mpgClusterId matches a whole field regardless of column position or spacing", () => {
   const header = "ID              NAME          REGION  STATUS";
@@ -61,8 +61,8 @@ test("mpgDirectUrl selects the direct Managed Postgres endpoint without exposing
   );
 });
 
-test("fly up provisions private object storage before enforcing provider secrets", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-storage-"));
+test("fly up provisions private object storage before enforcing provider secrets", async (t) => {
+  const dir = tempDir(t, "qm-fly-storage-");
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
   const state = join(dir, "storage-created");
@@ -137,12 +137,11 @@ else console.log("ok");
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('--only "slack" explains the virtual service runs in-process on the core', async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-up-"));
+test('--only "slack" explains the virtual service runs in-process on the core', async (t) => {
+  const dir = tempDir(t, "qm-fly-up-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme2",
@@ -157,12 +156,8 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
     imageOverrides: {},
     sandbox: { app: "acme2-sandboxes" },
   };
-  try {
-    await assert.rejects(
-      flyUp(config, dir, { only: ["slack"] }),
-      /--only "slack": slack is a virtual service — it runs in-process on the core, so deploy it with --only core/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  await assert.rejects(
+    flyUp(config, dir, { only: ["slack"] }),
+    /--only "slack": slack is a virtual service — it runs in-process on the core, so deploy it with --only core/,
+  );
 });

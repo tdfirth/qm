@@ -14,6 +14,7 @@ import {
   securityScreenEnv,
   updateConfigImageOverrides,
 } from "../src/config.ts";
+import { tempDir } from "./support.ts";
 
 const BASE = { contract: 1, orgId: "acme", publicUrl: "http://localhost:8080", target: "docker", services: ["core"] };
 
@@ -995,25 +996,20 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
   });
 });
 
-test("loadConfigInDir reads qm.config.jsonc from the deployment dir (no walk-up)", () => {
+test("loadConfigInDir reads qm.config.jsonc from the deployment dir (no walk-up)", (t) => {
   withConfig({}, ({ dir }) => {
     assert.equal(loadConfigInDir(dir).config.orgId, "acme");
   });
-  const empty = mkdtempSync(join(tmpdir(), "qm-empty-"));
-  try {
-    assert.throws(() => loadConfigInDir(empty), /no qm.config.jsonc/);
-  } finally {
-    rmSync(empty, { recursive: true, force: true });
-  }
+  const empty = tempDir(t, "qm-empty-");
+  assert.throws(() => loadConfigInDir(empty), /no qm.config.jsonc/);
 });
 
-test("config JSONC accepts comments and trailing commas like tsconfig.json", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-jsonc-"));
+test("config JSONC accepts comments and trailing commas like tsconfig.json", (t) => {
+  const dir = tempDir(t, "qm-jsonc-");
   const path = join(dir, CONFIG_FILENAME);
-  try {
-    writeFileSync(
-      path,
-      `{
+  writeFileSync(
+    path,
+    `{
       // JSONC comment
       "contract": 1,
       "orgId": "acme",
@@ -1021,11 +1017,8 @@ test("config JSONC accepts comments and trailing commas like tsconfig.json", () 
       "target": "docker",
       "services": ["core",],
     }`,
-    );
-    assert.deepEqual(loadConfigAt(path).config.services, ["core"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  );
+  assert.deepEqual(loadConfigAt(path).config.services, ["core"]);
 });
 
 test("updateConfigImageOverrides preserves JSONC while recording immutable service pins", () => {

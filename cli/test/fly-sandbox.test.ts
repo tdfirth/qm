@@ -16,6 +16,7 @@ import {
   verifyLocalFlyTokens,
 } from "../src/backends/fly.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
+import { tempDir } from "./support.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -198,7 +199,7 @@ test("--only rejects a name that is neither a service nor a plugin (before any F
   );
 });
 
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { flySecretsPush } from "../src/backends/fly.ts";
 
 function fakeFly(dir: string, script: string): { log: string; restore: () => void } {
@@ -236,27 +237,23 @@ function generatedEnv(toml: string): Record<string, string> {
   return env;
 }
 
-test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-s3-probe-syntax-"));
-  try {
-    const command = flyS3ProbeCommand();
-    const encoded = command.match(/Buffer\.from\('([^']+)'/)?.[1];
-    assert.ok(encoded, "probe command carries encoded source");
-    const source = Buffer.from(encoded, "base64").toString("utf8");
-    assert.doesNotMatch(source, /^\s*import\s/m, "eval never receives a static ESM import");
-    assert.match(source, /\(async \(\) => \{/);
-    assert.match(source, /\.catch\(\(error\) => \{/);
-    const path = join(dir, "probe.cjs");
-    writeFileSync(path, source);
-    const checked = spawnSync(process.execPath, ["--check", path], { encoding: "utf8" });
-    assert.equal(checked.status, 0, checked.stderr);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("the Fly S3 probe is valid CommonJS that reports async failures", (t) => {
+  const dir = tempDir(t, "qm-fly-s3-probe-syntax-");
+  const command = flyS3ProbeCommand();
+  const encoded = command.match(/Buffer\.from\('([^']+)'/)?.[1];
+  assert.ok(encoded, "probe command carries encoded source");
+  const source = Buffer.from(encoded, "base64").toString("utf8");
+  assert.doesNotMatch(source, /^\s*import\s/m, "eval never receives a static ESM import");
+  assert.match(source, /\(async \(\) => \{/);
+  assert.match(source, /\.catch\(\(error\) => \{/);
+  const path = join(dir, "probe.cjs");
+  writeFileSync(path, source);
+  const checked = spawnSync(process.execPath, ["--check", path], { encoding: "utf8" });
+  assert.equal(checked.status, 0, checked.stderr);
 });
 
-test("fly secrets push stages a dual-role secret under BOTH names on the core app", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-"));
+test("fly secrets push stages a dual-role secret under BOTH names on the core app", async (t) => {
+  const dir = tempDir(t, "qm-fly-push-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -340,12 +337,11 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     if (priorAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = priorAnthropic;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push warns that staged secrets are not live when machines are running", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-warn-"));
+test("fly secrets push warns that staged secrets are not live when machines are running", async (t) => {
+  const dir = tempDir(t, "qm-fly-push-staged-warn-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -396,12 +392,11 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
     console.log = log;
     console.warn = warnLog;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push stays quiet about staging when no machines are running", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-quiet-"));
+test("fly secrets push stays quiet about staging when no machines are running", async (t) => {
+  const dir = tempDir(t, "qm-fly-push-staged-quiet-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -448,12 +443,11 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
     console.log = log;
     console.warn = warnLog;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push removes the disabled Fly app publisher token", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-publisher-off-"));
+test("fly secrets push removes the disabled Fly app publisher token", async (t) => {
+  const dir = tempDir(t, "qm-fly-push-publisher-off-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -493,12 +487,11 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push falls back to an ambient secret when the scaffold entry is blank", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-blank-"));
+test("fly secrets push falls back to an ambient secret when the scaffold entry is blank", async (t) => {
+  const dir = tempDir(t, "qm-fly-push-blank-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -538,12 +531,11 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     if (prior === undefined) delete process.env.CORE_SIGNING_SECRET;
     else process.env.CORE_SIGNING_SECRET = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live check requires deployed machines and a healthy public endpoint", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
+test("fly live check requires deployed machines and a healthy public endpoint", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -599,12 +591,11 @@ else console.log("ok");`,
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness rejects the wrong organization identity, region, and rendered env", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-identity-"));
+test("fly live readiness rejects the wrong organization identity, region, and rendered env", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-identity-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -645,12 +636,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness rejects the wrong region after deployment identity matches", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-region-"));
+test("fly live readiness rejects the wrong region after deployment identity matches", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-region-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -682,12 +672,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness rejects rendered environment drift after identity and region match", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-env-"));
+test("fly live readiness rejects rendered environment drift after identity and region match", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-env-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -719,12 +708,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness requires the generated TCP check for plugins", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-plugin-"));
+test("fly live readiness requires the generated TCP check for plugins", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-plugin-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -766,12 +754,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness rejects a plugin whose TCP check is not passing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-plugin-failed-"));
+test("fly live readiness rejects a plugin whose TCP check is not passing", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-plugin-failed-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -810,12 +797,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness fails when core cannot round-trip durable object storage", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-storage-"));
+test("fly live readiness fails when core cannot round-trip durable object storage", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-storage-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -846,12 +832,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness rejects a healthy machine on the wrong configured image digest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-image-"));
+test("fly live readiness rejects a healthy machine on the wrong configured image digest", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-image-");
   const configured = `registry.fly.io/acme-core@sha256:${"a".repeat(64)}`;
   const running = `registry.fly.io/acme-core@sha256:${"b".repeat(64)}`;
   const config: QmConfig = {
@@ -883,12 +868,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live readiness resolves deployment tags to their immutable image digest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-image-tag-"));
+test("fly live readiness resolves deployment tags to their immutable image digest", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-image-tag-");
   const digest = `sha256:${"a".repeat(64)}`;
   const config: QmConfig = {
     contract: 1,
@@ -919,12 +903,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live check rejects stopped workloads even when the public endpoint responds", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
+test("fly live check rejects stopped workloads even when the public endpoint responds", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -949,12 +932,11 @@ test("fly live check rejects stopped workloads even when the public endpoint res
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly live check rejects a configured workload with no deployed machine", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
+test("fly live check rejects a configured workload with no deployed machine", async (t) => {
+  const dir = tempDir(t, "qm-fly-live-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -979,12 +961,11 @@ test("fly live check rejects a configured workload with no deployed machine", as
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push rejects weak signing keys before staging anything", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-weak-secret-"));
+test("fly secrets push rejects weak signing keys before staging anything", async (t) => {
+  const dir = tempDir(t, "qm-fly-weak-secret-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -1008,12 +989,11 @@ test("fly secrets push rejects weak signing keys before staging anything", async
     assert.equal(readFileSync(fake.log, "utf8"), "");
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push refuses an unmarked pre-existing app", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-owner-"));
+test("fly secrets push refuses an unmarked pre-existing app", async (t) => {
+  const dir = tempDir(t, "qm-fly-owner-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -1054,12 +1034,11 @@ else console.log("ok");`,
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /CAPABILITY_SECRET=-/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push refuses a same-named app outside the configured Fly organization", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-wrong-org-"));
+test("fly secrets push refuses a same-named app outside the configured Fly organization", async (t) => {
+  const dir = tempDir(t, "qm-fly-wrong-org-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -1103,12 +1082,11 @@ else console.log("ok");`,
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fly secrets push stages a secretEnv alias under its declared env name on its service's app", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-alias-"));
+test("fly secrets push stages a secretEnv alias under its declared env name on its service's app", async (t) => {
+  const dir = tempDir(t, "qm-fly-alias-");
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -1168,12 +1146,11 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("shared publisher authorization uses app-scoped access without organization listing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-app-token-"));
+test("shared publisher authorization uses app-scoped access without organization listing", (t) => {
+  const dir = tempDir(t, "qm-fly-app-token-");
   const fake = fakeFly(dir, 'if (a !== "machines list -a acme-apps --json") process.exit(1);');
   try {
     const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
@@ -1192,6 +1169,5 @@ test("shared publisher authorization uses app-scoped access without organization
     assert.equal(readFileSync(fake.log, "utf8").trim(), "machines list -a acme-apps --json");
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });

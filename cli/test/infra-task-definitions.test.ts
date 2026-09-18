@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deleteAwsTaskDefinitions } from "../src/commands/infra.ts";
 import type { QmConfig } from "../src/config.ts";
+import { tempDir } from "./support.ts";
 
 const config: QmConfig = {
   contract: 1,
@@ -70,8 +70,8 @@ else if (text.includes("ecs list-task-definitions")) {
   return { bin, log };
 }
 
-test("infra delete-task-definitions removes every revision of exact configured families in API-sized batches", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-infra-task-definitions-"));
+test("infra delete-task-definitions removes every revision of exact configured families in API-sized batches", async (t) => {
+  const dir = tempDir(t, "qm-infra-task-definitions-");
   const fake = fakeAws(dir);
   const prior = process.env.AWS_BIN;
   process.env.AWS_BIN = fake.bin;
@@ -98,12 +98,11 @@ test("infra delete-task-definitions removes every revision of exact configured f
   } finally {
     if (prior === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("infra delete-task-definitions surfaces per-revision deletion failures", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-infra-task-definitions-"));
+test("infra delete-task-definitions surfaces per-revision deletion failures", async (t) => {
+  const dir = tempDir(t, "qm-infra-task-definitions-");
   const fake = fakeAws(dir, "123456789012", true);
   const prior = process.env.AWS_BIN;
   process.env.AWS_BIN = fake.bin;
@@ -116,12 +115,11 @@ test("infra delete-task-definitions surfaces per-revision deletion failures", as
   } finally {
     if (prior === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("infra delete-task-definitions checks the exact AWS account before listing or mutating", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-infra-task-definitions-"));
+test("infra delete-task-definitions checks the exact AWS account before listing or mutating", async (t) => {
+  const dir = tempDir(t, "qm-infra-task-definitions-");
   const fake = fakeAws(dir, "999999999999");
   const prior = process.env.AWS_BIN;
   process.env.AWS_BIN = fake.bin;
@@ -133,12 +131,11 @@ test("infra delete-task-definitions checks the exact AWS account before listing 
   } finally {
     if (prior === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("infra delete-task-definitions refuses foreign exact-name families before mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-infra-task-definitions-"));
+test("infra delete-task-definitions refuses foreign exact-name families before mutation", async (t) => {
+  const dir = tempDir(t, "qm-infra-task-definitions-");
   const fake = fakeAws(dir, "123456789012", false, "other");
   const prior = process.env.AWS_BIN;
   process.env.AWS_BIN = fake.bin;
@@ -148,6 +145,5 @@ test("infra delete-task-definitions refuses foreign exact-name families before m
   } finally {
     if (prior === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });

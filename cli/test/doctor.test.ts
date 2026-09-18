@@ -1,7 +1,6 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   doctorCommon,
@@ -11,6 +10,7 @@ import {
 } from "../src/backends/doctor.ts";
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
+import { tempDir } from "./support.ts";
 
 const config: QmConfig = {
   contract: 1,
@@ -148,8 +148,8 @@ test("remote doctor keeps missing local email values distinct from disabled emai
   }
 });
 
-test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
+test("Fly doctor requires the signing secret for source plugins absent from config", async (t) => {
+  const dir = tempDir(t, "qm-fly-doctor-");
   const bin = join(dir, "fake-fly.cjs");
   const prior = process.env.FLY_BIN;
   mkdirSync(join(dir, "plugins", "linear"), { recursive: true });
@@ -172,12 +172,11 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Fly doctor rejects persisted core access on coreless plugins", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-coreless-"));
+test("Fly doctor rejects persisted core access on coreless plugins", async (t) => {
+  const dir = tempDir(t, "qm-fly-doctor-coreless-");
   const bin = join(dir, "fake-fly.cjs");
   const prior = process.env.FLY_BIN;
   writeFileSync(
@@ -209,12 +208,11 @@ if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SEC
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
+test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async (t) => {
+  const dir = tempDir(t, "qm-fly-doctor-dual-");
   const bin = join(dir, "fake-fly.cjs");
   const prior = process.env.FLY_BIN;
   writeFileSync(
@@ -245,12 +243,11 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Fly doctor reports apps that are not created yet as pending, not missing secrets", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-predeploy-"));
+test("Fly doctor reports apps that are not created yet as pending, not missing secrets", async (t) => {
+  const dir = tempDir(t, "qm-fly-doctor-predeploy-");
   const bin = join(dir, "fake-fly.cjs");
   const prior = process.env.FLY_BIN;
   writeFileSync(
@@ -282,38 +279,33 @@ process.exit(0);
     console.log = log;
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back to the template", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-manifest-"));
-  try {
-    const templateScopes = requiredSlackScopes();
-    assert.ok(templateScopes.includes("chat:write"), "template scopes parse");
-    assert.deepEqual(requiredSlackScopes(dir), templateScopes, "no deployment manifest → template");
-    writeFileSync(
-      join(dir, "slack-app-manifest.yml"),
-      [
-        "display_information:",
-        "  name: acme Agent",
-        "oauth_config:",
-        "  scopes:",
-        "    bot:",
-        "      - chat:write",
-        "      - custom:scope",
-        "settings:",
-        "  socket_mode_enabled: true",
-      ].join("\n"),
-    );
-    assert.deepEqual(requiredSlackScopes(dir), ["chat:write", "custom:scope"], "deployment manifest wins");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back to the template", (t) => {
+  const dir = tempDir(t, "qm-doctor-manifest-");
+  const templateScopes = requiredSlackScopes();
+  assert.ok(templateScopes.includes("chat:write"), "template scopes parse");
+  assert.deepEqual(requiredSlackScopes(dir), templateScopes, "no deployment manifest → template");
+  writeFileSync(
+    join(dir, "slack-app-manifest.yml"),
+    [
+      "display_information:",
+      "  name: acme Agent",
+      "oauth_config:",
+      "  scopes:",
+      "    bot:",
+      "      - chat:write",
+      "      - custom:scope",
+      "settings:",
+      "  socket_mode_enabled: true",
+    ].join("\n"),
+  );
+  assert.deepEqual(requiredSlackScopes(dir), ["chat:write", "custom:scope"], "deployment manifest wins");
 });
 
-test("requiredSlackScopes warns when the deployment manifest lags the template's scopes, and stays quiet on a superset", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-stale-"));
+test("requiredSlackScopes warns when the deployment manifest lags the template's scopes, and stays quiet on a superset", (t) => {
+  const dir = tempDir(t, "qm-doctor-stale-");
   const lines: string[] = [];
   const priorWarn = console.warn;
   console.warn = (...args: unknown[]): void => void lines.push(args.join(" "));
@@ -334,7 +326,6 @@ test("requiredSlackScopes warns when the deployment manifest lags the template's
     assert.deepEqual(lines, [], "a superset manifest draws no warning");
   } finally {
     console.warn = priorWarn;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -372,14 +363,10 @@ test("slackManifestBotScopes does not truncate on comments inside a block list",
   assert.deepEqual(slackManifestBotScopes(yaml), ["chat:write", "users:read", "channels:history"]);
 });
 
-test("requiredSlackScopes throws when a manifest exists but zero scopes parse", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-zeroscope-"));
-  try {
-    writeFileSync(join(dir, "slack-app-manifest.yml"), "display_information:\n  name: acme Agent\n");
-    assert.throws(() => requiredSlackScopes(dir), /no bot scopes parse/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("requiredSlackScopes throws when a manifest exists but zero scopes parse", (t) => {
+  const dir = tempDir(t, "qm-doctor-zeroscope-");
+  writeFileSync(join(dir, "slack-app-manifest.yml"), "display_information:\n  name: acme Agent\n");
+  assert.throws(() => requiredSlackScopes(dir), /no bot scopes parse/);
 });
 
 const SLACK_TOKENS = new Map([
@@ -393,8 +380,8 @@ function slackConfig(): QmConfig {
   return { ...rest, services: ["core", "slack"], env: {} };
 }
 
-function manifestDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-fetch-"));
+function manifestDir(t: TestContext): string {
+  const dir = tempDir(t, "qm-doctor-fetch-");
   writeFileSync(
     join(dir, "slack-app-manifest.yml"),
     "oauth_config:\n  scopes:\n    bot:\n      - chat:write\n      - users:read\n",
@@ -431,19 +418,15 @@ const authOk = (scopes?: string): Response =>
     headers: scopes === undefined ? {} : { "x-oauth-scopes": scopes },
   });
 
-test("slackCheck passes when granted scopes are a superset of the manifest's", async () => {
-  const dir = manifestDir();
-  try {
-    await withStubbedSlack({ auth: authOk("chat:write, users:read, extra:scope") }, () =>
-      doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("slackCheck passes when granted scopes are a superset of the manifest's", async (t) => {
+  const dir = manifestDir(t);
+  await withStubbedSlack({ auth: authOk("chat:write, users:read, extra:scope") }, () =>
+    doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+  );
 });
 
-test("Slack doctor validates deployment-file tokens before conflicting ambient tokens", async () => {
-  const dir = manifestDir();
+test("Slack doctor validates deployment-file tokens before conflicting ambient tokens", async (t) => {
+  const dir = manifestDir(t);
   const priorFetch = globalThis.fetch;
   const priorBot = process.env.SLACK_BOT_TOKEN;
   const priorApp = process.env.SLACK_APP_TOKEN;
@@ -466,12 +449,11 @@ test("Slack doctor validates deployment-file tokens before conflicting ambient t
     else process.env.SLACK_BOT_TOKEN = priorBot;
     if (priorApp === undefined) delete process.env.SLACK_APP_TOKEN;
     else process.env.SLACK_APP_TOKEN = priorApp;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Slack doctor validates the bot through its configured API while Socket Mode stays on Slack", async () => {
-  const dir = manifestDir();
+test("Slack doctor validates the bot through its configured API while Socket Mode stays on Slack", async (t) => {
+  const dir = manifestDir(t);
   const priorFetch = globalThis.fetch;
   const seen: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {
@@ -490,80 +472,59 @@ test("Slack doctor validates the bot through its configured API while Socket Mod
     assert.deepEqual(seen, ["https://slack-twin.example/api/auth.test", "https://slack.com/api/apps.connections.open"]);
   } finally {
     globalThis.fetch = priorFetch;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Slack doctor does not require a Socket Mode token for HTTP events", async () => {
-  const dir = manifestDir();
+test("Slack doctor does not require a Socket Mode token for HTTP events", async (t) => {
+  const dir = manifestDir(t);
   const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
-  try {
-    await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
-      doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
+    doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
+  );
 });
 
-test("slackCheck fails naming each manifest scope the token lacks", async () => {
-  const dir = manifestDir();
-  try {
-    await withStubbedSlack({ auth: authOk("chat:write") }, () =>
-      assert.rejects(doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }), /missing scopes: users:read/),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("slackCheck fails naming each manifest scope the token lacks", async (t) => {
+  const dir = manifestDir(t);
+  await withStubbedSlack({ auth: authOk("chat:write") }, () =>
+    assert.rejects(doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }), /missing scopes: users:read/),
+  );
 });
 
-test("slackCheck surfaces a rejected bot token with Slack's error code", async () => {
-  const dir = manifestDir();
-  try {
-    await withStubbedSlack(
-      { auth: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }) },
-      () =>
-        assert.rejects(
-          doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
-          /bot token rejected \(invalid_auth\)/,
-        ),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("slackCheck treats a missing x-oauth-scopes header as zero granted scopes, not a pass", async () => {
-  const dir = manifestDir();
-  try {
-    await withStubbedSlack({ auth: authOk() }, () =>
+test("slackCheck surfaces a rejected bot token with Slack's error code", async (t) => {
+  const dir = manifestDir(t);
+  await withStubbedSlack(
+    { auth: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }) },
+    () =>
       assert.rejects(
         doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
-        /missing scopes: chat:write, users:read/,
+        /bot token rejected \(invalid_auth\)/,
       ),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  );
 });
 
-test("slackCheck rejects a bad Socket Mode app token even when the bot token passes", async () => {
-  const dir = manifestDir();
-  try {
-    await withStubbedSlack(
-      {
-        auth: authOk("chat:write, users:read"),
-        socket: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }),
-      },
-      () =>
-        assert.rejects(
-          doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
-          /app token rejected \(invalid_auth\)/,
-        ),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("slackCheck treats a missing x-oauth-scopes header as zero granted scopes, not a pass", async (t) => {
+  const dir = manifestDir(t);
+  await withStubbedSlack({ auth: authOk() }, () =>
+    assert.rejects(
+      doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+      /missing scopes: chat:write, users:read/,
+    ),
+  );
+});
+
+test("slackCheck rejects a bad Socket Mode app token even when the bot token passes", async (t) => {
+  const dir = manifestDir(t);
+  await withStubbedSlack(
+    {
+      auth: authOk("chat:write, users:read"),
+      socket: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }),
+    },
+    () =>
+      assert.rejects(
+        doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+        /app token rejected \(invalid_auth\)/,
+      ),
+  );
 });
 
 test("doctor treats a missing sandbox block as info (no Fly checks), not a failure", async () => {
@@ -598,18 +559,14 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
   }
 });
 
-test("an explicitly named --env-file that does not exist is a bad-path error, not 'secrets missing'", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-envfile-"));
-  try {
-    assert.throws(() => localDoctorSecrets(dir, join(dir, "nope.env")), /--env-file not found/);
-    assert.deepEqual(localDoctorSecrets(dir), new Map(), "a missing default ./.env is still fine");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("an explicitly named --env-file that does not exist is a bad-path error, not 'secrets missing'", (t) => {
+  const dir = tempDir(t, "qm-doctor-envfile-");
+  assert.throws(() => localDoctorSecrets(dir, join(dir, "nope.env")), /--env-file not found/);
+  assert.deepEqual(localDoctorSecrets(dir), new Map(), "a missing default ./.env is still fine");
 });
 
-test("fly doctor reports a missing flyctl before trying `fly secrets list`", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-nofly-"));
+test("fly doctor reports a missing flyctl before trying `fly secrets list`", async (t) => {
+  const dir = tempDir(t, "qm-doctor-nofly-");
   const prior = process.env.FLY_BIN;
   process.env.FLY_BIN = "/nonexistent/flyctl";
   try {
@@ -620,12 +577,11 @@ test("fly doctor reports a missing flyctl before trying `fly secrets list`", asy
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Fly doctor token probes reject expired scoped tokens without exposing them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-fly-token-"));
+test("Fly doctor token probes reject expired scoped tokens without exposing them", (t) => {
+  const dir = tempDir(t, "qm-doctor-fly-token-");
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(
     bin,
@@ -665,12 +621,11 @@ process.exit(1);
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("doctor without required local values warns-and-skips the live Slack check (fly path)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-skip-"));
+test("doctor without required local values warns-and-skips the live Slack check (fly path)", async (t) => {
+  const dir = tempDir(t, "qm-doctor-skip-");
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(bin, "#!/usr/bin/env node\nprocess.exit(0);\n");
   chmodSync(bin, 0o755);
@@ -702,6 +657,5 @@ test("doctor without required local values warns-and-skips the live Slack check 
     else process.env.FLY_BIN = priorFly;
     if (priorBot !== undefined) process.env.SLACK_BOT_TOKEN = priorBot;
     if (priorApp !== undefined) process.env.SLACK_APP_TOKEN = priorApp;
-    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -1,10 +1,10 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSandboxBuild, type SandboxBuildOpts } from "../src/commands/sandbox.ts";
 import type { QmConfig } from "../src/config.ts";
+import { tempDir } from "./support.ts";
 
 const CONFIG: QmConfig = {
   contract: 1,
@@ -18,9 +18,8 @@ const CONFIG: QmConfig = {
   imageOverrides: {},
 };
 
-function sandboxDir(setup: (sb: string) => void): string {
-  const dir = mkdtempSync(join(tmpdir(), "qm-sbx-build-"));
-  const sb = join(dir, "sandbox");
+function sandboxDir(t: TestContext, setup: (sb: string) => void): string {
+  const sb = join(tempDir(t, "qm-sbx-build-"), "sandbox");
   mkdirSync(sb, { recursive: true });
   setup(sb);
   return sb;
@@ -51,88 +50,60 @@ function dryRun(opts: Omit<SandboxBuildOpts, "dryRun" | "config"> & { config?: Q
   return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-test("generates a Dockerfile that COPYs each tool executable onto PATH + bakes the presence check", () => {
-  const sb = sandboxDir((s) => tool(s, "example-tool", { id: "example-tool", install: { binary: "example-tool" } }));
-  try {
-    const out = dryRun({ sandboxDir: sb });
-    assert.match(out, /FROM registry\.invalid\/qm\/qm-sandbox-base@sha256:a{64}/);
-    assert.match(out, /COPY tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
-    assert.match(out, /command -v "\$b"/);
-    assert.match(out, /'example-tool'/);
-    assert.match(out, /acme-sandbox:local/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+test("generates a Dockerfile that COPYs each tool executable onto PATH + bakes the presence check", (t) => {
+  const sb = sandboxDir(t, (s) => tool(s, "example-tool", { id: "example-tool", install: { binary: "example-tool" } }));
+  const out = dryRun({ sandboxDir: sb });
+  assert.match(out, /FROM registry\.invalid\/qm\/qm-sandbox-base@sha256:a{64}/);
+  assert.match(out, /COPY tools\/example-tool\/example-tool \/usr\/local\/bin\/example-tool/);
+  assert.match(out, /command -v "\$b"/);
+  assert.match(out, /'example-tool'/);
+  assert.match(out, /acme-sandbox:local/);
 });
 
-test("--from overrides the base image for the generated Dockerfile", () => {
-  const sb = sandboxDir((s) => tool(s, "t", { id: "t" }));
-  try {
-    const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/custom-base:v1" });
-    assert.match(out, /FROM registry\.fly\.io\/custom-base:v1/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+test("--from overrides the base image for the generated Dockerfile", (t) => {
+  const sb = sandboxDir(t, (s) => tool(s, "t", { id: "t" }));
+  const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/custom-base:v1" });
+  assert.match(out, /FROM registry\.fly\.io\/custom-base:v1/);
 });
 
-test("a custom sandbox/Dockerfile owns the recipe; --from is warned-ignored; presence check appended", () => {
-  const sb = sandboxDir((s) => {
+test("a custom sandbox/Dockerfile owns the recipe; --from is warned-ignored; presence check appended", (t) => {
+  const sb = sandboxDir(t, (s) => {
     tool(s, "apt-tool", { id: "apt-tool", install: { binary: "apt-tool" } }, false);
     writeFileSync(join(s, "Dockerfile"), "FROM my/base:1\nRUN apt-get install -y apt-tool\n");
   });
-  try {
-    const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/ignored:1" });
-    assert.match(out, /FROM my\/base:1/);
-    assert.match(out, /--from is ignored/);
-    assert.match(out, /command -v "\$b"/);
-    assert.match(out, /'apt-tool'/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+  const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/ignored:1" });
+  assert.match(out, /FROM my\/base:1/);
+  assert.match(out, /--from is ignored/);
+  assert.match(out, /command -v "\$b"/);
+  assert.match(out, /'apt-tool'/);
 });
 
-test("custom Dockerfile provenance recognizes platform flags, aliases, lowercase, and stage reuse", () => {
-  const sb = sandboxDir((s) => {
+test("custom Dockerfile provenance recognizes platform flags, aliases, lowercase, and stage reuse", (t) => {
+  const sb = sandboxDir(t, (s) => {
     writeFileSync(
       join(s, "Dockerfile"),
       "from --platform=linux/arm64 my/base:1 AS build\nRUN true\nFROM build AS final\n",
     );
   });
-  try {
-    const out = dryRun({ sandboxDir: sb });
-    assert.match(out, /base:\s+.*Dockerfile \(custom\)/);
-    assert.match(out, /from --platform=linux\/arm64 my\/base:1 AS build/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+  const out = dryRun({ sandboxDir: sb });
+  assert.match(out, /base:\s+.*Dockerfile \(custom\)/);
+  assert.match(out, /from --platform=linux\/arm64 my\/base:1 AS build/);
 });
 
-test("custom Dockerfiles must pin all but one distinct external base", () => {
-  const sb = sandboxDir((s) => {
+test("custom Dockerfiles must pin all but one distinct external base", (t) => {
+  const sb = sandboxDir(t, (s) => {
     writeFileSync(join(s, "Dockerfile"), "FROM first/base:1 AS build\nFROM second/base:2\n");
   });
-  try {
-    assert.throws(() => dryRun({ sandboxDir: sb }), /multiple mutable external base images/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+  assert.throws(() => dryRun({ sandboxDir: sb }), /multiple mutable external base images/);
 });
 
-test("--tag sets the image tag", () => {
-  const sb = sandboxDir((s) => tool(s, "t", { id: "t" }));
-  try {
-    const out = dryRun({ sandboxDir: sb, tag: "acme-sandbox:v2" });
-    assert.match(out, /acme-sandbox:v2/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+test("--tag sets the image tag", (t) => {
+  const sb = sandboxDir(t, (s) => tool(s, "t", { id: "t" }));
+  const out = dryRun({ sandboxDir: sb, tag: "acme-sandbox:v2" });
+  assert.match(out, /acme-sandbox:v2/);
 });
 
-test("a broken layer (tool with no executable and no Dockerfile) fails before building", () => {
-  const sb = sandboxDir((s) => tool(s, "x", { id: "x", install: { binary: "x" } }, false));
-  try {
-    assert.throws(() => dryRun({ sandboxDir: sb }), /sandbox check failed/);
-  } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
+test("a broken layer (tool with no executable and no Dockerfile) fails before building", (t) => {
+  const sb = sandboxDir(t, (s) => tool(s, "x", { id: "x", install: { binary: "x" } }, false));
+  assert.throws(() => dryRun({ sandboxDir: sb }), /sandbox check failed/);
 });

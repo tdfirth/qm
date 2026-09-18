@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import test, { type TestContext } from "node:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAwsPublicRouting } from "../src/backends/aws.ts";
 import { loadConfigAt } from "../src/config.ts";
 import { terraformVars } from "../src/terraform.ts";
+import { tempDir } from "./support.ts";
 
-function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2") {
-  const dir = mkdtempSync(join(tmpdir(), "qm-public-paths-"));
+function fixture(t: TestContext, paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2") {
+  const dir = tempDir(t, "qm-public-paths-");
   const configPath = join(dir, "qm.config.jsonc");
   const service = (name: string) => ({
     ecrRepository: name,
@@ -132,14 +132,13 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
     close() {
       if (prior === undefined) delete process.env.AWS_BIN;
       else process.env.AWS_BIN = prior;
-      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
 
 for (const blueGreen of [false, true]) {
-  test(`declared public plugin paths qualify ${blueGreen ? "blue/green" : "rolling"} ingress`, () => {
-    const f = fixture(undefined, blueGreen);
+  test(`declared public plugin paths qualify ${blueGreen ? "blue/green" : "rolling"} ingress`, (t) => {
+    const f = fixture(t, undefined, blueGreen);
     try {
       const config = loadConfigAt(f.configPath).config;
       assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
@@ -148,8 +147,8 @@ for (const blueGreen of [false, true]) {
       f.close();
     }
   });
-  test(`public plugin cannot sit behind core or portal ${blueGreen ? "blue/green" : "rolling"} routes`, () => {
-    const f = fixture(undefined, blueGreen, "15");
+  test(`public plugin cannot sit behind core or portal ${blueGreen ? "blue/green" : "rolling"} routes`, (t) => {
+    const f = fixture(t, undefined, blueGreen, "15");
     try {
       assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
     } finally {
@@ -158,8 +157,8 @@ for (const blueGreen of [false, true]) {
   });
 }
 
-test("public plugin live routing cannot broaden declared paths", () => {
-  const f = fixture(["/hooks/events/*"]);
+test("public plugin live routing cannot broaden declared paths", (t) => {
+  const f = fixture(t, ["/hooks/events/*"]);
   try {
     assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /exactly its declared/);
   } finally {
@@ -168,8 +167,8 @@ test("public plugin live routing cannot broaden declared paths", () => {
 });
 
 for (const paths of [[], ["/*"], ["/v1/*"], ["/hooks/../*"], ["/hooks/?"], ["/hooks/*", "/hooks/*"]]) {
-  test(`reject unsafe public plugin paths ${JSON.stringify(paths)}`, () => {
-    const f = fixture(paths);
+  test(`reject unsafe public plugin paths ${JSON.stringify(paths)}`, (t) => {
+    const f = fixture(t, paths);
     try {
       assert.throws(() => loadConfigAt(f.configPath), /publicPaths/);
     } finally {
@@ -179,8 +178,8 @@ for (const paths of [[], ["/*"], ["/v1/*"], ["/hooks/../*"], ["/hooks/?"], ["/ho
 }
 
 for (const name of ["v1", "d", "key", "models", "slack"]) {
-  test(`a plugin cannot claim the core ${name} namespace`, () => {
-    const f = fixture();
+  test(`a plugin cannot claim the core ${name} namespace`, (t) => {
+    const f = fixture(t);
     try {
       const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
       raw.plugins[0].name = name;

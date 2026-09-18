@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import https from "node:https";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { main } from "../src/cli.ts";
 import { renderTaskDefinition } from "../src/backends/aws.ts";
 import { computedSecrets } from "../src/secrets.ts";
+import { tempDir } from "./support.ts";
 
 async function run(argv: string[], cwd?: string): Promise<{ out: string; exitCode: number | null }> {
   const lines: string[] = [];
@@ -70,8 +70,8 @@ test("help lists every deploy + develop command and the deploy-wide options", as
   }
 });
 
-test("layer sync exposes deployment-layer reconciliation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-layer-"));
+test("layer sync exposes deployment-layer reconciliation", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-layer-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -83,17 +83,13 @@ test("layer sync exposes deployment-layer reconciliation", async () => {
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const result = await run(["layer", "sync", "--sandbox-dir", join(dir, "missing")], dir);
-    assert.equal(result.exitCode, null, result.out);
-    assert.match(result.out, /deployment layer: skipped/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const result = await run(["layer", "sync", "--sandbox-dir", join(dir, "missing")], dir);
+  assert.equal(result.exitCode, null, result.out);
+  assert.match(result.out, /deployment layer: skipped/);
 });
 
-test("check --json reports failures under a stable contract clause id", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check --json reports failures under a stable contract clause id", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -104,32 +100,24 @@ test("check --json reports failures under a stable contract clause id", async ()
       services: ["core"],
     }),
   );
-  try {
-    const { out, exitCode } = await run(["check", "--json"], dir);
-    assert.equal(exitCode, 1);
-    const result = JSON.parse(out) as { valid: boolean; clauses: Record<string, unknown> };
-    assert.equal(result.valid, false);
-    assert.deepEqual(Object.keys(result.clauses), ["config.v1"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { out, exitCode } = await run(["check", "--json"], dir);
+  assert.equal(exitCode, 1);
+  const result = JSON.parse(out) as { valid: boolean; clauses: Record<string, unknown> };
+  assert.equal(result.valid, false);
+  assert.deepEqual(Object.keys(result.clauses), ["config.v1"]);
 });
 
-test("check --json treats malformed contract JSON as a contract failure", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check --json treats malformed contract JSON as a contract failure", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(join(dir, CONFIG_FILENAME), "{ not json");
-  try {
-    const { out, exitCode } = await run(["check", "--json"], dir);
-    assert.equal(exitCode, 1);
-    const result = JSON.parse(out) as { valid: boolean };
-    assert.equal(result.valid, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { out, exitCode } = await run(["check", "--json"], dir);
+  assert.equal(exitCode, 1);
+  const result = JSON.parse(out) as { valid: boolean };
+  assert.equal(result.valid, false);
 });
 
-test("check --json reserves exit 2 for an unsupported live invocation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check --json reserves exit 2 for an unsupported live invocation", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -141,18 +129,14 @@ test("check --json reserves exit 2 for an unsupported live invocation", async ()
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const { out, exitCode } = await run(["check", "--json", "--live"], dir);
-    assert.equal(exitCode, 2, out);
-    const result = JSON.parse(out) as { clauses: Record<string, { status: string }> };
-    assert.equal(result.clauses["cli.invocation"]?.status, "error");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { out, exitCode } = await run(["check", "--json", "--live"], dir);
+  assert.equal(exitCode, 2, out);
+  const result = JSON.parse(out) as { clauses: Record<string, { status: string }> };
+  assert.equal(result.clauses["cli.invocation"]?.status, "error");
 });
 
-test("check flag typos are invocation errors and never print a success first", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check flag typos are invocation errors and never print a success first", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -164,24 +148,20 @@ test("check flag typos are invocation errors and never print a success first", a
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const json = await run(["check", "--json", "--jsno"], dir);
-    assert.equal(json.exitCode, 2, json.out);
-    const parsed = JSON.parse(json.out) as { clauses: Record<string, { status: string }> };
-    assert.equal(parsed.clauses["cli.invocation"]?.status, "error");
-    const buildFrom = await run(["check", "--build-from", "/tmp/checkout"], dir);
-    assert.equal(buildFrom.exitCode, 2, buildFrom.out);
-    assert.match(buildFrom.out, /unknown option: --build-from/);
-    const live = await run(["check", "--live"], dir);
-    assert.equal(live.exitCode, 2, live.out);
-    assert.doesNotMatch(live.out, /check passed/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const json = await run(["check", "--json", "--jsno"], dir);
+  assert.equal(json.exitCode, 2, json.out);
+  const parsed = JSON.parse(json.out) as { clauses: Record<string, { status: string }> };
+  assert.equal(parsed.clauses["cli.invocation"]?.status, "error");
+  const buildFrom = await run(["check", "--build-from", "/tmp/checkout"], dir);
+  assert.equal(buildFrom.exitCode, 2, buildFrom.out);
+  assert.match(buildFrom.out, /unknown option: --build-from/);
+  const live = await run(["check", "--live"], dir);
+  assert.equal(live.exitCode, 2, live.out);
+  assert.doesNotMatch(live.out, /check passed/);
 });
 
-test("non-JSON check --live fails when the target has no live drift implementation (exit 2, like --json)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("non-JSON check --live fails when the target has no live drift implementation (exit 2, like --json)", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -193,17 +173,13 @@ test("non-JSON check --live fails when the target has no live drift implementati
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const { out, exitCode } = await run(["check", "--live"], dir);
-    assert.equal(exitCode, 2, out);
-    assert.match(out, /check --live is not implemented for target docker/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { out, exitCode } = await run(["check", "--live"], dir);
+  assert.equal(exitCode, 2, out);
+  assert.match(out, /check --live is not implemented for target docker/);
 });
 
-test("check --live on aws runs live drift checks in plain and JSON modes", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check --live on aws runs live drift checks in plain and JSON modes", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   const aws = join(dir, "aws-fake");
   writeFileSync(
     aws,
@@ -250,12 +226,11 @@ else console.log("{}");
   } finally {
     if (previousAwsBin === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = previousAwsBin;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("successful check --json --live reports the live-drift clause", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  const dir = tempDir(t, "qm-dispatch-");
   const aws = join(dir, "aws-fake");
   const digest = `sha256:${"a".repeat(64)}`;
   const raw = {
@@ -366,7 +341,6 @@ else console.log("{}");
     if (previousSha === undefined) delete process.env.GITHUB_SHA;
     else process.env.GITHUB_SHA = previousSha;
     globalThis.fetch = previousFetch;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -383,8 +357,8 @@ test("an unknown command errors (exit 1) and shows help", async () => {
   assert.match(out, /unknown command: frobnicate/);
 });
 
-test("--tail must be a non-negative integer", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("--tail must be a non-negative integer", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -396,17 +370,13 @@ test("--tail must be a non-negative integer", async () => {
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const { out, exitCode } = await run(["logs", "--tail", "abc"], dir);
-    assert.equal(exitCode, 2);
-    assert.match(out, /--tail must be a non-negative integer/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { out, exitCode } = await run(["logs", "--tail", "abc"], dir);
+  assert.equal(exitCode, 2);
+  assert.match(out, /--tail must be a non-negative integer/);
 });
 
-test("--env-file that does not exist is an error", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("--env-file that does not exist is an error", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -418,7 +388,7 @@ test("--env-file that does not exist is an error", async () => {
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  const xdg = mkdtempSync(join(tmpdir(), "qm-xdg-"));
+  const xdg = tempDir(t, "qm-xdg-");
   const prevXdg = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = xdg;
   try {
@@ -428,13 +398,11 @@ test("--env-file that does not exist is an error", async () => {
   } finally {
     if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = prevXdg;
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(xdg, { recursive: true, force: true });
   }
 });
 
-test("docker --only is rejected explicitly instead of silently restarting the full stack", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("docker --only is rejected explicitly instead of silently restarting the full stack", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -445,13 +413,9 @@ test("docker --only is rejected explicitly instead of silently restarting the fu
       services: ["core"],
     }),
   );
-  try {
-    const result = await run(["plan", "--only", "core"], dir);
-    assert.equal(result.exitCode, 2, result.out);
-    assert.match(result.out, /--only is not supported for target docker/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const result = await run(["plan", "--only", "core"], dir);
+  assert.equal(result.exitCode, 2, result.out);
+  assert.match(result.out, /--only is not supported for target docker/);
 });
 
 test("destructive commands reject unknown flags before resolving a deployment", async () => {
@@ -470,8 +434,8 @@ test("destructive commands reject unknown flags before resolving a deployment", 
   }
 });
 
-test("infra delete-task-definitions requires explicit destructive confirmation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("infra delete-task-definitions requires explicit destructive confirmation", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -496,13 +460,9 @@ test("infra delete-task-definitions requires explicit destructive confirmation",
       },
     }),
   );
-  try {
-    const result = await run(["infra", "delete-task-definitions"], dir);
-    assert.equal(result.exitCode, 2, result.out);
-    assert.match(result.out, /infra delete-task-definitions requires --yes/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const result = await run(["infra", "delete-task-definitions"], dir);
+  assert.equal(result.exitCode, 2, result.out);
+  assert.match(result.out, /infra delete-task-definitions requires --yes/);
 });
 
 test("destructive commands reject extra positionals and boolean flags never consume them", async () => {
@@ -535,10 +495,10 @@ test("unknown dev subcommands validate flags and extra arguments before reportin
   assert.match(extra.out, /unexpected argument: "unexpected"/);
 });
 
-test("conformance honors the deploy-wide --config and --sandbox-dir flags", async () => {
-  const deployDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
-  const sandboxDir = mkdtempSync(join(tmpdir(), "qm-dispatch-sb-"));
-  const elsewhere = mkdtempSync(join(tmpdir(), "qm-dispatch-cwd-"));
+test("conformance honors the deploy-wide --config and --sandbox-dir flags", async (t) => {
+  const deployDir = tempDir(t, "qm-dispatch-");
+  const sandboxDir = tempDir(t, "qm-dispatch-sb-");
+  const elsewhere = tempDir(t, "qm-dispatch-cwd-");
   writeFileSync(
     join(deployDir, CONFIG_FILENAME),
     JSON.stringify({
@@ -552,36 +512,32 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
   );
   mkdirSync(join(sandboxDir, "skills", "greet"), { recursive: true });
   writeFileSync(join(sandboxDir, "skills", "greet", "SKILL.md"), "---\nname: greet\ndescription: says hi\n---\nbody\n");
-  try {
-    const positional = await run(["conformance", deployDir, "--static"], elsewhere);
-    assert.equal(positional.exitCode, null, positional.out);
-    assert.match(positional.out, /conformance — flagged/);
+  const positional = await run(["conformance", deployDir, "--static"], elsewhere);
+  assert.equal(positional.exitCode, null, positional.out);
+  assert.match(positional.out, /conformance — flagged/);
 
-    const viaConfig = await run(["conformance", "--static", "--config", join(deployDir, CONFIG_FILENAME)], elsewhere);
-    assert.equal(viaConfig.exitCode, null, viaConfig.out);
-    assert.match(viaConfig.out, /conformance — flagged/);
-    assert.match(viaConfig.out, /0 tools, 0 skills/, "layer defaults to <configDir>/sandbox, not cwd");
+  const viaConfig = await run(["conformance", "--static", "--config", join(deployDir, CONFIG_FILENAME)], elsewhere);
+  assert.equal(viaConfig.exitCode, null, viaConfig.out);
+  assert.match(viaConfig.out, /conformance — flagged/);
+  assert.match(viaConfig.out, /0 tools, 0 skills/, "layer defaults to <configDir>/sandbox, not cwd");
 
-    const flagBeatsPositional = await run(
-      ["conformance", elsewhere, "--static", "--config", join(deployDir, CONFIG_FILENAME)],
-      elsewhere,
-    );
-    assert.equal(flagBeatsPositional.exitCode, null, flagBeatsPositional.out);
-    assert.match(flagBeatsPositional.out, /conformance — flagged/);
+  const flagBeatsPositional = await run(
+    ["conformance", elsewhere, "--static", "--config", join(deployDir, CONFIG_FILENAME)],
+    elsewhere,
+  );
+  assert.equal(flagBeatsPositional.exitCode, null, flagBeatsPositional.out);
+  assert.match(flagBeatsPositional.out, /conformance — flagged/);
 
-    const viaSandbox = await run(
-      ["conformance", "--static", "--config", join(deployDir, CONFIG_FILENAME), "--sandbox-dir", sandboxDir],
-      elsewhere,
-    );
-    assert.equal(viaSandbox.exitCode, null, viaSandbox.out);
-    assert.match(viaSandbox.out, /0 tools, 1 skills/);
-  } finally {
-    for (const d of [deployDir, sandboxDir, elsewhere]) rmSync(d, { recursive: true, force: true });
-  }
+  const viaSandbox = await run(
+    ["conformance", "--static", "--config", join(deployDir, CONFIG_FILENAME), "--sandbox-dir", sandboxDir],
+    elsewhere,
+  );
+  assert.equal(viaSandbox.exitCode, null, viaSandbox.out);
+  assert.match(viaSandbox.out, /0 tools, 1 skills/);
 });
 
-test("config get prints raw scalars and JSON objects, honors --target, and fails loudly on unset paths", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-cfg-"));
+test("config get prints raw scalars and JSON objects, honors --target, and fails loudly on unset paths", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-cfg-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -593,34 +549,30 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
       sandbox: { app: "acme-sandboxes" },
     }),
   );
-  try {
-    const scalar = await run(["config", "get", "orgId"], dir);
-    assert.equal(scalar.exitCode, null, scalar.out);
-    assert.equal(scalar.out, "acme", "scalars print raw, with no quotes");
+  const scalar = await run(["config", "get", "orgId"], dir);
+  assert.equal(scalar.exitCode, null, scalar.out);
+  assert.equal(scalar.out, "acme", "scalars print raw, with no quotes");
 
-    const nested = await run(["config", "get", "sandbox.app"], dir);
-    assert.equal(nested.out, "acme-sandboxes");
+  const nested = await run(["config", "get", "sandbox.app"], dir);
+  assert.equal(nested.out, "acme-sandboxes");
 
-    const object = await run(["config", "get", "sandbox"], dir);
-    assert.deepEqual(JSON.parse(object.out), { app: "acme-sandboxes" }, "objects print as JSON");
+  const object = await run(["config", "get", "sandbox"], dir);
+  assert.deepEqual(JSON.parse(object.out), { app: "acme-sandboxes" }, "objects print as JSON");
 
-    const overridden = await run(["config", "get", "target", "--target", "fly"], dir);
-    assert.equal(overridden.out, "fly", "--target overrides the config's durable value, same as every deploy command");
+  const overridden = await run(["config", "get", "target", "--target", "fly"], dir);
+  assert.equal(overridden.out, "fly", "--target overrides the config's durable value, same as every deploy command");
 
-    const missing = await run(["config", "get", "aws.deployRoleArn"], dir);
-    assert.equal(missing.exitCode, 1);
-    assert.match(missing.out, /"aws\.deployRoleArn" is not set/);
+  const missing = await run(["config", "get", "aws.deployRoleArn"], dir);
+  assert.equal(missing.exitCode, 1);
+  assert.match(missing.out, /"aws\.deployRoleArn" is not set/);
 
-    const usage = await run(["config", "get"], dir);
-    assert.equal(usage.exitCode, 2);
-    assert.match(usage.out, /usage: qm config get/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const usage = await run(["config", "get"], dir);
+  assert.equal(usage.exitCode, 2);
+  assert.match(usage.out, /usage: qm config get/);
 });
 
-test("--target revalidates the effective provider config", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-target-validation-"));
+test("--target revalidates the effective provider config", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-target-validation-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -632,16 +584,12 @@ test("--target revalidates the effective provider config", async () => {
       sandbox: { backend: "sprites", app: "acme-sandboxes" },
     }),
   );
-  try {
-    const result = await run(["check", "--target", "aws"], dir);
-    assert.equal(result.exitCode, 1);
-    assert.match(result.out, /target "aws" requires an "aws" block/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const result = await run(["check", "--target", "aws"], dir);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.out, /target "aws" requires an "aws" block/);
 });
 
-test("check --json routes failures on structured clause data, not message sniffing", async () => {
+test("check --json routes failures on structured clause data, not message sniffing", async (t) => {
   const base = {
     contract: 1,
     orgId: "acme",
@@ -650,11 +598,11 @@ test("check --json routes failures on structured clause data, not message sniffi
     services: ["core"],
     sandbox: { app: "acme-sandboxes" },
   };
-  const sandboxDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  const sandboxDir = tempDir(t, "qm-dispatch-");
   writeFileSync(join(sandboxDir, CONFIG_FILENAME), JSON.stringify(base));
   mkdirSync(join(sandboxDir, "sandbox", "tools", "bad"), { recursive: true });
   writeFileSync(join(sandboxDir, "sandbox", "tools", "bad", "tool.json"), "{ nope");
-  const awsDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  const awsDir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(awsDir, CONFIG_FILENAME),
     JSON.stringify({
@@ -676,26 +624,22 @@ test("check --json routes failures on structured clause data, not message sniffi
       },
     }),
   );
-  const secretDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+  const secretDir = tempDir(t, "qm-dispatch-");
   writeFileSync(join(secretDir, CONFIG_FILENAME), JSON.stringify({ ...base, env: { core: { MY_API_KEY: "x" } } }));
-  try {
-    for (const [dir, clause] of [
-      [sandboxDir, "sandbox.descriptors"],
-      [awsDir, "config.v1"],
-      [secretDir, "config.no-secret-values"],
-    ] as const) {
-      const { out, exitCode } = await run(["check", "--json"], dir);
-      assert.equal(exitCode, 1, out);
-      const result = JSON.parse(out) as { clauses: Record<string, unknown> };
-      assert.deepEqual(Object.keys(result.clauses), [clause], out);
-    }
-  } finally {
-    for (const dir of [sandboxDir, awsDir, secretDir]) rmSync(dir, { recursive: true, force: true });
+  for (const [dir, clause] of [
+    [sandboxDir, "sandbox.descriptors"],
+    [awsDir, "config.v1"],
+    [secretDir, "config.no-secret-values"],
+  ] as const) {
+    const { out, exitCode } = await run(["check", "--json"], dir);
+    assert.equal(exitCode, 1, out);
+    const result = JSON.parse(out) as { clauses: Record<string, unknown> };
+    assert.deepEqual(Object.keys(result.clauses), [clause], out);
   }
 });
 
-test("check --json groups a multi-clause failure under each error's own clause, without a header line", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
+test("check --json groups a multi-clause failure under each error's own clause, without a header line", async (t) => {
+  const dir = tempDir(t, "qm-dispatch-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -710,22 +654,18 @@ test("check --json groups a multi-clause failure under each error's own clause, 
   );
   mkdirSync(join(dir, "sandbox", "tools", "bad"), { recursive: true });
   writeFileSync(join(dir, "sandbox", "tools", "bad", "tool.json"), "{ nope");
-  try {
-    const { out, exitCode } = await run(["check", "--json"], dir);
-    assert.equal(exitCode, 1, out);
-    const result = JSON.parse(out) as { valid: boolean; clauses: Record<string, { status: string; errors: string[] }> };
-    assert.equal(result.valid, false);
-    assert.deepEqual(Object.keys(result.clauses).sort(), ["config.no-secret-values", "sandbox.descriptors"]);
-    assert.match(result.clauses["config.no-secret-values"]!.errors.join("\n"), /core\.MY_API_KEY/);
-    assert.match(result.clauses["sandbox.descriptors"]!.errors.join("\n"), /not valid JSON/);
-    for (const clause of Object.values(result.clauses)) {
-      assert.equal(clause.status, "fail");
-      assert.ok(
-        clause.errors.every((message) => !message.includes("check failed")),
-        out,
-      );
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  const { out, exitCode } = await run(["check", "--json"], dir);
+  assert.equal(exitCode, 1, out);
+  const result = JSON.parse(out) as { valid: boolean; clauses: Record<string, { status: string; errors: string[] }> };
+  assert.equal(result.valid, false);
+  assert.deepEqual(Object.keys(result.clauses).sort(), ["config.no-secret-values", "sandbox.descriptors"]);
+  assert.match(result.clauses["config.no-secret-values"]!.errors.join("\n"), /core\.MY_API_KEY/);
+  assert.match(result.clauses["sandbox.descriptors"]!.errors.join("\n"), /not valid JSON/);
+  for (const clause of Object.values(result.clauses)) {
+    assert.equal(clause.status, "fail");
+    assert.ok(
+      clause.errors.every((message) => !message.includes("check failed")),
+      out,
+    );
   }
 });

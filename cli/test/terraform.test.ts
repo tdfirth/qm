@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   awsObjectStoreBucket,
@@ -11,6 +10,7 @@ import {
   terraformVarsDrift,
 } from "../src/terraform.ts";
 import type { QmConfig } from "../src/config.ts";
+import { tempDir } from "./support.ts";
 
 const DEPLOY_IMAGE = "acme-qm-sandbox";
 
@@ -270,39 +270,35 @@ test("an active assume-role policy blocks task-role replacement", () => {
   );
 });
 
-test("assume-role config rejects vendored AWS scaffolds that predate workload roles", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-terraform-"));
-  try {
-    const infra = join(dir, "infra");
-    mkdirSync(infra);
-    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(
-      join(infra, "variables.tf"),
-      'variable "services" { type = map(object({ assume_role_arns = optional(set(string)) })) }\n',
-    );
-    writeFileSync(
-      join(infra, "main.tf"),
-      'resource "aws_iam_role" "assume_role_task" {}\nresource "aws_iam_role_policy" "managed_service_assume_role" {}\nresource "aws_iam_role_policy" "configured_service_assume_role" {}\n',
-    );
-    const configured: QmConfig = {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          core: {
-            ...config.aws!.services.core!,
-            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
-          },
+test("assume-role config rejects vendored AWS scaffolds that predate workload roles", (t) => {
+  const dir = tempDir(t, "qm-legacy-terraform-");
+  const infra = join(dir, "infra");
+  mkdirSync(infra);
+  writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+  writeFileSync(
+    join(infra, "variables.tf"),
+    'variable "services" { type = map(object({ assume_role_arns = optional(set(string)) })) }\n',
+  );
+  writeFileSync(
+    join(infra, "main.tf"),
+    'resource "aws_iam_role" "assume_role_task" {}\nresource "aws_iam_role_policy" "managed_service_assume_role" {}\nresource "aws_iam_role_policy" "configured_service_assume_role" {}\n',
+  );
+  const configured: QmConfig = {
+    ...config,
+    aws: {
+      ...config.aws!,
+      services: {
+        core: {
+          ...config.aws!.services.core!,
+          assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
         },
       },
-    };
-    assert.throws(
-      () => renderTerraformVars(configured, dir),
-      /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    },
+  };
+  assert.throws(
+    () => renderTerraformVars(configured, dir),
+    /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
+  );
 });
 
 test("the deploy role registers task definitions only for configured ECS families", () => {

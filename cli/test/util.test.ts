@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalJson, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import { tempDir } from "./support.ts";
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
@@ -42,8 +42,7 @@ test("canonicalJson sorts keys and matches JSON.stringify's undefined semantics"
 });
 
 test("readEnvFile preserves hashes in unquoted values", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeFileSync(file, "# ignored\nTOKEN=abc#def\nURL=https://host/path#fragment\n");
   assert.deepEqual(
@@ -56,8 +55,7 @@ test("readEnvFile preserves hashes in unquoted values", (t) => {
 });
 
 test("writeEnvValue appends a new key with 0600 on a fresh file", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeEnvValue(file, "NEW_KEY", "value-1");
   assert.equal(readFileSync(file, "utf8"), "NEW_KEY=value-1\n");
@@ -67,8 +65,7 @@ test("writeEnvValue appends a new key with 0600 on a fresh file", (t) => {
 });
 
 test("writeEnvValue replaces an existing key in place, preserving order and comments", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeFileSync(file, "# comment\nA=1\nB=old\nC=3\n");
   writeEnvValue(file, "B", "new#value");
@@ -77,8 +74,7 @@ test("writeEnvValue replaces an existing key in place, preserving order and comm
 });
 
 test("writeEnvValue collapses duplicate occurrences into the first", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeFileSync(file, "A=1\nB=first\nC=3\nB=second\nB=third\n");
   writeEnvValue(file, "B", "only");
@@ -86,8 +82,7 @@ test("writeEnvValue collapses duplicate occurrences into the first", (t) => {
 });
 
 test("writeEnvValue preserves the existing file mode", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeFileSync(file, "A=1\n", { mode: 0o640 });
   chmodSync(file, 0o640);
@@ -97,16 +92,14 @@ test("writeEnvValue preserves the existing file mode", (t) => {
 });
 
 test("writeEnvValue rejects invalid keys and multi-line values", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   assert.throws(() => writeEnvValue(file, "BAD KEY", "x"));
   assert.throws(() => writeEnvValue(file, "GOOD_KEY", "a\nb"));
 });
 
 test("readEnvFile matches Node --env-file for export prefixes and quoted values", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "qm-env-");
   const file = join(dir, ".env");
   writeFileSync(
     file,

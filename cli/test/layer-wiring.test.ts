@@ -1,13 +1,17 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
+import { tempDir } from "./support.ts";
 
-function makeDeployment(config: Record<string, unknown>, setup: (dir: string) => void = () => {}): string {
-  const dir = mkdtempSync(join(tmpdir(), "qm-wiring-"));
+function makeDeployment(
+  t: TestContext,
+  config: Record<string, unknown>,
+  setup: (dir: string) => void = () => {},
+): string {
+  const dir = tempDir(t, "qm-wiring-");
   writeFileSync(
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
@@ -35,8 +39,8 @@ function sandboxLayer(dir: string): void {
   writeFileSync(join(dir, "sandbox", "skills", "greet", "SKILL.md"), "---\nname: greet\ndescription: x\n---\nbody\n");
 }
 
-async function plan(configDir: string, opts: { sandboxDir?: string } = {}): Promise<string> {
-  const xdg = mkdtempSync(join(tmpdir(), "qm-xdg-"));
+async function plan(t: TestContext, configDir: string, opts: { sandboxDir?: string } = {}): Promise<string> {
+  const xdg = tempDir(t, "qm-xdg-");
   const prevXdg = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = xdg;
   const lines: string[] = [];
@@ -52,64 +56,47 @@ async function plan(configDir: string, opts: { sandboxDir?: string } = {}): Prom
     console.warn = warn;
     if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = prevXdg;
-    rmSync(xdg, { recursive: true, force: true });
   }
   return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-test("local sandbox dry-run derives a deployment-scoped runnable image", async () => {
-  const dir = makeDeployment({ sandbox: { backend: "local" } });
-  try {
-    const out = await plan(dir);
-    assert.match(out, /sandbox: local image qm-wiretest-sandbox-local:latest/);
-    assert.match(out, /LOCAL_SANDBOX_IMAGE/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("local sandbox dry-run derives a deployment-scoped runnable image", async (t) => {
+  const dir = makeDeployment(t, { sandbox: { backend: "local" } });
+  const out = await plan(t, dir);
+  assert.match(out, /sandbox: local image qm-wiretest-sandbox-local:latest/);
+  assert.match(out, /LOCAL_SANDBOX_IMAGE/);
 });
 
-test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT_LAYER", async () => {
-  const dir = makeDeployment({}, sandboxLayer);
-  try {
-    const out = await plan(dir);
-    assert.match(out, /DEPLOYMENT_LAYER/, "core env advertises DEPLOYMENT_LAYER");
-    assert.match(out, new RegExp(`${join(dir, "sandbox")} → /layer \\(skills, tools\\)`));
-    assert.doesNotMatch(
-      out,
-      /PLUGIN_SKILLS_DIRS/,
-      "layer skills seed via the DEPLOYMENT_LAYER store, not PLUGIN_SKILLS_DIRS (which would replace the image's plugin defaults)",
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT_LAYER", async (t) => {
+  const dir = makeDeployment(t, {}, sandboxLayer);
+  const out = await plan(t, dir);
+  assert.match(out, /DEPLOYMENT_LAYER/, "core env advertises DEPLOYMENT_LAYER");
+  assert.match(out, new RegExp(`${join(dir, "sandbox")} → /layer \\(skills, tools\\)`));
+  assert.doesNotMatch(
+    out,
+    /PLUGIN_SKILLS_DIRS/,
+    "layer skills seed via the DEPLOYMENT_LAYER store, not PLUGIN_SKILLS_DIRS (which would replace the image's plugin defaults)",
+  );
 });
 
-test("a bare deployment sets no DEPLOYMENT_LAYER and reports an empty layer", async () => {
-  const dir = makeDeployment({});
-  try {
-    const out = await plan(dir);
-    assert.doesNotMatch(out, /DEPLOYMENT_LAYER/);
-    assert.match(out, /no skills\/ or tools\/ in/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("a bare deployment sets no DEPLOYMENT_LAYER and reports an empty layer", async (t) => {
+  const dir = makeDeployment(t, {});
+  const out = await plan(t, dir);
+  assert.doesNotMatch(out, /DEPLOYMENT_LAYER/);
+  assert.match(out, /no skills\/ or tools\/ in/);
 });
 
-test("--sandbox-dir sources the layer from a shared dir while config stays in the deployment dir", async () => {
-  const dir = makeDeployment({});
-  const shared = mkdtempSync(join(tmpdir(), "qm-shared-"));
+test("--sandbox-dir sources the layer from a shared dir while config stays in the deployment dir", async (t) => {
+  const dir = makeDeployment(t, {});
+  const shared = tempDir(t, "qm-shared-");
   sandboxLayer(shared);
-  try {
-    const out = await plan(dir, { sandboxDir: join(shared, "sandbox") });
-    assert.match(out, new RegExp(`${join(shared, "sandbox")} → /layer`));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(shared, { recursive: true, force: true });
-  }
+  const out = await plan(t, dir, { sandboxDir: join(shared, "sandbox") });
+  assert.match(out, new RegExp(`${join(shared, "sandbox")} → /layer`));
 });
 
-test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env", async () => {
+test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env", async (t) => {
   const dir = makeDeployment(
+    t,
     {
       sandbox: {
         app: "wire-sandboxes",
@@ -119,68 +106,51 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
     },
     (d) => writeFileSync(join(d, ".env"), "COMPANY_API_TOKEN=sek-ret\n"),
   );
-  try {
-    const out = await plan(dir);
-    assert.match(out, /FLY_RESIDENT_ENV_TZ/);
-    assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const out = await plan(t, dir);
+  assert.match(out, /FLY_RESIDENT_ENV_TZ/);
+  assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
 });
 
-test("a missing secretEnv value is warned, not invented", async () => {
-  const dir = makeDeployment({
+test("a missing secretEnv value is warned, not invented", async (t) => {
+  const dir = makeDeployment(t, {
     sandbox: {
       app: "s",
       secretEnv: ["NOPE_TOKEN"],
     },
   });
-  try {
-    const out = await plan(dir);
-    assert.match(out, /sandbox.secretEnv "NOPE_TOKEN" has no value/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const out = await plan(t, dir);
+  assert.match(out, /sandbox.secretEnv "NOPE_TOKEN" has no value/);
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
-  const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
-  try {
-    const out = await plan(dir);
-    assert.match(out, /PI_MODEL/);
-    assert.match(out, /host :8080/);
-    assert.match(out, /host :8081/);
-    assert.match(out, /host :8082/);
-    assert.doesNotMatch(out, /host :8083/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async (t) => {
+  const dir = makeDeployment(t, { model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
+  const out = await plan(t, dir);
+  assert.match(out, /PI_MODEL/);
+  assert.match(out, /host :8080/);
+  assert.match(out, /host :8081/);
+  assert.match(out, /host :8082/);
+  assert.doesNotMatch(out, /host :8083/);
 });
 
-test("QM_BASE_PORT overrides the host port base for one run", async () => {
-  const dir = makeDeployment({ services: ["core"] });
+test("QM_BASE_PORT overrides the host port base for one run", async (t) => {
+  const dir = makeDeployment(t, { services: ["core"] });
   const prev = process.env.QM_BASE_PORT;
   process.env.QM_BASE_PORT = "9000";
   try {
-    const out = await plan(dir);
+    const out = await plan(t, dir);
     assert.match(out, /host :9000/);
   } finally {
     if (prev === undefined) delete process.env.QM_BASE_PORT;
     else process.env.QM_BASE_PORT = prev;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("source + image plugins both appear in the plan", async () => {
-  const dir = makeDeployment({ plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }] }, (d) => {
+test("source + image plugins both appear in the plan", async (t) => {
+  const dir = makeDeployment(t, { plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }] }, (d) => {
     mkdirSync(join(d, "plugins", "intercom"), { recursive: true });
     writeFileSync(join(d, "plugins", "intercom", "Dockerfile"), "FROM scratch\n");
   });
-  try {
-    const out = await plan(dir);
-    assert.match(out, /plugin intercom: build plugins\/intercom\/Dockerfile/);
-    assert.match(out, /plugin linear: pull ghcr\.io\/acme\/linear:1/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const out = await plan(t, dir);
+  assert.match(out, /plugin intercom: build plugins\/intercom\/Dockerfile/);
+  assert.match(out, /plugin linear: pull ghcr\.io\/acme\/linear:1/);
 });

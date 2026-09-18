@@ -4,8 +4,7 @@ import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   assertAwsDeploymentStorage,
@@ -47,6 +46,7 @@ import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
 import { hostingProvider } from "../src/backends/registry.ts";
+import { tempDir } from "./support.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -894,8 +894,8 @@ test("AWS deploy-role trust accepts a subject list that contains the expected su
   );
 });
 
-test("githubTrustSubject pins the deploy branch, never the working checkout's branch", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-trust-subject-"));
+test("githubTrustSubject pins the deploy branch, never the working checkout's branch", (t) => {
+  const dir = tempDir(t, "qm-aws-trust-subject-");
   const git = (...args: string[]): void => {
     const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
@@ -976,7 +976,6 @@ test("githubTrustSubject pins the deploy branch, never the working checkout's br
     else process.env.GITHUB_REPOSITORY = priorRepo;
     if (priorRef === undefined) delete process.env.GITHUB_REF;
     else process.env.GITHUB_REF = priorRef;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -999,8 +998,8 @@ test("AWS doctor requires the public listener transport to match publicUrl", () 
   assert.throws(() => assertAwsPublicListener("http://agent.acme.example", httpsListener), /publicUrl is HTTP/);
 });
 
-test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-http-bootstrap-"));
+test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async (t) => {
+  const dir = tempDir(t, "qm-aws-http-bootstrap-");
   const fake = fakeAws(dir, `console.log("");`);
   try {
     await assert.rejects(
@@ -1010,12 +1009,11 @@ test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async () =
     assert.equal(readFileSync(fake.log, "utf8"), "");
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy requires the live ALB listener to match the HTTPS public URL", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-listener-"));
+test("AWS deploy requires the live ALB listener to match the HTTPS public URL", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-listener-");
   const fake = fakeAws(dir, `console.log("");`);
   const prior = process.env.AWS_FAKE_LISTENER_PROTOCOL;
   process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
@@ -1032,12 +1030,11 @@ test("AWS deploy requires the live ALB listener to match the HTTPS public URL", 
     if (prior === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
     else process.env.AWS_FAKE_LISTENER_PROTOCOL = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy binds its public origin DNS to this stack's ALB", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-dns-binding-"));
+test("AWS deploy binds its public origin DNS to this stack's ALB", async (t) => {
+  const dir = tempDir(t, "qm-aws-dns-binding-");
   const fake = statefulAws(dir, oneServiceConfig());
   const prior = process.env.AWS_FAKE_ALB_DNS;
   process.env.AWS_FAKE_ALB_DNS = "127.0.0.1";
@@ -1051,12 +1048,11 @@ test("AWS deploy binds its public origin DNS to this stack's ALB", async () => {
     if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy can prepare an exact candidate on the inactive production stack", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-inactive-candidate-"));
+test("AWS deploy can prepare an exact candidate on the inactive production stack", async (t) => {
+  const dir = tempDir(t, "qm-aws-inactive-candidate-");
   const candidatePath = join(dir, "candidate.json");
   writeFileSync(
     candidatePath,
@@ -1086,12 +1082,11 @@ test("AWS deploy can prepare an exact candidate on the inactive production stack
     if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy requires the exact active successful MicroVM image version", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-image-version-"));
+test("AWS deploy requires the exact active successful MicroVM image version", async (t) => {
+  const dir = tempDir(t, "qm-aws-image-version-");
   const fake = statefulAws(dir, oneServiceConfig());
   const prior = process.env.AWS_FAKE_IMAGE_STATE;
   process.env.AWS_FAKE_IMAGE_STATE = "FAILED";
@@ -1111,12 +1106,11 @@ test("AWS deploy requires the exact active successful MicroVM image version", as
     if (prior === undefined) delete process.env.AWS_FAKE_IMAGE_STATE;
     else process.env.AWS_FAKE_IMAGE_STATE = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy requires the live core-only ALB to default 404 and expose exactly /v1/*", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-routing-"));
+test("AWS deploy requires the live core-only ALB to default 404 and expose exactly /v1/*", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-routing-");
   const run = async (
     env:
       | "AWS_FAKE_DEFAULT_FORWARD"
@@ -1141,32 +1135,25 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
       fake.restore();
     }
   };
+  await run("AWS_FAKE_DEFAULT_FORWARD", /non-portal listener default must return a fixed 404 response/);
+  await run("AWS_FAKE_NO_CORE_RULE", /non-portal ALB must route only \/v1\/\* directly to core/);
+  await run("AWS_FAKE_EXTRA_ACTION", /non-portal ALB must route only \/v1\/\* directly to core/);
+  await run("AWS_FAKE_EXTRA_CONDITION", /non-portal ALB must route only \/v1\/\* directly to core/);
+  await run("AWS_FAKE_EXTRA_RULE", /non-portal ALB has unexpected non-default rules/);
+  const portal = statefulAws(dir, config);
+  const priorExtraRule = process.env.AWS_FAKE_EXTRA_RULE;
+  process.env.AWS_FAKE_EXTRA_RULE = "1";
   try {
-    await run("AWS_FAKE_DEFAULT_FORWARD", /non-portal listener default must return a fixed 404 response/);
-    await run("AWS_FAKE_NO_CORE_RULE", /non-portal ALB must route only \/v1\/\* directly to core/);
-    await run("AWS_FAKE_EXTRA_ACTION", /non-portal ALB must route only \/v1\/\* directly to core/);
-    await run("AWS_FAKE_EXTRA_CONDITION", /non-portal ALB must route only \/v1\/\* directly to core/);
-    await run("AWS_FAKE_EXTRA_RULE", /non-portal ALB has unexpected non-default rules/);
-    const portal = statefulAws(dir, config);
-    const priorExtraRule = process.env.AWS_FAKE_EXTRA_RULE;
-    process.env.AWS_FAKE_EXTRA_RULE = "1";
-    try {
-      await assert.rejects(
-        () => awsUp(config, dir, { yes: true }),
-        /portal mode must not expose non-default ALB rules/,
-      );
-    } finally {
-      if (priorExtraRule === undefined) delete process.env.AWS_FAKE_EXTRA_RULE;
-      else process.env.AWS_FAKE_EXTRA_RULE = priorExtraRule;
-      portal.restore();
-    }
+    await assert.rejects(() => awsUp(config, dir, { yes: true }), /portal mode must not expose non-default ALB rules/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (priorExtraRule === undefined) delete process.env.AWS_FAKE_EXTRA_RULE;
+    else process.env.AWS_FAKE_EXTRA_RULE = priorExtraRule;
+    portal.restore();
   }
 });
 
-test("AWS portal ALB adopts pinned target groups and requires exactly the env-derived host rules", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-host-split-"));
+test("AWS portal ALB adopts pinned target groups and requires exactly the env-derived host rules", async (t) => {
+  const dir = tempDir(t, "qm-aws-host-split-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1250,12 +1237,11 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
     );
   } finally {
     process.env.PATH = priorPath;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up scales services to the configured desired count and live check flags drift from it", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-desired-count-"));
+test("AWS up scales services to the configured desired count and live check flags drift from it", async (t) => {
+  const dir = tempDir(t, "qm-aws-desired-count-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1303,12 +1289,11 @@ test("AWS up scales services to the configured desired count and live check flag
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up reapplies the recorded layer after starting a stopped core", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-stopped-layer-"));
+test("AWS up reapplies the recorded layer after starting a stopped core", async (t) => {
+  const dir = tempDir(t, "qm-aws-stopped-layer-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1348,12 +1333,11 @@ test("AWS up reapplies the recorded layer after starting a stopped core", async 
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up records a restore point under the lease before any mutation and stamps it in the manifest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-restore-point-"));
+test("AWS up records a restore point under the lease before any mutation and stamps it in the manifest", async (t) => {
+  const dir = tempDir(t, "qm-aws-db-restore-point-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1397,12 +1381,11 @@ test("AWS up records a restore point under the lease before any mutation and sta
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up refuses to mutate when the database is unavailable, keeps no automated backups, or has a stale restore point", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-unhealthy-"));
+test("AWS up refuses to mutate when the database is unavailable, keeps no automated backups, or has a stale restore point", async (t) => {
+  const dir = tempDir(t, "qm-aws-db-unhealthy-");
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
   const priorStatus = process.env.AWS_FAKE_DB_STATUS;
@@ -1444,12 +1427,11 @@ test("AWS up refuses to mutate when the database is unavailable, keeps no automa
     else process.env.AWS_FAKE_DB_RETENTION = priorRetention;
     delete process.env.AWS_FAKE_DB_RESTORABLE_AT;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("aws.predeployDbSnapshot false skips the restore-point check without touching RDS", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-disabled-"));
+test("aws.predeployDbSnapshot false skips the restore-point check without touching RDS", async (t) => {
+  const dir = tempDir(t, "qm-aws-db-disabled-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1470,12 +1452,11 @@ test("aws.predeployDbSnapshot false skips the restore-point check without touchi
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a no-op re-deploy records no manifest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-noop-"));
+test("a no-op re-deploy records no manifest", async (t) => {
+  const dir = tempDir(t, "qm-aws-db-noop-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1493,12 +1474,11 @@ test("a no-op re-deploy records no manifest", async () => {
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up coalesces a requested restart into one deployment even when the task is unchanged", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-restart-"));
+test("AWS up coalesces a requested restart into one deployment even when the task is unchanged", async (t) => {
+  const dir = tempDir(t, "qm-aws-restart-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1532,12 +1512,11 @@ test("AWS up coalesces a requested restart into one deployment even when the tas
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("recorded background boot flags come from the manifest task and reject ambiguous settings", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-background-boot-"));
+test("recorded background boot flags come from the manifest task and reject ambiguous settings", (t) => {
+  const dir = tempDir(t, "qm-background-boot-");
   const configured = oneServiceConfig();
   const fake = statefulAws(dir, configured);
   try {
@@ -1591,7 +1570,6 @@ test("recorded background boot flags come from the manifest task and reject ambi
     assert.throws(() => awsBackgroundWorkBootState(configured), /explicit BACKGROUND_WORK_ENABLED/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -1634,8 +1612,8 @@ test("background mode changes preserve task settings and reject secret-controlle
   );
 });
 
-test("background activation preserves candidate and manifest without another migration; demotion drains old tasks", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-background-"));
+test("background activation preserves candidate and manifest without another migration; demotion drains old tasks", async (t) => {
+  const dir = tempDir(t, "qm-background-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1734,12 +1712,11 @@ test("background activation preserves candidate and manifest without another mig
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up renews the deploy lease with a holder-conditioned update while it runs", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-renew-"));
+test("AWS up renews the deploy lease with a holder-conditioned update while it runs", async (t) => {
+  const dir = tempDir(t, "qm-aws-lease-renew-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -1765,12 +1742,11 @@ test("AWS up renews the deploy lease with a holder-conditioned update while it r
     if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
     else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a lease renewal that loses the holder condition warns loudly and stops renewing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-lost-"));
+test("a lease renewal that loses the holder condition warns loudly and stops renewing", async (t) => {
+  const dir = tempDir(t, "qm-aws-lease-lost-");
   const fake = fakeAws(
     dir,
     `
@@ -1797,12 +1773,11 @@ console.log("");`,
     if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
     else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-public-api-url-"));
+test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL", async (t) => {
+  const dir = tempDir(t, "qm-aws-public-api-url-");
   const fake = statefulAws(dir, oneServiceConfig());
   const prior = process.env.AWS_FAKE_PUBLIC_API_URL;
   process.env.AWS_FAKE_PUBLIC_API_URL = "http://agent.acme.example";
@@ -1818,12 +1793,11 @@ test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL"
     if (prior === undefined) delete process.env.AWS_FAKE_PUBLIC_API_URL;
     else process.env.AWS_FAKE_PUBLIC_API_URL = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("every AWS mutation rejects the wrong caller account before side effects", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-account-guard-"));
+test("every AWS mutation rejects the wrong caller account before side effects", async (t) => {
+  const dir = tempDir(t, "qm-aws-account-guard-");
   const fake = fakeAws(dir, `console.log("");`);
   const prior = process.env.AWS_FAKE_ACCOUNT;
   process.env.AWS_FAKE_ACCOUNT = "999999999999";
@@ -1841,12 +1815,11 @@ test("every AWS mutation rejects the wrong caller account before side effects", 
     if (prior === undefined) delete process.env.AWS_FAKE_ACCOUNT;
     else process.env.AWS_FAKE_ACCOUNT = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy rejects required secret containers without an AWSCURRENT value before mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-empty-secret-"));
+test("AWS deploy rejects required secret containers without an AWSCURRENT value before mutation", async (t) => {
+  const dir = tempDir(t, "qm-aws-empty-secret-");
   const targetName = `acme-qm-port-${createHash("sha1").update("acme-qm:portal").digest("hex").slice(0, 6)}`;
   const targetArn = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${targetName}/1`;
   const fake = fakeAws(
@@ -1866,12 +1839,11 @@ console.log("");`,
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecr describe-images|ecs update-service/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS resolves optional secret ARNs without reading their plaintext values", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-optional-secret-metadata-"));
+test("AWS resolves optional secret ARNs without reading their plaintext values", (t) => {
+  const dir = tempDir(t, "qm-aws-optional-secret-metadata-");
   const fake = fakeAws(
     dir,
     `
@@ -1891,12 +1863,11 @@ if (a.includes("secretsmanager get-secret-value")) {
     assert.doesNotMatch(calls, /secretsmanager get-secret-value .*OPENROUTER_API_KEY/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS omits optional secrets that are scheduled for deletion", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-optional-secret-deleting-"));
+test("AWS omits optional secrets that are scheduled for deletion", (t) => {
+  const dir = tempDir(t, "qm-aws-optional-secret-deleting-");
   const fake = fakeAws(
     dir,
     `
@@ -1915,12 +1886,11 @@ else console.log("");`,
     if (prior === undefined) delete process.env.AWS_FAKE_SECRET_DELETED;
     else process.env.AWS_FAKE_SECRET_DELETED = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS deploy rejects weak signing keys before mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-weak-secret-"));
+test("AWS deploy rejects weak signing keys before mutation", async (t) => {
+  const dir = tempDir(t, "qm-aws-weak-secret-");
   const fake = statefulAws(dir, oneServiceConfig());
   const prior = process.env.AWS_FAKE_SECRET_VALUE;
   process.env.AWS_FAKE_SECRET_VALUE = "short";
@@ -1934,12 +1904,11 @@ test("AWS deploy rejects weak signing keys before mutation", async () => {
     if (prior === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
     else process.env.AWS_FAKE_SECRET_VALUE = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS doctor verifies durable deployment storage and object-store access", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-doctor-storage-"));
+test("AWS doctor verifies durable deployment storage and object-store access", (t) => {
+  const dir = tempDir(t, "qm-aws-doctor-storage-");
   const ready = fakeAws(
     dir,
     `
@@ -1981,7 +1950,6 @@ else console.log("");`,
     assert.throws(() => assertAwsDeploymentStorage(config), /AccessDenied/);
   } finally {
     denied.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -2070,8 +2038,8 @@ test("AWS image transfer preserves the source manifest instead of pulling the ho
   ]);
 });
 
-test("AWS source builds honor the configured web-ui base build-arg and record git provenance", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-web-ui-build-"));
+test("AWS source builds honor the configured web-ui base build-arg and record git provenance", async (t) => {
+  const dir = tempDir(t, "qm-aws-web-ui-build-");
   const sourceDir = join(dir, "source");
   const dockerLog = join(dir, "docker.log");
   const dockerBin = join(dir, "docker");
@@ -2153,12 +2121,11 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS source builds honor a per-service dockerfile override and stamp GIT_SHA, suffixed -dirty on a dirty checkout", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-dockerfile-override-"));
+test("AWS source builds honor a per-service dockerfile override and stamp GIT_SHA, suffixed -dirty on a dirty checkout", async (t) => {
+  const dir = tempDir(t, "qm-aws-dockerfile-override-");
   const sourceDir = join(dir, "source");
   const dockerLog = join(dir, "docker.log");
   const dockerBin = join(dir, "docker");
@@ -2264,12 +2231,11 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS source-plugin provenance records the build source and detects source-mode drift", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-plugin-provenance-"));
+test("AWS source-plugin provenance records the build source and detects source-mode drift", async (t) => {
+  const dir = tempDir(t, "qm-aws-plugin-provenance-");
   const pluginDir = join(dir, "plugins", "linear");
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, "Dockerfile"), "FROM scratch\nCOPY handler.js /handler.js\n");
@@ -2325,7 +2291,6 @@ test("AWS source-plugin provenance records the build source and detects source-m
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -2510,8 +2475,8 @@ test("AWS retains built-in health enforcement when an image is overridden", () =
   assert.match((container.healthCheck as { command: string[] }).command[3]!, /\/healthz/);
 });
 
-test("AWS secret upload reads the deployment .env and removes every plaintext staging file", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-"));
+test("AWS secret upload reads the deployment .env and removes every plaintext staging file", async (t) => {
+  const dir = tempDir(t, "qm-aws-secrets-");
   const bin = join(dir, "aws-fake");
   const log = join(dir, "paths.log");
   const operatorSecrets = computedSecrets(config).filter((secret) => secret.managedBy === "operator");
@@ -2556,12 +2521,11 @@ done
     else process.env.AWS_BIN = priorBin;
     if (priorLog === undefined) delete process.env.AWS_SECRET_PATH_LOG;
     else process.env.AWS_SECRET_PATH_LOG = priorLog;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS secret upload rejects active services when no deployment manifest exists", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-active-"));
+test("AWS secret upload rejects active services when no deployment manifest exists", async (t) => {
+  const dir = tempDir(t, "qm-aws-secrets-active-");
   const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
   const operator = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -2578,12 +2542,11 @@ test("AWS secret upload rejects active services when no deployment manifest exis
     assert.doesNotMatch(calls, /secretsmanager put-secret-value/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS secret rotation holds the deploy lease across the complete write set", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-lease-"));
+test("AWS secret rotation holds the deploy lease across the complete write set", async (t) => {
+  const dir = tempDir(t, "qm-aws-secret-lease-");
   const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
   const operator = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -2617,12 +2580,11 @@ test("AWS secret rotation holds the deploy lease across the complete write set",
     assert.equal(calls.match(/secretsmanager put-secret-value/g)?.length, operator.length);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS secret rotation refuses foreign exact-name services before uploading or restarting", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-foreign-secret-rotation-"));
+test("AWS secret rotation refuses foreign exact-name services before uploading or restarting", async (t) => {
+  const dir = tempDir(t, "qm-aws-foreign-secret-rotation-");
   const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
   const operator = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -2646,12 +2608,11 @@ test("AWS secret rotation refuses foreign exact-name services before uploading o
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /secretsmanager put-secret-value|ecs update-service/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS secret upload registers and records a task revision for a newly supplied optional secret", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-optional-secret-"));
+test("AWS secret upload registers and records a task revision for a newly supplied optional secret", async (t) => {
+  const dir = tempDir(t, "qm-aws-optional-secret-");
   const secretsConfig = oneServiceConfig();
   const required = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -2691,12 +2652,11 @@ test("AWS secret upload registers and records a task revision for a newly suppli
     assert.ok(names.includes("FLY_RESIDENT_ENV_ACME_API_KEY"));
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS optional-secret activation restores prior tasks when a later service restart fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-compensation-"));
+test("AWS optional-secret activation restores prior tasks when a later service restart fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-secret-compensation-");
   const secretsConfig = twoServiceConfig();
   const required = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -2739,7 +2699,6 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -2770,8 +2729,8 @@ const oneServiceConfig = (name = "core"): QmConfig => ({
   aws: { ...config.aws!, services: { [name]: config.aws!.services[name] ?? config.aws!.services.core! } },
 });
 
-test("AWS migration runs the exact candidate core image inside the service VPC", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-"));
+test("AWS migration runs the exact candidate core image inside the service VPC", async (t) => {
+  const dir = tempDir(t, "qm-aws-candidate-migrate-");
   const candidatePath = join(dir, "candidate.json");
   const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
   writeFileSync(
@@ -2806,12 +2765,11 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.equal(registered.at(-1)?.containerDefinitions[0]?.healthCheck, undefined);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS builds one immutable candidate manifest and deploys its exact digest without rebuilding", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-"));
+test("AWS builds one immutable candidate manifest and deploys its exact digest without rebuilding", async (t) => {
+  const dir = tempDir(t, "qm-aws-candidate-");
   const candidatePath = join(dir, "candidate.json");
   const dockerLog = join(dir, "docker.log");
   const dockerBin = join(dir, "docker");
@@ -2874,13 +2832,12 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS candidate builds honor their concurrency bound and join failures before publishing", async () => {
+test("AWS candidate builds honor their concurrency bound and join failures before publishing", async (t) => {
   for (const mode of ["serial", "parallel", "failure"]) {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-parallel-"));
+    const dir = tempDir(t, "qm-aws-build-parallel-");
     const candidatePath = join(dir, "candidate.json");
     const events = join(dir, "events");
     writeFileSync(events, "");
@@ -2965,13 +2922,12 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
     } finally {
       process.env.PATH = priorPath;
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   }
 });
 
-test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
+test("cancelling candidate builds terminates and joins every Docker child without a manifest", async (t) => {
+  const dir = tempDir(t, "qm-aws-build-cancel-");
   const candidatePath = join(dir, "candidate.json");
   const fake = statefulAws(dir, config);
   const docker = join(dir, "docker");
@@ -3034,7 +2990,6 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
       }
     }
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -3048,8 +3003,8 @@ test("AWS rejects invalid or misplaced candidate build concurrency before mutati
   await assert.rejects(awsUp(shared, ".", { buildOnly: true, buildConcurrency: 2 }), /distinct ECR repositories/);
 });
 
-test("AWS candidate deploy fails closed on account, repository, or missing-workload drift", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-invalid-"));
+test("AWS candidate deploy fails closed on account, repository, or missing-workload drift", async (t) => {
+  const dir = tempDir(t, "qm-aws-candidate-invalid-");
   const candidatePath = join(dir, "candidate.json");
   const base = {
     contract: 1,
@@ -3086,12 +3041,11 @@ test("AWS candidate deploy fails closed on account, repository, or missing-workl
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS migration failure deregisters the candidate task and releases the deploy lease", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-failure-"));
+test("AWS migration failure deregisters the candidate task and releases the deploy lease", async (t) => {
+  const dir = tempDir(t, "qm-aws-candidate-migrate-failure-");
   const candidatePath = join(dir, "candidate.json");
   writeFileSync(
     candidatePath,
@@ -3114,12 +3068,11 @@ test("AWS migration failure deregisters the candidate task and releases the depl
     assert.match(calls, /dynamodb delete-item/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS candidate deploy migration failure preserves the runtime and releases the lease", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-failure-"));
+test("AWS candidate deploy migration failure preserves the runtime and releases the lease", async (t) => {
+  const dir = tempDir(t, "qm-aws-candidate-migrate-failure-");
   const candidatePath = join(dir, "candidate.json");
   writeFileSync(
     candidatePath,
@@ -3149,7 +3102,6 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
     assert.match(calls, /dynamodb delete-item/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -3195,8 +3147,8 @@ function manifestItems(
   return items;
 }
 
-test("rollback uses a coherent durable manifest across independent service histories", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-"));
+test("rollback uses a coherent durable manifest across independent service histories", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-");
   const multi = twoServiceConfig();
   const old = {
     core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:7",
@@ -3226,12 +3178,11 @@ test("rollback uses a coherent durable manifest across independent service histo
     assert.equal(state.dynamo["deployment/current"].manifestId.S, "old");
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback surfaces the pre-deploy database snapshot of the deployment it rolls back", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-snapshot-"));
+test("AWS rollback surfaces the pre-deploy database snapshot of the deployment it rolls back", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-snapshot-");
   const single = oneServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3263,12 +3214,11 @@ test("AWS rollback surfaces the pre-deploy database snapshot of the deployment i
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback surfaces the restore point recorded before the rolled-back deployment", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-restore-point-"));
+test("AWS rollback surfaces the restore point recorded before the rolled-back deployment", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-restore-point-");
   const single = oneServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3303,12 +3253,11 @@ test("AWS rollback surfaces the restore point recorded before the rolled-back de
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback across a mixed chain surfaces the oldest rolled-back restore, legacy snapshot included", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-mixed-chain-"));
+test("AWS rollback across a mixed chain surfaces the oldest rolled-back restore, legacy snapshot included", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-mixed-chain-");
   const single = oneServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3347,12 +3296,11 @@ test("AWS rollback across a mixed chain surfaces the oldest rolled-back restore,
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback --to a manifest several steps back surfaces the target's successor snapshot, not the current one", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-snapshot-chain-"));
+test("AWS rollback --to a manifest several steps back surfaces the target's successor snapshot, not the current one", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-snapshot-chain-");
   const single = oneServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3391,12 +3339,11 @@ test("AWS rollback --to a manifest several steps back surfaces the target's succ
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback surfaces the snapshot even when a rotation manifest sits directly after the target", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-snapshot-rotation-"));
+test("AWS rollback surfaces the snapshot even when a rotation manifest sits directly after the target", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-snapshot-rotation-");
   const single = oneServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3432,12 +3379,11 @@ test("AWS rollback surfaces the snapshot even when a rotation manifest sits dire
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("rollback resolves a label through its full-service manifest before mutating ECS", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-label-"));
+test("rollback resolves a label through its full-service manifest before mutating ECS", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-label-");
   const single = oneServiceConfig();
   const target = { core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:2" };
   const fake = statefulAws(
@@ -3459,12 +3405,11 @@ test("rollback resolves a label through its full-service manifest before mutatin
     );
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback restores the recorded layer without reading the broken current data plane", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-layer-"));
+test("AWS rollback restores the recorded layer without reading the broken current data plane", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-layer-");
   const single = oneServiceConfig();
   const task = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:2";
   const oldBody = JSON.stringify({ contract: 1, tools: [], skills: [{ path: "skills/old/SKILL.md", content: "old" }] });
@@ -3523,12 +3468,11 @@ test("AWS rollback restores the recorded layer without reading the broken curren
     if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS rollback of a scaled-to-zero stack defers the layer sync instead of failing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-down-"));
+test("AWS rollback of a scaled-to-zero stack defers the layer sync instead of failing", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-down-");
   const single = oneServiceConfig();
   const oldBody = JSON.stringify({ contract: 1, tools: [], skills: [{ path: "skills/old/SKILL.md", content: "old" }] });
   const currentBody = JSON.stringify({ contract: 1, tools: [], skills: [] });
@@ -3578,12 +3522,11 @@ test("AWS rollback of a scaled-to-zero stack defers the layer sync instead of fa
   } finally {
     globalThis.fetch = priorFetch;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("rollback refuses an incomplete manifest before mutating ECS", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-rollback-incomplete-"));
+test("rollback refuses an incomplete manifest before mutating ECS", async (t) => {
+  const dir = tempDir(t, "qm-aws-rollback-incomplete-");
   const multi = twoServiceConfig();
   const fake = statefulAws(
     dir,
@@ -3601,12 +3544,11 @@ test("rollback refuses an incomplete manifest before mutating ECS", async () => 
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("secrets push never creates secret containers outside Terraform", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-push-"));
+test("secrets push never creates secret containers outside Terraform", async (t) => {
+  const dir = tempDir(t, "qm-aws-push-");
   const secretsConfig: QmConfig = { ...oneServiceConfig(), env: {} };
   const operator = computedSecrets(secretsConfig).filter(
     (secret) => secret.managedBy === "operator" && secret.required,
@@ -3645,12 +3587,11 @@ console.log("");`,
     assert.doesNotMatch(readFileSync(missing.log, "utf8"), /create-secret/);
   } finally {
     missing.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("aws logs never reinterprets --tail and interleaves all workloads instead of blocking", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-logs-"));
+test("aws logs never reinterprets --tail and interleaves all workloads instead of blocking", async (t) => {
+  const dir = tempDir(t, "qm-aws-logs-");
   const fake = fakeAws(dir, `console.log("line-from-" + process.argv[4]);`);
   const lines: string[] = [];
   const log = console.log;
@@ -3671,24 +3612,22 @@ test("aws logs never reinterprets --tail and interleaves all workloads instead o
   } finally {
     console.log = log;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS virtual Slack logs resolve to the core task", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-slack-logs-"));
+test("AWS virtual Slack logs resolve to the core task", (t) => {
+  const dir = tempDir(t, "qm-aws-slack-logs-");
   const fake = fakeAws(dir, `console.log("");`);
   try {
     awsLogs(oneServiceConfig(), "slack", {});
     assert.match(readFileSync(fake.log, "utf8"), /logs tail \/ecs\/acme-core/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS status batches DescribeServices at the API limit and surfaces failures", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-status-batches-"));
+test("AWS status batches DescribeServices at the API limit and surfaces failures", (t) => {
+  const dir = tempDir(t, "qm-aws-status-batches-");
   const services = Object.fromEntries(
     Array.from({ length: 11 }, (_, index) => {
       const name = index === 0 ? "core" : `plugin-${index}`;
@@ -3725,12 +3664,11 @@ test("AWS status batches DescribeServices at the API limit and surfaces failures
     assert.throws(() => awsStatus(oneServiceConfig()), /MISSING/);
   } finally {
     failed.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS down holds the deploy lease across the ECS mutation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-down-lease-"));
+test("AWS down holds the deploy lease across the ECS mutation", async (t) => {
+  const dir = tempDir(t, "qm-aws-down-lease-");
   const fake = statefulAws(dir, oneServiceConfig());
   try {
     await awsDown(oneServiceConfig());
@@ -3748,12 +3686,11 @@ test("AWS down holds the deploy lease across the ECS mutation", async () => {
     await assert.rejects(() => awsDown(oneServiceConfig()), /did not reach the requested state/);
   } finally {
     rolledBack.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS lease acquisition surfaces a held lease and skips release", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-lease-held-"));
+test("AWS lease acquisition surfaces a held lease and skips release", async (t) => {
+  const dir = tempDir(t, "qm-aws-lease-held-");
   const fake = fakeAws(
     dir,
     `
@@ -3768,12 +3705,11 @@ console.log("");`,
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb delete-item/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check rejects downed services and classifies probe errors as live drift", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-runtime-"));
+test("AWS live check rejects downed services and classifies probe errors as live drift", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-runtime-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(dir, single, manifestItems([{ id: "current", tasks: { core: taskArn } }], "current"));
@@ -3805,12 +3741,11 @@ test("AWS live check rejects downed services and classifies probe errors as live
     );
   } finally {
     denied.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check rejects an ingress target group without a healthy target", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-health-"));
+test("AWS live check rejects an ingress target group without a healthy target", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-health-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(dir, single, manifestItems([{ id: "current", tasks: { core: taskArn } }], "current"));
@@ -3828,12 +3763,11 @@ test("AWS live check rejects an ingress target group without a healthy target", 
     if (prior === undefined) delete process.env.AWS_FAKE_UNHEALTHY_TARGET;
     else process.env.AWS_FAKE_UNHEALTHY_TARGET = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check rejects a reachable public URL returning a server error", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-http-"));
+test("AWS live check rejects a reachable public URL returning a server error", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-http-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(dir, single, manifestItems([{ id: "current", tasks: { core: taskArn } }], "current"));
@@ -3851,12 +3785,11 @@ test("AWS live check rejects a reachable public URL returning a server error", a
     if (prior === undefined) delete process.env.AWS_FAKE_HTTP_STATUS;
     else process.env.AWS_FAKE_HTTP_STATUS = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check uses the package-pinned source image without consulting mutable tags", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-manifest-"));
+test("AWS live check uses the package-pinned source image without consulting mutable tags", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-manifest-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(
@@ -3956,12 +3889,11 @@ test("AWS live check uses the package-pinned source image without consulting mut
     if (priorAlbDns === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = priorAlbDns;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check detects prebuilt plugin image drift from current config", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-live-plugin-image-"));
+test("AWS live check detects prebuilt plugin image drift from current config", async (t) => {
+  const dir = tempDir(t, "qm-aws-live-plugin-image-");
   const single = oneServiceConfig();
   const pluginConfig: QmConfig = {
     ...single,
@@ -4035,7 +3967,6 @@ test("AWS live check detects prebuilt plugin image drift from current config", a
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -4073,8 +4004,8 @@ test("AWS plan rejects an explicit nonexistent source checkout before cloud acce
   );
 });
 
-test("AWS mutations release the deploy lease when their initial service snapshot fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-snapshot-lease-"));
+test("AWS mutations release the deploy lease when their initial service snapshot fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-snapshot-lease-");
   const single = oneServiceConfig();
   const run = async (operation: () => void | Promise<void>, preflight = false): Promise<void> => {
     const fake = statefulAws(dir, single, {}, { failDescribe: true });
@@ -4090,16 +4021,12 @@ test("AWS mutations release the deploy lease when their initial service snapshot
       fake.restore();
     }
   };
-  try {
-    await run(() => awsUp(single, dir, { yes: true }), true);
-    await run(() => awsRollback(single));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  await run(() => awsUp(single, dir, { yes: true }), true);
+  await run(() => awsRollback(single));
 });
 
-test("AWS service rollback includes an update whose successful response was lost", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-update-response-"));
+test("AWS service rollback includes an update whose successful response was lost", async (t) => {
+  const dir = tempDir(t, "qm-aws-update-response-");
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { failFirstUpdateAfterMutation: true });
   try {
@@ -4109,12 +4036,11 @@ test("AWS service rollback includes an update whose successful response was lost
     assert.equal(readFileSync(fake.log, "utf8").match(/ecs update-service/g)?.length, 2);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS down refuses foreign exact-name services before acquiring the lease or mutating ECS", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-foreign-service-"));
+test("AWS down refuses foreign exact-name services before acquiring the lease or mutating ECS", async (t) => {
+  const dir = tempDir(t, "qm-aws-foreign-service-");
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { foreignServiceTags: true });
   try {
@@ -4123,12 +4049,11 @@ test("AWS down refuses foreign exact-name services before acquiring the lease or
     assert.doesNotMatch(calls, /dynamodb put-item|ecs update-service/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up refuses foreign exact-name services before acquiring the lease or publishing images", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-foreign-service-up-"));
+test("AWS up refuses foreign exact-name services before acquiring the lease or publishing images", async (t) => {
+  const dir = tempDir(t, "qm-aws-foreign-service-up-");
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { foreignServiceTags: true });
   try {
@@ -4137,12 +4062,11 @@ test("AWS up refuses foreign exact-name services before acquiring the lease or p
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecs update-service/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS plan uses the package-pinned source image without consulting or mutating mutable labels", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-plan-source-"));
+test("AWS plan uses the package-pinned source image without consulting or mutating mutable labels", async (t) => {
+  const dir = tempDir(t, "qm-aws-plan-source-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(
@@ -4186,12 +4110,11 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
     console.log = log;
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("aws up resolves image digests only while holding the deploy lease", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-"));
+test("aws up resolves image digests only while holding the deploy lease", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-");
   const dockerLog = join(dir, "docker.log");
   writeFileSync(dockerLog, "");
   const dockerBin = join(dir, "docker");
@@ -4250,12 +4173,11 @@ test("aws up resolves image digests only while holding the deploy lease", async 
     console.log = log;
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up requires a complete trusted baseline before a partial deployment", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-partial-up-"));
+test("AWS up requires a complete trusted baseline before a partial deployment", async (t) => {
+  const dir = tempDir(t, "qm-aws-partial-up-");
   const multi = twoServiceConfig();
   const first = statefulAws(dir, multi);
   try {
@@ -4324,12 +4246,11 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
   } finally {
     process.env.PATH = priorPath;
     baseline.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up can introduce a selected workload onto a trusted deployment baseline", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-partial-add-"));
+test("AWS up can introduce a selected workload onto a trusted deployment baseline", async (t) => {
+  const dir = tempDir(t, "qm-aws-partial-add-");
   const multi = twoServiceConfig();
   const coreTask = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const baseline = statefulAws(
@@ -4388,12 +4309,11 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
   } finally {
     process.env.PATH = priorPath;
     baseline.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up cleans staging tags when ECS deployment fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-cleanup-"));
+test("AWS up cleans staging tags when ECS deployment fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-cleanup-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4409,12 +4329,11 @@ test("AWS up cleans staging tags when ECS deployment fails", async () => {
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up succeeds while a protected old task keeps the rollout from completing, even with a historical failed task", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-drain-"));
+test("AWS up succeeds while a protected old task keeps the rollout from completing, even with a historical failed task", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-drain-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4439,12 +4358,11 @@ test("AWS up succeeds while a protected old task keeps the rollout from completi
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up waits for native blue-green success instead of trusting the stale legacy rollout field", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-blue-green-"));
+test("AWS up waits for native blue-green success instead of trusting the stale legacy rollout field", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-blue-green-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4463,12 +4381,11 @@ test("AWS up waits for native blue-green success instead of trusting the stale l
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up tolerates a transient describe-services failure while polling the rollout", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-transient-describe-"));
+test("AWS up tolerates a transient describe-services failure while polling the rollout", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-transient-describe-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4483,12 +4400,11 @@ test("AWS up tolerates a transient describe-services failure while polling the r
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up tolerates a transient native blue-green status failure while polling the rollout", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-transient-native-status-"));
+test("AWS up tolerates a transient native blue-green status failure while polling the rollout", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-transient-native-status-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4511,12 +4427,11 @@ test("AWS up tolerates a transient native blue-green status failure while pollin
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up aborts failed tasks only after four polls with no replacement running — longer than any single ENI/pull flake", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-failed-tasks-"));
+test("AWS up aborts failed tasks only after four polls with no replacement running — longer than any single ENI/pull flake", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-failed-tasks-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4531,12 +4446,11 @@ test("AWS up aborts failed tasks only after four polls with no replacement runni
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up survives a three-poll failed-task flake that ECS replaces — the window a transient ENI/pull failure needs", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-transient-failed-task-"));
+test("AWS up survives a three-poll failed-task flake that ECS replaces — the window a transient ENI/pull failure needs", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-transient-failed-task-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4551,12 +4465,11 @@ test("AWS up survives a three-poll failed-task flake that ECS replaces — the w
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up survives alternating single-service stale reads — only the same workload's same failure on consecutive polls confirms an abort", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-alternating-stale-"));
+test("AWS up survives alternating single-service stale reads — only the same workload's same failure on consecutive polls confirms an abort", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-alternating-stale-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -4575,12 +4488,11 @@ test("AWS up survives alternating single-service stale reads — only the same w
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up still fails fast on a FAILED rollout state — the ECS circuit-breaker verdict needs no flake window", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-rollout-failed-"));
+test("AWS up still fails fast on a FAILED rollout state — the ECS circuit-breaker verdict needs no flake window", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-rollout-failed-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4592,12 +4504,11 @@ test("AWS up still fails fast on a FAILED rollout state — the ECS circuit-brea
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up preserves the staging tag when stable-label promotion fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-promotion-"));
+test("AWS up preserves the staging tag when stable-label promotion fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-promotion-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4612,12 +4523,11 @@ test("AWS up preserves the staging tag when stable-label promotion fails", async
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up treats an already-current stable label as successful promotion", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-current-label-"));
+test("AWS up treats an already-current stable label as successful promotion", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-current-label-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4632,12 +4542,11 @@ test("AWS up treats an already-current stable label as successful promotion", as
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS up keeps a healthy rollout and its staging tag when the manifest write fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-up-manifest-failure-"));
+test("AWS up keeps a healthy rollout and its staging tag when the manifest write fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-up-manifest-failure-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
@@ -4659,12 +4568,11 @@ test("AWS up keeps a healthy rollout and its staging tag when the manifest write
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener; any other extra listener still fails", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-listeners-"));
+test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener; any other extra listener still fails", async (t) => {
+  const dir = tempDir(t, "qm-aws-front-door-listeners-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -4692,12 +4600,11 @@ test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener
     );
   } finally {
     process.env.PATH = priorPath;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS live check accepts a successful deploy mid-drain: PRIMARY at full strength (historical failed task included) while a protected old task keeps the rollout IN_PROGRESS", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-check-drain-"));
+test("AWS live check accepts a successful deploy mid-drain: PRIMARY at full strength (historical failed task included) while a protected old task keeps the rollout IN_PROGRESS", async (t) => {
+  const dir = tempDir(t, "qm-aws-check-drain-");
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(
@@ -4723,7 +4630,6 @@ test("AWS live check accepts a successful deploy mid-drain: PRIMARY at full stre
     await assert.doesNotReject(() => awsCheckLive(single, { report: false, configDir: dir }));
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -4864,8 +4770,8 @@ test("AWS doctor still fails a pushed secret store holding a placeholder value",
 });
 
 for (const mode of ["draining", "stale", "failed"] as const) {
-  test(`AWS submits independent workloads before the portal dependency gate: ${mode}`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-dependency-rollout-"));
+  test(`AWS submits independent workloads before the portal dependency gate: ${mode}`, async (t) => {
+    const dir = tempDir(t, "qm-aws-dependency-rollout-");
     const selected: QmConfig = {
       ...config,
       plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
@@ -4943,13 +4849,12 @@ for (const mode of ["draining", "stale", "failed"] as const) {
     } finally {
       process.env.PATH = priorPath;
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 }
 
-test("AWS private canary reaches core without a core ingress target and refuses missing current tasks", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-private-canary-"));
+test("AWS private canary reaches core without a core ingress target and refuses missing current tasks", async (t) => {
+  const dir = tempDir(t, "qm-aws-private-canary-");
   writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(join(dir, "docker"), 0o755);
   const fake = statefulAws(dir, config);
@@ -4993,12 +4898,11 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS name, and signed path", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-target-"));
+  const dir = tempDir(t, "qm-aws-layer-target-");
   const fake = fakeAws(dir, "console.log('')");
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   const priorAlb = process.env.AWS_FAKE_ALB_DNS;
@@ -5052,12 +4956,11 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = priorAlb;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is configured", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-proxy-"));
+  const dir = tempDir(t, "qm-aws-layer-proxy-");
   const fake = fakeAws(dir, "console.log('')");
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   const priorProtocol = process.env.AWS_FAKE_LISTENER_PROTOCOL;
@@ -5191,12 +5094,11 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     if (priorProtocol === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
     else process.env.AWS_FAKE_LISTENER_PROTOCOL = priorProtocol;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("AWS core transport bounds streamed TLS bodies and destroys oversized responses", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-core-body-limit-"));
+  const dir = tempDir(t, "qm-aws-core-body-limit-");
   const fake = fakeAws(dir, "console.log('')");
   let destroyed = false;
   t.mock.method(https, "request", (_url: URL, _options: https.RequestOptions, callback: (value: unknown) => void) => {
@@ -5234,12 +5136,11 @@ test("AWS core transport bounds streamed TLS bodies and destroys oversized respo
   } finally {
     t.mock.restoreAll();
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("AWS layer transport rejects invalid targets and propagates TLS and body failures without fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-failure-"));
+  const dir = tempDir(t, "qm-aws-layer-failure-");
   const fake = fakeAws(dir, "console.log('')");
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   const priorAlb = process.env.AWS_FAKE_ALB_DNS;
@@ -5286,7 +5187,6 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = priorAlb;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -5302,7 +5202,7 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-abort-"));
+  const dir = tempDir(t, "qm-aws-layer-abort-");
   const fake = fakeAws(dir, "console.log('')");
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
@@ -5328,12 +5228,11 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("AWS secrets push defers activation against pre-consolidation images", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
+test("AWS secrets push defers activation against pre-consolidation images", async (t) => {
+  const dir = tempDir(t, "qm-aws-secrets-combined-");
   const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
   writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
   const fake = statefulAws(dir, config);
@@ -5367,12 +5266,11 @@ test("AWS secrets push defers activation against pre-consolidation images", asyn
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
   } finally {
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("shared deployment state isolates company manifests and leases without mutating candidate images", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-inactive-candidate-"));
+test("shared deployment state isolates company manifests and leases without mutating candidate images", async (t) => {
+  const dir = tempDir(t, "qm-aws-inactive-candidate-");
   const candidatePath = join(dir, "candidate.json");
   writeFileSync(
     candidatePath,
@@ -5413,11 +5311,10 @@ test("shared deployment state isolates company manifests and leases without muta
     if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
     else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("shared ALB validates company routes while rejecting sibling overlap", () => {
+test("shared ALB validates company routes while rejecting sibling overlap", (t) => {
   const company = { ...config, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } };
   const name = `acme-qm-port-${createHash("sha1").update("acme-qm:portal").digest("hex").slice(0, 6)}`;
   const primary = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${name}/1`;
@@ -5463,7 +5360,7 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
           },
         }
       : company;
-    const dir = mkdtempSync(join(tmpdir(), "qm-shared-alb-"));
+    const dir = tempDir(t, "qm-shared-alb-");
     const fake = fakeAws(dir, "", "portal", {
       blueGreen: true,
       sharedHost: variant === "wrong-host" ? "wrong.example" : hostname,
@@ -5484,14 +5381,13 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
       );
     } finally {
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   }
 });
 
 for (const shared of [false, true]) {
-  test(`AWS doctor checks ${shared ? "shared" : "dedicated"} discovery through ECS registrations`, () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-discovery-"));
+  test(`AWS doctor checks ${shared ? "shared" : "dedicated"} discovery through ECS registrations`, (t) => {
+    const dir = tempDir(t, "qm-aws-discovery-");
     const namespace = shared ? "shared.internal" : "acme.internal";
     const discoveryName = shared ? "acme-core" : "core";
     const arn = "arn:aws:servicediscovery:us-west-2:123456789012:namespace/ns-shared";
@@ -5524,14 +5420,13 @@ else console.log("");`,
       assert.match(readFileSync(fake.log, "utf8"), /Values=ns-shared/);
     } finally {
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 }
 
 for (const mode of ["success", "migration-failure", "update-failure", "write-failure"] as const) {
-  test(`AWS candidate deployment progress receipt: ${mode}`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-progress-"));
+  test(`AWS candidate deployment progress receipt: ${mode}`, async (t) => {
+    const dir = tempDir(t, "qm-aws-progress-");
     const progressFile = join(dir, "progress.json");
     const candidatePath = join(dir, "candidate.json");
     const single = mode === "success" ? twoServiceConfig() : oneServiceConfig();
@@ -5611,13 +5506,12 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
       if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
       else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 }
 
-test("AWS deployment progress rejects invalid options before AWS calls", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-progress-validation-"));
+test("AWS deployment progress rejects invalid options before AWS calls", async (t) => {
+  const dir = tempDir(t, "qm-aws-progress-validation-");
   const fake = fakeAws(dir, "");
   const priorFile = process.env.QM_DEPLOY_PROGRESS_FILE;
   const priorToken = process.env.QM_DEPLOY_PROGRESS_TOKEN;
@@ -5644,12 +5538,11 @@ test("AWS deployment progress rejects invalid options before AWS calls", async (
     if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
     else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("inactive capacity proves exact drained unprotected cohorts without mutating deployment state", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-capacity-"));
+test("inactive capacity proves exact drained unprotected cohorts without mutating deployment state", async (t) => {
+  const dir = tempDir(t, "qm-capacity-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -5859,12 +5752,11 @@ test("inactive capacity proves exact drained unprotected cohorts without mutatin
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("controlled AWS cohorts bind immutable identities and hand over without ECS replacement", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-controlled-background-"));
+test("controlled AWS cohorts bind immutable identities and hand over without ECS replacement", async (t) => {
+  const dir = tempDir(t, "qm-controlled-background-");
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
@@ -6129,13 +6021,12 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] as const) {
-  test(`AWS web routing transition gate: ${mode}`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-web-routing-"));
+  test(`AWS web routing transition gate: ${mode}`, async (t) => {
+    const dir = tempDir(t, "qm-aws-web-routing-");
     writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
     chmodSync(join(dir, "docker"), 0o755);
     const priorPath = process.env.PATH;
@@ -6207,7 +6098,6 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
     } finally {
       process.env.PATH = priorPath;
       fake.restore();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 }

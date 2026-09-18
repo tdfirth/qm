@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
+import { tempDir } from "./support.ts";
 
 const SECRETS = {
   ANTHROPIC_API_KEY: "anthropic-supersecret",
@@ -59,8 +59,8 @@ process.exit(0);
   return { argvLog, envCopy };
 }
 
-test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-"));
+test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async (t) => {
+  const dir = tempDir(t, "qm-docker-secrets-");
   const priorPath = process.env.PATH;
   const priorDb = process.env.DATABASE_URL;
   const priorSecrets = new Map(Object.keys(SECRETS).map((name) => [name, process.env[name]]));
@@ -236,16 +236,15 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test(
   "managed Postgres: the generated password and DATABASE_URL never reach the docker argv; state.json is 0600",
   { timeout: 60_000 },
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-pg-"));
-    const xdg = mkdtempSync(join(tmpdir(), "qm-docker-secrets-xdg-"));
+  async (t) => {
+    const dir = tempDir(t, "qm-docker-secrets-pg-");
+    const xdg = tempDir(t, "qm-docker-secrets-xdg-");
     const priorPath = process.env.PATH;
     const priorDb = process.env.DATABASE_URL;
     const priorXdg = process.env.XDG_CONFIG_HOME;
@@ -299,8 +298,6 @@ test(
       else process.env.DATABASE_URL = priorDb;
       if (priorXdg === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = priorXdg;
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(xdg, { recursive: true, force: true });
     }
   },
 );
@@ -308,8 +305,8 @@ test(
 test(
   "docker up gates missing required secrets before any container starts while Slack setup remains optional",
   { timeout: 60_000 },
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-gate-"));
+  async (t) => {
+    const dir = tempDir(t, "qm-docker-secrets-gate-");
     const priorPath = process.env.PATH;
     const priorDb = process.env.DATABASE_URL;
     const priorBot = process.env.SLACK_BOT_TOKEN;
@@ -349,7 +346,6 @@ test(
       if (priorDb === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = priorDb;
       if (priorBot !== undefined) process.env.SLACK_BOT_TOKEN = priorBot;
-      rmSync(dir, { recursive: true, force: true });
     }
   },
 );
@@ -357,8 +353,8 @@ test(
 test(
   "a multi-line secret value fails loudly, naming the key (docker --env-file cannot carry newlines)",
   { timeout: 60_000 },
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-nl-"));
+  async (t) => {
+    const dir = tempDir(t, "qm-docker-secrets-nl-");
     const priorPath = process.env.PATH;
     const priorDb = process.env.DATABASE_URL;
     const priorSecret = process.env.CORE_SIGNING_SECRET;
@@ -395,7 +391,6 @@ test(
       else process.env.DATABASE_URL = priorDb;
       if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
       else process.env.CORE_SIGNING_SECRET = priorSecret;
-      rmSync(dir, { recursive: true, force: true });
     }
   },
 );
