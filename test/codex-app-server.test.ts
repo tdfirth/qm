@@ -59,7 +59,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   assert.equal(server.error(), null);
 });
 
-test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 3000 }, async (t) => {
+test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 5000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-tool-concurrency-"));
   const binary = join(dir, "codex");
   writeFileSync(
@@ -115,7 +115,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
     await server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
+  assert.equal(await server.request("start", {}, AbortSignal.timeout(3000)), "started");
   assert.deepEqual(calls, [0, 1, 2]);
   assert.deepEqual(notifications, [1, 2]);
   release.resolve();

@@ -81,7 +81,7 @@ rl.on("line", (line) => {
   if (msg.method === "initialize") return send({ id: msg.id, result: { userAgent: "fake" } });
   if (msg.method === "initialized") return;
   if (msg.method === "thread/start") {
-    if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
+    if (msg.params.ephemeral !== false || msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
@@ -112,6 +112,36 @@ rl.on("line", (line) => {
     return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
   }
   if (msg.method === "turn/interrupt" || msg.method === "turn/steer") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function delayedChildRoutingCodexBinary(dir: string): string {
+  const path = join(dir, "delayed-child-routing-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
+  if (msg.method === "turn/start") {
+    send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
+    send({ id: "child-tool", method: "item/tool/call", params: { threadId: "child", turnId: "child-turn", callId: "child-call", tool: "execute", arguments: { command: "true" } } });
+    return send({ id: msg.id, result: { turn: { id: "parent-turn", status: "inProgress", items: [] } } });
+  }
+  if (msg.id === "child-tool") {
+    if (msg.error) return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "failed", error: { message: msg.error.message }, items: [] } } });
+    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-answer", text: "CHILD-OK", phase: "final_answer" } } });
+    return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [{ type: "agentMessage", text: "CHILD-OK", phase: "final_answer" }] } } });
+  }
+  if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
 });
 `,
   );
@@ -555,6 +585,55 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   assert.deepEqual(
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
+  );
+});
+
+test("Codex child tool routing waits for durable task registration", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-routing-"));
+  const storedTasks = createMemoryTaskStore();
+  const registrationStarted = Promise.withResolvers<void>();
+  const releaseRegistration = Promise.withResolvers<void>();
+  const tasks: TaskStore = {
+    ...storedTasks,
+    async create(input) {
+      registrationStarted.resolve();
+      await releaseRegistration.promise;
+      return storedTasks.create(input);
+    },
+  };
+  const harness = createCodexHarness({
+    binaryPath: delayedChildRoutingCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    tasks,
+    turnWallClockMs: 2_000,
+  });
+  t.after(async () => {
+    releaseRegistration.resolve();
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "child-routing" } as Session,
+    input: "route child",
+    systemPrompt: "test",
+    history: [],
+    tools: {
+      execute: async () => ({ stdout: "child-ok", stderr: "", code: 0, timedOut: false }),
+    } as unknown as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => ({ ...entry, sessionId: "child-routing", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  await registrationStarted.promise;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  releaseRegistration.resolve();
+  const result = await turn;
+  assert.equal(result.reply, "CHILD-OK");
+  assert.deepEqual(
+    (await tasks.list()).map(({ title, status }) => ({ title, status })),
+    [{ title: "Subagent /root/child", status: "completed" }],
   );
 });
 
@@ -1977,7 +2056,7 @@ test(
         cwd: jail,
         approvalPolicy: "never",
         sandbox: "read-only",
-        ephemeral: true,
+        ephemeral: false,
         baseInstructions: "be concise",
         developerInstructions: "use the supplied dynamic tools",
         dynamicTools: [
