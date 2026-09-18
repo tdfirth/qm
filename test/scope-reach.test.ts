@@ -311,6 +311,41 @@ test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope lab
   );
 });
 
+test("reached-room provenance remains complete across the minimum payload-cap boundary", async () => {
+  for (const maxToolResultChars of [200, 201]) {
+    const emitted: Array<{ type: string; payload: { result?: string; resultTruncated?: boolean }; scopeLabel: string }> =
+      [];
+    const { tc } = sinkToolContext();
+    tc.execute = async (_command, opts) => ({
+      stdout: "x".repeat(2_000),
+      stderr: "",
+      code: 0,
+      timedOut: false,
+      reached: { scopeId: PH_SCOPE, label: opts?.reachTarget ?? "missing" },
+    });
+    const ref: ToolContextRef = {
+      current: tc,
+      emit: (entry) => void emitted.push(entry as never),
+      scopeLabel: scopeId("personal", "U1"),
+      orgScopeId: scopeId("org", "default-org"),
+      screenToolResult: async ({ provenance, source }) => {
+        assert.equal(provenance, "external");
+        assert.equal(source, "reached room");
+        return { outcome: "allow" };
+      },
+    };
+    const [execute] = createAgentTools(ref, { reachExec: true, maxToolResultChars });
+    const response = await call(execute, { command: "cat x", scope: "#project-alpha" });
+    const modelText = textOf(response);
+    const toolResult = emitted.find((entry) => entry.type === "tool_result")!;
+    assert.ok(modelText.startsWith("[ran on #project-alpha's computer]\n"));
+    assert.match(modelText, /…\[truncated — full result was \d+ chars/);
+    assert.equal(toolResult.payload.result, modelText);
+    assert.equal(toolResult.payload.resultTruncated, true);
+    assert.equal(toolResult.scopeLabel, scopeId("personal", "U1"));
+  }
+});
+
 function freshApp(extra: Partial<Config> = {}) {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-reach-")),

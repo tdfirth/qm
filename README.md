@@ -249,9 +249,10 @@ upstream source history to merge.
 persisted payload metadata. It defaults to `100000`; values must be integers from
 `200` through `2147483647`. Truncated strings retain their beginning, end, and a
 notice with the original JavaScript character count. Structured and non-text
-values are preserved. Mandatory security and internal-message provenance
-annotations are added outside this payload cap, so it is not an overall serialized
-output, token, byte, or message-size limit.
+values are preserved. Host-authored security and provenance annotations are kept
+separate from untrusted payload text and added outside this payload cap; text in a
+tool payload is never trusted as an annotation. The setting is therefore not an
+overall serialized output, token, byte, or message-size limit.
 
 ## License
 

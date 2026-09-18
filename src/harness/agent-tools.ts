@@ -23,7 +23,6 @@ import {
   quarantineReleaseKey,
   toolResultProvenance,
   unscreenedNotice,
-  UNSCREENED_PREFIX,
   type ToolResultProvenance,
   type ToolResultScreen,
   type ToolResultScreenInput,
@@ -426,6 +425,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     coreAuthored = false,
     display?: Record<string, unknown>,
     screenAs?: { provenance: ToolResultProvenance; source?: string },
+    protectedAnnotations?: { prefix?: string; suffix?: string },
   ): Promise<T> =>
     resultQueue("result", async () => {
       const originalTool = String(summary.tool ?? "");
@@ -434,9 +434,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
-      let result = capResultText(t, maxToolResultChars);
-      const resultTruncated = result !== t;
-      if (resultTruncated) {
+      const cappedPayload = capResultText(t, maxToolResultChars);
+      let result = `${protectedAnnotations?.prefix ?? ""}${cappedPayload}${protectedAnnotations?.suffix ?? ""}`;
+      const resultTruncated = cappedPayload !== t;
+      if (resultTruncated || protectedAnnotations?.prefix || protectedAnnotations?.suffix) {
         const firstText = ret.content.findIndex((part) => part.type === "text");
         (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content
           .map((part, index) => (index === firstText ? { type: "text", text: result } : part))
@@ -492,13 +493,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             (ret as { terminate?: boolean }).terminate = true;
           }
         } else if (screen.outcome === "unscreened") {
-          if (!result.startsWith(UNSCREENED_PREFIX)) {
-            result = `${unscreenedNotice("tool output")}\n${result}`;
-            (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
-              { type: "text", text: result },
-              ...ret.content.filter((c) => c.type !== "text"),
-            ];
-          }
+          result = `${unscreenedNotice("tool output")}\n${result}`;
+          (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
+            { type: "text", text: result },
+            ...ret.content.filter((c) => c.type !== "text"),
+          ];
           persistedSummary = {
             tool: summary.tool,
             ...(summary.action ? { action: summary.action } : {}),
@@ -695,7 +694,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           content: [
             {
               type: "text" as const,
-              text: `${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
+              text: `${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`,
             },
           ],
           details: r,
@@ -705,6 +704,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         false,
         undefined,
         r.reached ? { provenance: "external", source: "reached room" } : undefined,
+        reachedPrefix ? { prefix: reachedPrefix } : undefined,
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
