@@ -53,8 +53,18 @@ function assignEnv(vars: EnvVars): () => void {
   return () => assignEnv(prior);
 }
 
+const capturedEnv = new WeakMap<TestContext, Map<string, string | undefined>>();
+
 export function setEnv(t: TestContext, vars: EnvVars): void {
-  t.after(assignEnv(vars));
+  let captured = capturedEnv.get(t);
+  if (!captured) {
+    const originals = new Map<string, string | undefined>();
+    captured = originals;
+    capturedEnv.set(t, originals);
+    t.after(() => assignEnv(Object.fromEntries(originals)));
+  }
+  for (const name of Object.keys(vars)) if (!captured.has(name)) captured.set(name, process.env[name]);
+  assignEnv(vars);
 }
 
 export function withEnv<T>(vars: EnvVars, fn: () => T): T {

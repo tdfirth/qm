@@ -4403,7 +4403,7 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
     }
     assert.match(readFileSync(fake.log, "utf8"), /describe-load-balancers --names inactive-stack/);
   } finally {
-    t.mock.restoreAll();
+    t.mock.reset();
   }
 });
 
@@ -4531,7 +4531,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     }
     assert.equal(calls.length, 2);
   } finally {
-    t.mock.restoreAll();
+    t.mock.reset();
   }
 });
 
@@ -4572,7 +4572,7 @@ test("AWS core transport bounds streamed TLS bodies and destroys oversized respo
     );
     assert.equal(destroyed, true);
   } finally {
-    t.mock.restoreAll();
+    t.mock.reset();
   }
 });
 
@@ -4616,7 +4616,7 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
     await assert.rejects(send, /response aborted/);
     assert.equal(calls, 2);
   } finally {
-    t.mock.restoreAll();
+    t.mock.reset();
   }
 });
 
@@ -4651,7 +4651,7 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
     );
     assert.equal(calls, 1);
   } finally {
-    t.mock.restoreAll();
+    t.mock.reset();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
