@@ -10,6 +10,7 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 
 const nonLeaderLease: LeaderLease = {
   async hold() {
@@ -30,7 +31,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "concurrency-")),
     ...(opts.lease ? { leaderLease: opts.lease } : {}),
@@ -123,7 +124,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "serialize-")),
   });

@@ -9,6 +9,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { DeployEndpoint } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 
 function svc(
   opts: {
@@ -42,7 +43,7 @@ function svc(
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
@@ -138,7 +139,7 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
@@ -171,7 +172,7 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });

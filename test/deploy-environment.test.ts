@@ -9,6 +9,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "deployment-env-"));
 
 function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>) {
@@ -25,7 +26,7 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
   const service = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: tmp(),
     ...(deploymentEnv ? { deploymentEnv } : {}),

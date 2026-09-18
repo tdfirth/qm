@@ -10,6 +10,7 @@ import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type ConversationKind, type Principal } from "../src/types.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
 const ORG = "default-org";
 const orgScope = scopeId("org", ORG);
@@ -20,12 +21,8 @@ function svc() {
   const acl: AclStore = createAclStore();
   const deploy: DeployService = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 20000 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(20000),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "pda-")),
   });

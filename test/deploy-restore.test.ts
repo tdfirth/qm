@@ -7,6 +7,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 
 function harness(failRestore = false) {
   let applies = 0;
@@ -24,7 +25,7 @@ function harness(failRestore = false) {
         destroys++;
       },
     },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-")),
   });
@@ -58,7 +59,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
         destroys++;
       },
     },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-persistence-")),
   });

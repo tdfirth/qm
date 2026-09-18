@@ -8,6 +8,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 
 function svc(managedScaleToZero: boolean) {
   const deployStore = createDeployStore();
@@ -22,7 +23,7 @@ function svc(managedScaleToZero: boolean) {
   const deploy = createDeployService({
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "reap-")),
   });

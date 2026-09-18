@@ -10,6 +10,7 @@ import { createDirectoryStore, type DirectoryStore } from "../src/directory/dire
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId } from "../src/types.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -33,12 +34,8 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   );
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19996 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(19996),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "parity-deploy-")),
     ...(opts.withResolver

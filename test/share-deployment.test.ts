@@ -24,6 +24,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
 type Dir = { resolve: (orgId: string, q: string) => Promise<RecipientResolution> };
 
@@ -31,12 +32,8 @@ function makeDeploy(): { deploy: DeployService; acl: AclStore } {
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
     deployStore: createDeployStore(),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 20200 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(20200),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "share-api-")),
   });

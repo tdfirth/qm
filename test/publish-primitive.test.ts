@@ -12,6 +12,7 @@ import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
 import type { AgentComputerExportEntry, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { nullAuditLog } from "./support/fakes.ts";
 
 function svc() {
   const deployStore: DeployStore = createDeployStore();
@@ -27,7 +28,7 @@ function svc() {
       },
       destroy: async () => {},
     },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "pub-")),
   });

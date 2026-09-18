@@ -13,6 +13,7 @@ import { createDeployService, type DeployService } from "../src/deploy/deploy-se
 import type { DeployReconcileInput } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
 interface ProviderProbe {
   appliedImages: Array<string | undefined>;
@@ -24,7 +25,7 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
   const deploy = createDeployService({
     deployStore,
     acl: createAclStore(),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
     provider: {
       profile: { managedScaleToZero: true },
@@ -95,13 +96,9 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
   const deploy = createDeployService({
     deployStore,
     acl: createAclStore(),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-noimg-")),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 9200 }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(9200),
   });
   const d = await deploy.deploy({
     ownerScopeId: owner,
@@ -122,7 +119,7 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
   const deploy = createDeployService({
     deployStore,
     acl: createAclStore(),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
     provider: {
       profile: { managedScaleToZero: true, inPlaceReconcile: true },
@@ -172,13 +169,9 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
   const deploy = createDeployService({
     deployStore,
     acl: createAclStore(),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-applied-order-")),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 9200 }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(9200),
   });
 
   await assert.rejects(
@@ -201,7 +194,7 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
   const deploy = createDeployService({
     deployStore,
     acl: createAclStore(),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: nullAuditLog(),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-current-ref-")),
     provider: {
       profile: { managedScaleToZero: false },
