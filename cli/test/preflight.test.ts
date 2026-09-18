@@ -222,7 +222,7 @@ test("missing email credentials disable email without failing deployment checks"
   }
 });
 
-test("email preflight resolves aliases and settings supplied directly in config", async () => {
+test("email preflight rejects conflicting aliases and resolves settings supplied directly in config", async () => {
   const aliased = {
     ...CONFIG,
     env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
@@ -234,8 +234,8 @@ test("email preflight resolves aliases and settings supplied directly in config"
     ["AUTH_SENDER", "noreply@example.com"],
     ["MAIL_KEY", "re_configured"],
   ]);
-  assert.equal(emailTransportConfigured(aliased, secrets), true);
-  await assert.doesNotReject(emailTransportPreflight(aliased, secrets));
+  assert.throws(() => emailTransportConfigured(aliased, secrets), /would receive env AUTH_EMAIL_FROM from both/);
+  await assert.rejects(emailTransportPreflight(aliased, secrets), /would receive env AUTH_EMAIL_FROM from both/);
   const direct = {
     ...CONFIG,
     env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_EMAIL_FROM: "noreply@example.com" } },

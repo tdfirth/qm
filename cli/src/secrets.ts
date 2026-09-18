@@ -548,10 +548,15 @@ function targetEnvDefault(config: QmConfig, service: string, name: string): stri
   return TARGET_ENV_DEFAULTS[config.target](config, service, name);
 }
 
-function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
-  if (typeof spec.required === "boolean") return spec.required;
-  if (conditionMatches(config, spec.required.when)) return !spec.required.optional;
-  return spec.required.optionalOtherwise ? false : null;
+function requirementFor(
+  config: QmConfig,
+  spec: SecretSpec,
+): { required: boolean; configuredAliasOverrides: boolean } | null {
+  if (typeof spec.required === "boolean") return { required: spec.required, configuredAliasOverrides: false };
+  if (conditionMatches(config, spec.required.when)) {
+    return { required: !spec.required.optional, configuredAliasOverrides: false };
+  }
+  return spec.required.optionalOtherwise ? { required: false, configuredAliasOverrides: true } : null;
 }
 
 export function emailSecretNames(config: QmConfig): string[] {
@@ -566,10 +571,20 @@ export function emailSecretNames(config: QmConfig): string[] {
 
 export function computedSecrets(config: QmConfig): ComputedSecret[] {
   const byName = new Map<string, ComputedSecret>();
+  const replaceableCatalogDestinations = new Set<string>();
+  const fixedCatalogDestinations = new Set<string>();
   for (const spec of FIRST_PARTY_SECRET_SPECS) {
     if (!config.services.includes(spec.service)) continue;
-    const required = requirementFor(config, spec);
-    if (required === null) continue;
+    const requirement = requirementFor(config, spec);
+    if (requirement === null) continue;
+    const { required, configuredAliasOverrides } = requirement;
+    const destination = `${serviceHost(spec.service)}:${spec.envName ?? spec.name}`;
+    if (configuredAliasOverrides) {
+      if (!fixedCatalogDestinations.has(destination)) replaceableCatalogDestinations.add(destination);
+    } else {
+      fixedCatalogDestinations.add(destination);
+      replaceableCatalogDestinations.delete(destination);
+    }
     const current = byName.get(spec.name);
     if (current) {
       if (spec.envName) {
@@ -617,13 +632,15 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
       if (envName !== storeName) {
         const workload = serviceHost(service);
         for (const secret of byName.values()) {
-          if (secret.required) continue;
-          if (secret.name === envName) {
+          if (secret.name === envName && replaceableCatalogDestinations.has(`${workload}:${envName}`)) {
             secret.services = secret.services.filter((candidate) => serviceHost(candidate) !== workload);
           }
           if (secret.aliases) {
             secret.aliases = secret.aliases.filter(
-              (alias) => serviceHost(alias.service) !== workload || alias.name !== envName,
+              (alias) =>
+                serviceHost(alias.service) !== workload ||
+                alias.name !== envName ||
+                !replaceableCatalogDestinations.has(`${workload}:${envName}`),
             );
           }
         }
