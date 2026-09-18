@@ -1,4 +1,3 @@
-import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -7,11 +6,10 @@ import { join } from "node:path";
 import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
+import { sandboxBackendContract } from "./support/sandbox-backend-contract.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 let fake: FakeAgent37;
@@ -34,80 +32,13 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
-test("provision runs commands with env and cwd", async () => {
-  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
-  assert.equal(h.coldStart, true);
-  const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
-  assert.equal(r.code, 0);
-  assert.match(r.stdout, /workspace/);
-  assert.match(r.stdout, /VAR=v1/);
-});
-
-test("streams and exit codes are exact", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
-  assert.equal(r.code, 3);
-  assert.equal(r.stdout.trim(), "out");
-  assert.equal(r.stderr.trim(), "err");
-});
-
-test("file roundtrip incl. large binary and missing file", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFile(h, "a/b.txt", "hello\n");
-  assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
-  assert.equal(await sandbox.readFile(h, "nope.txt"), null);
-  const big = Buffer.alloc(200 * 1024);
-  for (let i = 0; i < big.length; i++) big[i] = (i * 7) % 256;
-  await sandbox.writeFileBytes(h, "big.bin", big);
-  const back = await sandbox.readFileBytes(h, "big.bin");
-  assert.ok(back && Buffer.from(back).equals(big));
-  const huge = Buffer.alloc(1300 * 1024);
-  for (let i = 0; i < huge.length; i++) huge[i] = (i * 13) % 256;
-  await sandbox.writeFileBytes(h, "huge.bin", huge);
-  const hugeBack = await sandbox.readFileBytes(h, "huge.bin");
-  assert.ok(hugeBack && Buffer.from(hugeBack).equals(huge));
-});
+sandboxBackendContract({ make, scope, layers, execScripts: () => fake.execScripts() });
 
 test("every exec request stays under the single-argument limit of the host", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFileBytes(h, "wide.bin", Buffer.alloc(600 * 1024, 7));
   const longest = Math.max(...fake.execScripts().map((s) => Buffer.byteLength(s)));
   assert.ok(longest < 100 * 1024, `longest exec command was ${longest} bytes`);
-});
-
-test("empty file roundtrip", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
-  const back = await sandbox.readFileBytes(h, "empty.bin");
-  assert.ok(back);
-  assert.equal(back.length, 0);
-});
-
-test("process sessions capability works end to end", async () => {
-  assert.ok(supportsProcessSessions(sandbox));
-  if (!supportsProcessSessions(sandbox)) return;
-  const h = await sandbox.provision(layers);
-  const { processId } = await sandbox.startProcess(h, "echo one; echo two");
-  const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
-  assert.equal(status.state, "exited");
-  assert.match(output, /one/);
-  assert.match(output, /two/);
-});
-
-test("force-through proxy env is set when a proxy url and token are present", async () => {
-  const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  const token = await mintCapabilityToken(
-    { actorId: "tester", scopeId: scope, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
-    "secret",
-  );
-  const h = await s.provision(layers, { egressToken: token });
-  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
-  assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
-});
-
-test("no proxy env without a proxy url", async () => {
-  const h = await sandbox.provision(layers, { egressToken: "ignored" });
-  assert.equal(h.env?.HTTPS_PROXY, undefined);
 });
 
 test("instance is reused across provisions and warm start is reported", async () => {
@@ -192,14 +123,6 @@ test("teardown without destroy keeps the instance; destroy deletes it", async ()
   assert.equal(fake.instance(h.id), null);
 });
 
-test("large command output survives the API's output cap exactly", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.length, 900 * 1024);
-  assert.equal(r.stdout, "x".repeat(900 * 1024));
-});
-
 test("command output is bounded and spool files are removed on rejection", async () => {
   const h = await sandbox.provision(layers);
   await assert.rejects(
@@ -208,15 +131,6 @@ test("command output is bounded and spool files are removed on rejection", async
   );
   const leftovers = await sandbox.run(h, "ls /home/node/.qm-exec-* 2>/dev/null | wc -l");
   assert.equal(leftovers.stdout.trim(), "2", "only the inspection command's stdout/stderr spools exist");
-});
-
-test("an already-aborted command is never executed", async () => {
-  const h = await sandbox.provision(layers);
-  const before = fake.execScripts().length;
-  const controller = new AbortController();
-  controller.abort();
-  await assert.rejects(sandbox.run(h, "touch should-not-exist", { signal: controller.signal }), /aborted/i);
-  assert.equal(fake.execScripts().length, before);
 });
 
 test("an instance already named after the scope is adopted instead of duplicated", async () => {

@@ -1,4 +1,3 @@
-import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -8,9 +7,9 @@ import { createPorterSandbox, porterScopeSlug } from "../src/sandbox/porter-sand
 import { withPorterErrorDetails } from "../src/sandbox/porter-client.ts";
 import { SandboxError } from "porter-sandbox";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
+import { sandboxBackendContract } from "./support/sandbox-backend-contract.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 let fake: FakePorter;
@@ -33,39 +32,7 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
-test("provision runs commands with env and cwd", async () => {
-  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
-  assert.equal(h.coldStart, true);
-  const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
-  assert.equal(r.code, 0);
-  assert.match(r.stdout, /workspace/);
-  assert.match(r.stdout, /VAR=v1/);
-});
-
-test("streams and exit codes are exact", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
-  assert.equal(r.code, 3);
-  assert.equal(r.stdout.trim(), "out");
-  assert.equal(r.stderr.trim(), "err");
-});
-
-test("file roundtrip incl. large binary and missing file", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFile(h, "a/b.txt", "hello\n");
-  assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
-  assert.equal(await sandbox.readFile(h, "nope.txt"), null);
-  const big = Buffer.alloc(200 * 1024);
-  for (let i = 0; i < big.length; i++) big[i] = (i * 7) % 256;
-  await sandbox.writeFileBytes(h, "big.bin", big);
-  const back = await sandbox.readFileBytes(h, "big.bin");
-  assert.ok(back && Buffer.from(back).equals(big));
-  const huge = Buffer.alloc(1300 * 1024);
-  for (let i = 0; i < huge.length; i++) huge[i] = (i * 13) % 256;
-  await sandbox.writeFileBytes(h, "huge.bin", huge);
-  const hugeBack = await sandbox.readFileBytes(h, "huge.bin");
-  assert.ok(hugeBack && Buffer.from(hugeBack).equals(huge));
-});
+sandboxBackendContract({ make, scope, layers, execScripts: () => fake.execScripts() });
 
 test("volume survives body replacement and coldStart stays false", async () => {
   const h1 = await sandbox.provision(layers);
@@ -107,17 +74,6 @@ test("a tokened turn on an open body rotates it into the proxy pin", async () =>
   const pinned = fake.bodies().filter((b) => b.phase === "running" && b.tags["qm-scope"] === slug);
   assert.equal(pinned.length, 1);
   assert.equal(pinned[0]!.tags["qm-egress"], "proxy");
-});
-
-test("process sessions capability works end to end", async () => {
-  assert.ok(supportsProcessSessions(sandbox));
-  if (!supportsProcessSessions(sandbox)) return;
-  const h = await sandbox.provision(layers);
-  const { processId } = await sandbox.startProcess(h, "echo one; echo two");
-  const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
-  assert.equal(status.state, "exited");
-  assert.match(output, /one/);
-  assert.match(output, /two/);
 });
 
 test("scratch bodies are isolated, refcounted, and removed on release", async () => {
