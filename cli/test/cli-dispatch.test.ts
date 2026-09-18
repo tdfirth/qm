@@ -9,7 +9,7 @@ import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { main } from "../src/cli.ts";
 import { renderTaskDefinition } from "../src/backends/aws.ts";
 import { computedSecrets } from "../src/secrets.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 async function run(argv: string[], cwd?: string): Promise<{ out: string; exitCode: number | null }> {
   const lines: string[] = [];
@@ -213,20 +213,14 @@ else console.log("{}");
     },
   };
   writeFileSync(join(dir, CONFIG_FILENAME), JSON.stringify(config));
-  const previousAwsBin = process.env.AWS_BIN;
-  process.env.AWS_BIN = aws;
-  try {
-    const plain = await run(["check", "--live"], dir);
-    assert.equal(plain.exitCode, 1, plain.out);
-    assert.match(plain.out, /live drift detected/);
-    const json = await run(["check", "--json", "--live"], dir);
-    assert.equal(json.exitCode, 1, json.out);
-    const result = JSON.parse(json.out) as { clauses: Record<string, { status: string }> };
-    assert.equal(result.clauses["aws.live-drift"]?.status, "fail");
-  } finally {
-    if (previousAwsBin === undefined) delete process.env.AWS_BIN;
-    else process.env.AWS_BIN = previousAwsBin;
-  }
+  setEnv(t, { AWS_BIN: aws });
+  const plain = await run(["check", "--live"], dir);
+  assert.equal(plain.exitCode, 1, plain.out);
+  assert.match(plain.out, /live drift detected/);
+  const json = await run(["check", "--json", "--live"], dir);
+  assert.equal(json.exitCode, 1, json.out);
+  const result = JSON.parse(json.out) as { clauses: Record<string, { status: string }> };
+  assert.equal(result.clauses["aws.live-drift"]?.status, "fail");
 });
 
 test("successful check --json --live reports the live-drift clause", async (t) => {
@@ -299,11 +293,8 @@ else console.log("{}");
 `,
   );
   chmodSync(aws, 0o755);
-  const previousAwsBin = process.env.AWS_BIN;
-  const previousSha = process.env.GITHUB_SHA;
   const previousFetch = globalThis.fetch;
-  process.env.AWS_BIN = aws;
-  delete process.env.GITHUB_SHA;
+  setEnv(t, { AWS_BIN: aws, GITHUB_SHA: undefined });
   const layerResponse = JSON.stringify({
     bundle: JSON.parse(layerBody),
     contentHash: layerHash,
@@ -336,10 +327,6 @@ else console.log("{}");
     assert.equal(result.clauses["aws.live-drift"]?.status, "pass");
     assert.equal(layerRequests, 1);
   } finally {
-    if (previousAwsBin === undefined) delete process.env.AWS_BIN;
-    else process.env.AWS_BIN = previousAwsBin;
-    if (previousSha === undefined) delete process.env.GITHUB_SHA;
-    else process.env.GITHUB_SHA = previousSha;
     globalThis.fetch = previousFetch;
   }
 });
@@ -389,16 +376,10 @@ test("--env-file that does not exist is an error", async (t) => {
     }),
   );
   const xdg = tempDir(t, "qm-xdg-");
-  const prevXdg = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = xdg;
-  try {
-    const { out, exitCode } = await run(["plan", "--env-file", join(dir, "nope.env")], dir);
-    assert.equal(exitCode, 1);
-    assert.match(out, /--env-file not found/);
-  } finally {
-    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = prevXdg;
-  }
+  setEnv(t, { XDG_CONFIG_HOME: xdg });
+  const { out, exitCode } = await run(["plan", "--env-file", join(dir, "nope.env")], dir);
+  assert.equal(exitCode, 1);
+  assert.match(out, /--env-file not found/);
 });
 
 test("docker --only is rejected explicitly instead of silently restarting the full stack", async (t) => {

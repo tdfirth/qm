@@ -16,7 +16,7 @@ import {
   verifyLocalFlyTokens,
 } from "../src/backends/fly.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -289,8 +289,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     dir,
     `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
-  const priorAnthropic = process.env.ANTHROPIC_API_KEY;
-  process.env.ANTHROPIC_API_KEY = "proc-wins";
+  setEnv(t, { ANTHROPIC_API_KEY: "proc-wins" });
   const log = console.log;
   console.log = (): void => {};
   try {
@@ -334,8 +333,6 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     assert.ok(!calls.includes("value:proc-wins"), "ambient credentials do not replace deployment-scoped values");
   } finally {
     console.log = log;
-    if (priorAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = priorAnthropic;
     fake.restore();
   }
 });
@@ -519,8 +516,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     dir,
     `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
-  const prior = process.env.CORE_SIGNING_SECRET;
-  process.env.CORE_SIGNING_SECRET = "ambient-signing-secret-that-is-long-enough";
+  setEnv(t, { CORE_SIGNING_SECRET: "ambient-signing-secret-that-is-long-enough" });
   const log = console.log;
   console.log = (): void => {};
   try {
@@ -528,8 +524,6 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     assert.match(readFileSync(fake.log, "utf8"), /value:ambient-signing-secret-that-is-long-enough/);
   } finally {
     console.log = log;
-    if (prior === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = prior;
     fake.restore();
   }
 });

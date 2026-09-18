@@ -46,7 +46,7 @@ import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
 import { hostingProvider } from "../src/backends/registry.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir, withEnv } from "./support.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -902,81 +902,68 @@ test("githubTrustSubject pins the deploy branch, never the working checkout's br
   };
   git("init", "-b", "feature-checkout");
   git("remote", "add", "origin", "git@github.com:acme/qm.git");
-  const priorRepo = process.env.GITHUB_REPOSITORY;
-  const priorRef = process.env.GITHUB_REF;
-  delete process.env.GITHUB_REPOSITORY;
-  delete process.env.GITHUB_REF;
-  try {
-    assert.equal(
-      githubTrustSubject(dir),
-      "repo:acme/qm:ref:refs/heads/main",
-      "a feature-branch checkout still expects the main-pinned trust",
-    );
-    assert.equal(
-      githubTrustSubject(dir, "release"),
-      "repo:acme/qm:ref:refs/heads/release",
-      "aws.deployBranch overrides the default",
-    );
-    assert.equal(
-      githubTrustSubject(dir, "release", "production"),
-      "repo:acme/qm:environment:production",
-      "a GitHub environment replaces the branch in the OIDC subject",
-    );
-    mkdirSync(join(dir, "infra"), { recursive: true });
-    writeFileSync(
-      join(dir, "infra", "terraform.tfvars"),
-      'github_repository = "acme/vendored"\ngithub_ref = "refs/heads/deploy"\n',
-    );
-    assert.equal(
-      githubTrustSubject(dir),
-      "repo:acme/vendored:ref:refs/heads/deploy",
-      "vendored infra declares its own pinned ref",
-    );
-    assert.equal(
-      githubTrustSubject(dir, "main"),
-      "repo:acme/vendored:ref:refs/heads/main",
-      "an explicit deployBranch wins over tfvars",
-    );
-    writeFileSync(
-      join(dir, "infra", "terraform.tfvars"),
-      'github_repository = "acme/vendored"\ngithub_subject_prefix = "repo:acme@123/vendored@456"\ngithub_ref = "refs/heads/deploy"\n',
-    );
-    assert.equal(
-      githubTrustSubject(dir),
-      "repo:acme@123/vendored@456:ref:refs/heads/deploy",
-      "an immutable GitHub OIDC prefix overrides the name-based prefix",
-    );
-    assert.equal(
-      githubTrustSubject(dir, undefined, "production"),
-      "repo:acme@123/vendored@456:environment:production",
-      "the immutable prefix also applies to environment subjects",
-    );
-    process.env.GITHUB_REPOSITORY = "acme/from-actions";
-    process.env.GITHUB_REF = "refs/heads/pr-branch";
-    assert.equal(
-      githubTrustSubject(dir),
-      "repo:acme@123/vendored@456:ref:refs/heads/deploy",
-      "the deployment's immutable prefix and ref shape the expected trust",
-    );
-    writeFileSync(
-      join(dir, "infra", "terraform.tfvars"),
-      'github_repository = "acme/vendored"\ngithub_subject_prefix = "repo:acme/vendored:environment:production"\ngithub_ref = "refs/heads/deploy"\n',
-    );
-    assert.throws(
-      () => githubTrustSubject(dir),
-      /github_subject_prefix must be an exact repo:owner\/repository prefix/,
-    );
-    writeFileSync(
-      join(dir, "infra", "terraform.tfvars"),
-      'github_repository = "acme/vendored"\ngithub_ref = "release"\n',
-    );
-    assert.throws(() => githubTrustSubject(dir), /github_ref must be a refs\/heads\/\* branch ref/);
-  } finally {
-    if (priorRepo === undefined) delete process.env.GITHUB_REPOSITORY;
-    else process.env.GITHUB_REPOSITORY = priorRepo;
-    if (priorRef === undefined) delete process.env.GITHUB_REF;
-    else process.env.GITHUB_REF = priorRef;
-  }
+  setEnv(t, { GITHUB_REPOSITORY: undefined, GITHUB_REF: undefined });
+  assert.equal(
+    githubTrustSubject(dir),
+    "repo:acme/qm:ref:refs/heads/main",
+    "a feature-branch checkout still expects the main-pinned trust",
+  );
+  assert.equal(
+    githubTrustSubject(dir, "release"),
+    "repo:acme/qm:ref:refs/heads/release",
+    "aws.deployBranch overrides the default",
+  );
+  assert.equal(
+    githubTrustSubject(dir, "release", "production"),
+    "repo:acme/qm:environment:production",
+    "a GitHub environment replaces the branch in the OIDC subject",
+  );
+  mkdirSync(join(dir, "infra"), { recursive: true });
+  writeFileSync(
+    join(dir, "infra", "terraform.tfvars"),
+    'github_repository = "acme/vendored"\ngithub_ref = "refs/heads/deploy"\n',
+  );
+  assert.equal(
+    githubTrustSubject(dir),
+    "repo:acme/vendored:ref:refs/heads/deploy",
+    "vendored infra declares its own pinned ref",
+  );
+  assert.equal(
+    githubTrustSubject(dir, "main"),
+    "repo:acme/vendored:ref:refs/heads/main",
+    "an explicit deployBranch wins over tfvars",
+  );
+  writeFileSync(
+    join(dir, "infra", "terraform.tfvars"),
+    'github_repository = "acme/vendored"\ngithub_subject_prefix = "repo:acme@123/vendored@456"\ngithub_ref = "refs/heads/deploy"\n',
+  );
+  assert.equal(
+    githubTrustSubject(dir),
+    "repo:acme@123/vendored@456:ref:refs/heads/deploy",
+    "an immutable GitHub OIDC prefix overrides the name-based prefix",
+  );
+  assert.equal(
+    githubTrustSubject(dir, undefined, "production"),
+    "repo:acme@123/vendored@456:environment:production",
+    "the immutable prefix also applies to environment subjects",
+  );
+  process.env.GITHUB_REPOSITORY = "acme/from-actions";
+  process.env.GITHUB_REF = "refs/heads/pr-branch";
+  assert.equal(
+    githubTrustSubject(dir),
+    "repo:acme@123/vendored@456:ref:refs/heads/deploy",
+    "the deployment's immutable prefix and ref shape the expected trust",
+  );
+  writeFileSync(
+    join(dir, "infra", "terraform.tfvars"),
+    'github_repository = "acme/vendored"\ngithub_subject_prefix = "repo:acme/vendored:environment:production"\ngithub_ref = "refs/heads/deploy"\n',
+  );
+  assert.throws(() => githubTrustSubject(dir), /github_subject_prefix must be an exact repo:owner\/repository prefix/);
+  writeFileSync(
+    join(dir, "infra", "terraform.tfvars"),
+    'github_repository = "acme/vendored"\ngithub_ref = "release"\n',
+  );
+  assert.throws(() => githubTrustSubject(dir), /github_ref must be a refs\/heads\/\* branch ref/);
 });
 
 test("AWS doctor requires the public listener transport to match publicUrl", () => {
@@ -1015,8 +1002,7 @@ test("AWS deploy refuses the HTTP bootstrap before any AWS mutation", async (t) 
 test("AWS deploy requires the live ALB listener to match the HTTPS public URL", async (t) => {
   const dir = tempDir(t, "qm-aws-live-listener-");
   const fake = fakeAws(dir, `console.log("");`);
-  const prior = process.env.AWS_FAKE_LISTENER_PROTOCOL;
-  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
+  setEnv(t, { AWS_FAKE_LISTENER_PROTOCOL: "HTTP" });
   try {
     await assert.rejects(
       () => awsUp(config, process.cwd(), { yes: true }),
@@ -1027,8 +1013,6 @@ test("AWS deploy requires the live ALB listener to match the HTTPS public URL", 
     assert.match(calls, /elbv2 describe-listeners/);
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecs update-service/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
-    else process.env.AWS_FAKE_LISTENER_PROTOCOL = prior;
     fake.restore();
   }
 });
@@ -1036,8 +1020,7 @@ test("AWS deploy requires the live ALB listener to match the HTTPS public URL", 
 test("AWS deploy binds its public origin DNS to this stack's ALB", async (t) => {
   const dir = tempDir(t, "qm-aws-dns-binding-");
   const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_ALB_DNS;
-  process.env.AWS_FAKE_ALB_DNS = "127.0.0.1";
+  setEnv(t, { AWS_FAKE_ALB_DNS: "127.0.0.1" });
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true }),
@@ -1045,8 +1028,6 @@ test("AWS deploy binds its public origin DNS to this stack's ALB", async (t) => 
     );
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb put-item|ecr get-login-password|ecs update-service/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
   }
 });
@@ -1069,8 +1050,7 @@ test("AWS deploy can prepare an exact candidate on the inactive production stack
   );
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const prior = process.env.AWS_FAKE_ALB_DNS;
-  process.env.AWS_FAKE_ALB_DNS = "192.0.2.1";
+  setEnv(t, { AWS_FAKE_ALB_DNS: "192.0.2.1" });
   try {
     await awsUp(single, dir, { yes: true, candidate: candidatePath, inactive: true });
     assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
@@ -1079,8 +1059,6 @@ test("AWS deploy can prepare an exact candidate on the inactive production stack
       /--inactive is only valid for an exact candidate deployment/,
     );
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
   }
 });
@@ -1088,8 +1066,7 @@ test("AWS deploy can prepare an exact candidate on the inactive production stack
 test("AWS deploy requires the exact active successful MicroVM image version", async (t) => {
   const dir = tempDir(t, "qm-aws-image-version-");
   const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_IMAGE_STATE;
-  process.env.AWS_FAKE_IMAGE_STATE = "FAILED";
+  setEnv(t, { AWS_FAKE_IMAGE_STATE: "FAILED" });
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /version 1 is not SUCCESSFUL and ACTIVE/);
     const calls = readFileSync(fake.log, "utf8");
@@ -1103,8 +1080,6 @@ test("AWS deploy requires the exact active successful MicroVM image version", as
     );
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecs update-service/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_IMAGE_STATE;
-    else process.env.AWS_FAKE_IMAGE_STATE = prior;
     fake.restore();
   }
 });
@@ -1121,17 +1096,15 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
     expected: RegExp,
   ): Promise<void> => {
     const fake = statefulAws(dir, oneServiceConfig());
-    const prior = process.env[env];
-    process.env[env] = "1";
     try {
-      await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), expected);
-      assert.doesNotMatch(
-        readFileSync(fake.log, "utf8"),
-        /dynamodb put-item|ecr get-login-password|ecs update-service/,
-      );
+      await withEnv({ [env]: "1" }, async () => {
+        await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), expected);
+        assert.doesNotMatch(
+          readFileSync(fake.log, "utf8"),
+          /dynamodb put-item|ecr get-login-password|ecs update-service/,
+        );
+      });
     } finally {
-      if (prior === undefined) delete process.env[env];
-      else process.env[env] = prior;
       fake.restore();
     }
   };
@@ -1141,13 +1114,10 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
   await run("AWS_FAKE_EXTRA_CONDITION", /non-portal ALB must route only \/v1\/\* directly to core/);
   await run("AWS_FAKE_EXTRA_RULE", /non-portal ALB has unexpected non-default rules/);
   const portal = statefulAws(dir, config);
-  const priorExtraRule = process.env.AWS_FAKE_EXTRA_RULE;
-  process.env.AWS_FAKE_EXTRA_RULE = "1";
+  setEnv(t, { AWS_FAKE_EXTRA_RULE: "1" });
   try {
     await assert.rejects(() => awsUp(config, dir, { yes: true }), /portal mode must not expose non-default ALB rules/);
   } finally {
-    if (priorExtraRule === undefined) delete process.env.AWS_FAKE_EXTRA_RULE;
-    else process.env.AWS_FAKE_EXTRA_RULE = priorExtraRule;
     portal.restore();
   }
 });
@@ -1157,8 +1127,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const hostSplitConfig = (hosts: { apiUrl?: string; appsDomain?: string }): QmConfig => ({
     ...config,
     ...(hosts.apiUrl ? { apiUrl: hosts.apiUrl } : {}),
@@ -1188,56 +1157,48 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
     envValue = "1",
   ): Promise<void> => {
     const fake = statefulAws(dir, configured);
-    const prior = env ? process.env[env] : undefined;
-    if (env) process.env[env] = envValue;
     try {
-      if (expected) await assert.rejects(() => awsUp(configured, dir, { dryRun: true }), expected);
-      else await awsUp(configured, dir, { dryRun: true });
-      if (!expected || (env && env !== "AWS_FAKE_PUBLIC_API_URL"))
-        assert.match(readFileSync(fake.log, "utf8"), /elbv2 describe-rules/);
+      await withEnv(env ? { [env]: envValue } : {}, async () => {
+        if (expected) await assert.rejects(() => awsUp(configured, dir, { dryRun: true }), expected);
+        else await awsUp(configured, dir, { dryRun: true });
+        if (!expected || (env && env !== "AWS_FAKE_PUBLIC_API_URL"))
+          assert.match(readFileSync(fake.log, "utf8"), /elbv2 describe-rules/);
+      });
     } finally {
-      if (env) {
-        if (prior === undefined) delete process.env[env];
-        else process.env[env] = prior;
-      }
       fake.restore();
     }
   };
-  try {
-    await run(hostSplitConfig(bothHosts));
-    const portalApps = hostSplitConfig(bothHosts);
-    portalApps.env.portal = { ...portalApps.env.portal, PORTAL_APPS_DOMAIN: bothHosts.appsDomain };
-    await run(portalApps);
-    await run(hostSplitConfig({ apiUrl: bothHosts.apiUrl }));
-    await run(hostSplitConfig({ appsDomain: bothHosts.appsDomain }));
-    await run(hostSplitConfig({ apiUrl: "https://API.agent.acme.example", appsDomain: "APPS.agent.acme.example." }));
-    await run(hostSplitConfig({ apiUrl: config.publicUrl }));
-    await run(
-      hostSplitConfig(bothHosts),
-      "AWS_FAKE_NO_CORE_RULE",
-      /host rules must route exactly api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example to core \(live: none\)/,
-    );
-    await run(hostSplitConfig(bothHosts), "AWS_FAKE_EXTRA_RULE", /not a single host-header forward to core/);
-    await run(hostSplitConfig(bothHosts), "AWS_FAKE_WRONG_RULE_TARGET", /not a single host-header forward to core/);
-    await run(
-      hostSplitConfig(bothHosts),
-      "AWS_FAKE_WRONG_RULE_HOST",
-      /host rules must route exactly .* \(live: other\.example, \*\.apps\.agent\.acme\.example\)/,
-    );
-    await run(
-      hostSplitConfig({ appsDomain: "*.apps.agent.acme.example" }),
-      undefined,
-      /env\.core\.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN.* does not derive a valid ALB host-header hostname/,
-    );
-    await run(
-      hostSplitConfig(bothHosts),
-      "AWS_FAKE_PUBLIC_API_URL",
-      /PUBLIC_API_URL must equal the configured HTTPS apiUrl/,
-      config.publicUrl,
-    );
-  } finally {
-    process.env.PATH = priorPath;
-  }
+  await run(hostSplitConfig(bothHosts));
+  const portalApps = hostSplitConfig(bothHosts);
+  portalApps.env.portal = { ...portalApps.env.portal, PORTAL_APPS_DOMAIN: bothHosts.appsDomain };
+  await run(portalApps);
+  await run(hostSplitConfig({ apiUrl: bothHosts.apiUrl }));
+  await run(hostSplitConfig({ appsDomain: bothHosts.appsDomain }));
+  await run(hostSplitConfig({ apiUrl: "https://API.agent.acme.example", appsDomain: "APPS.agent.acme.example." }));
+  await run(hostSplitConfig({ apiUrl: config.publicUrl }));
+  await run(
+    hostSplitConfig(bothHosts),
+    "AWS_FAKE_NO_CORE_RULE",
+    /host rules must route exactly api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example to core \(live: none\)/,
+  );
+  await run(hostSplitConfig(bothHosts), "AWS_FAKE_EXTRA_RULE", /not a single host-header forward to core/);
+  await run(hostSplitConfig(bothHosts), "AWS_FAKE_WRONG_RULE_TARGET", /not a single host-header forward to core/);
+  await run(
+    hostSplitConfig(bothHosts),
+    "AWS_FAKE_WRONG_RULE_HOST",
+    /host rules must route exactly .* \(live: other\.example, \*\.apps\.agent\.acme\.example\)/,
+  );
+  await run(
+    hostSplitConfig({ appsDomain: "*.apps.agent.acme.example" }),
+    undefined,
+    /env\.core\.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN.* does not derive a valid ALB host-header hostname/,
+  );
+  await run(
+    hostSplitConfig(bothHosts),
+    "AWS_FAKE_PUBLIC_API_URL",
+    /PUBLIC_API_URL must equal the configured HTTPS apiUrl/,
+    config.publicUrl,
+  );
 });
 
 test("AWS up scales services to the configured desired count and live check flags drift from it", async (t) => {
@@ -1250,9 +1211,7 @@ test("AWS up scales services to the configured desired count and live check flag
     return { ...base, aws: { ...base.aws!, services: { core: { ...base.aws!.services.core!, desiredCount } } } };
   };
   const fake = statefulAws(dir, scaled());
-  const priorPath = process.env.PATH;
-  const priorCanaryExit = process.env.AWS_FAKE_CANARY_EXIT;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(scaled(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -1271,13 +1230,12 @@ test("AWS up scales services to the configured desired count and live check flag
       readFileSync(fake.log, "utf8"),
       /ecs run-task .*postdeploy-smoke\.ts.*session.*http:\/\/10\.0\.1\.8:8080/,
     );
-    process.env.AWS_FAKE_CANARY_EXIT = "1";
-    await assert.rejects(
-      () => awsCheckLive(scaled(), { report: false }),
-      /core: private live session smoke failed: canary task exited 1/,
+    await withEnv({ AWS_FAKE_CANARY_EXIT: "1" }, () =>
+      assert.rejects(
+        () => awsCheckLive(scaled(), { report: false }),
+        /core: private live session smoke failed: canary task exited 1/,
+      ),
     );
-    if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
-    else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
     rolledBack.services["acme-core"].desiredCount = 1;
     writeFileSync(fake.state, JSON.stringify(rolledBack));
     await assert.rejects(
@@ -1285,9 +1243,6 @@ test("AWS up scales services to the configured desired count and live check flag
       /core: runtime is ACTIVE with 1\/1 running, expected 2/,
     );
   } finally {
-    if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
-    else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1299,8 +1254,7 @@ test("AWS up reapplies the recorded layer after starting a stopped core", async 
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true, sandboxDir: dir });
     const stopped = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -1331,7 +1285,6 @@ test("AWS up reapplies the recorded layer after starting a stopped core", async 
     assert.equal(resumed.services["acme-core"].desiredCount, 1);
     assert.deepEqual(current.layer, previous.layer);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1343,8 +1296,7 @@ test("AWS up records a restore point under the lease before any mutation and sta
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const started = Date.now();
   try {
     await awsUp(single, dir, { dryRun: true });
@@ -1379,7 +1331,6 @@ test("AWS up records a restore point under the lease before any mutation and sta
       "the manifest records the pre-deploy restore timestamp",
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1388,27 +1339,25 @@ test("AWS up refuses to mutate when the database is unavailable, keeps no automa
   const dir = tempDir(t, "qm-aws-db-unhealthy-");
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const priorStatus = process.env.AWS_FAKE_DB_STATUS;
-  const priorRetention = process.env.AWS_FAKE_DB_RETENTION;
   try {
-    process.env.AWS_FAKE_DB_STATUS = "backing-up";
-    await assert.rejects(
-      () => awsUp(single, dir, { yes: true }),
-      /database acme-qm-core is backing-up; refusing to deploy/,
+    await withEnv({ AWS_FAKE_DB_STATUS: "backing-up" }, () =>
+      assert.rejects(
+        () => awsUp(single, dir, { yes: true }),
+        /database acme-qm-core is backing-up; refusing to deploy/,
+      ),
     );
-    delete process.env.AWS_FAKE_DB_STATUS;
-    process.env.AWS_FAKE_DB_RETENTION = "0";
-    await assert.rejects(
-      () => awsUp(single, dir, { yes: true }),
-      /keeps 0 day\(s\) of automated backups, below the required 1/,
+    await withEnv({ AWS_FAKE_DB_RETENTION: "0" }, () =>
+      assert.rejects(
+        () => awsUp(single, dir, { yes: true }),
+        /keeps 0 day\(s\) of automated backups, below the required 1/,
+      ),
     );
-    delete process.env.AWS_FAKE_DB_RETENTION;
     const strict: QmConfig = { ...single, aws: { ...single.aws!, dbRetentionMinDays: 35 } };
     await assert.rejects(
       () => awsUp(strict, dir, { yes: true }),
       /keeps 7 day\(s\) of automated backups, below the required 35/,
     );
-    process.env.AWS_FAKE_DB_RESTORABLE_AT = "";
+    setEnv(t, { AWS_FAKE_DB_RESTORABLE_AT: "" });
     await assert.rejects(
       () => awsUp(single, dir, { yes: true }),
       /reports no LatestRestorableTime; point-in-time recovery is not active/,
@@ -1421,11 +1370,6 @@ test("AWS up refuses to mutate when the database is unavailable, keeps no automa
     const calls = readFileSync(fake.log, "utf8");
     assert.doesNotMatch(calls, /rds create-db-snapshot|ecr get-login-password|ecs update-service|s3api put-object/);
   } finally {
-    if (priorStatus === undefined) delete process.env.AWS_FAKE_DB_STATUS;
-    else process.env.AWS_FAKE_DB_STATUS = priorStatus;
-    if (priorRetention === undefined) delete process.env.AWS_FAKE_DB_RETENTION;
-    else process.env.AWS_FAKE_DB_RETENTION = priorRetention;
-    delete process.env.AWS_FAKE_DB_RESTORABLE_AT;
     fake.restore();
   }
 });
@@ -1438,8 +1382,7 @@ test("aws.predeployDbSnapshot false skips the restore-point check without touchi
   const base = oneServiceConfig();
   const single: QmConfig = { ...base, aws: { ...base.aws!, predeployDbSnapshot: false } };
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true });
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /rds /);
@@ -1450,7 +1393,6 @@ test("aws.predeployDbSnapshot false skips the restore-point check without touchi
     };
     assert.equal(manifest.dbRestorePoint, undefined);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1462,8 +1404,7 @@ test("a no-op re-deploy records no manifest", async (t) => {
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true });
     const first = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -1472,7 +1413,6 @@ test("a no-op re-deploy records no manifest", async (t) => {
     const second = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.equal(second.dynamo["deployment/current"].manifestId.S, firstManifestId);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1484,8 +1424,7 @@ test("AWS up coalesces a requested restart into one deployment even when the tas
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { blueGreenBakePolls: 3 });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true });
     const first = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -1510,7 +1449,6 @@ test("AWS up coalesces a requested restart into one deployment even when the tas
     await assert.rejects(() => awsUp(single, dir, { yes: true, restart: ["missing"] }), /not selected/);
     await assert.rejects(() => awsUp(single, dir, { buildOnly: true, restart: ["core"] }), /cannot be used/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1620,8 +1558,7 @@ test("background activation preserves candidate and manifest without another mig
   const base = oneServiceConfig();
   const single = { ...base, env: { ...base.env, core: { ...base.env.core, BACKGROUND_WORK_ENABLED: "false" } } };
   const fake = statefulAws(dir, single, {}, { drainPolls: 6 });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true });
     const readState = () => JSON.parse(readFileSync(fake.state, "utf8"));
@@ -1695,22 +1632,16 @@ test("background activation preserves candidate and manifest without another mig
     const busy = readState();
     busy.blockDisabledDrain = true;
     writeFileSync(fake.state, JSON.stringify(busy));
-    const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
-    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "1500";
-    try {
+    await withEnv({ QM_AWS_ROLLOUT_DEADLINE_MS: "1500" }, async () => {
       await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /timed out/);
       assert.equal(manifest().id, active.id);
       assert.equal(readState().services["acme-core"].taskDefinition, active.tasks.core);
-    } finally {
-      if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
-      else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
-    }
+    });
     const drifted = readState();
     drifted.services["acme-core"].desiredCount++;
     writeFileSync(fake.state, JSON.stringify(drifted));
     await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /differs from the deployment manifest/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -1722,10 +1653,7 @@ test("AWS up renews the deploy lease with a holder-conditioned update while it r
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single, {}, { transientFailedTaskPolls: 3 });
-  const priorPath = process.env.PATH;
-  const priorRenew = process.env.QM_AWS_LEASE_RENEW_MS;
-  process.env.PATH = `${dir}:${priorPath}`;
-  process.env.QM_AWS_LEASE_RENEW_MS = "10";
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}`, QM_AWS_LEASE_RENEW_MS: "10" });
   try {
     await awsUp(single, dir, { yes: true });
     const calls = readFileSync(fake.log, "utf8");
@@ -1738,9 +1666,6 @@ test("AWS up renews the deploy lease with a holder-conditioned update while it r
       "renewal happens while the lease is held",
     );
   } finally {
-    process.env.PATH = priorPath;
-    if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
-    else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
   }
 });
@@ -1753,8 +1678,7 @@ test("a lease renewal that loses the holder condition warns loudly and stops ren
 if (a.includes("dynamodb update-item")) { console.error("An error occurred (ConditionalCheckFailedException) when calling the UpdateItem operation"); process.exit(1); }
 console.log("");`,
   );
-  const priorRenew = process.env.QM_AWS_LEASE_RENEW_MS;
-  process.env.QM_AWS_LEASE_RENEW_MS = "5";
+  setEnv(t, { QM_AWS_LEASE_RENEW_MS: "5" });
   const warnings: string[] = [];
   const warnLog = console.warn;
   console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
@@ -1770,8 +1694,6 @@ console.log("");`,
     );
   } finally {
     console.warn = warnLog;
-    if (priorRenew === undefined) delete process.env.QM_AWS_LEASE_RENEW_MS;
-    else process.env.QM_AWS_LEASE_RENEW_MS = priorRenew;
     fake.restore();
   }
 });
@@ -1779,8 +1701,7 @@ console.log("");`,
 test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL", async (t) => {
   const dir = tempDir(t, "qm-aws-public-api-url-");
   const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_PUBLIC_API_URL;
-  process.env.AWS_FAKE_PUBLIC_API_URL = "http://agent.acme.example";
+  setEnv(t, { AWS_FAKE_PUBLIC_API_URL: "http://agent.acme.example" });
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true }),
@@ -1790,8 +1711,6 @@ test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL"
     assert.match(calls, /get-secret-value .*PUBLIC_API_URL .*--query SecretString/);
     assert.doesNotMatch(calls, /dynamodb put-item|ecr get-login-password|ecs update-service/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_PUBLIC_API_URL;
-    else process.env.AWS_FAKE_PUBLIC_API_URL = prior;
     fake.restore();
   }
 });
@@ -1799,8 +1718,7 @@ test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL"
 test("every AWS mutation rejects the wrong caller account before side effects", async (t) => {
   const dir = tempDir(t, "qm-aws-account-guard-");
   const fake = fakeAws(dir, `console.log("");`);
-  const prior = process.env.AWS_FAKE_ACCOUNT;
-  process.env.AWS_FAKE_ACCOUNT = "999999999999";
+  setEnv(t, { AWS_FAKE_ACCOUNT: "999999999999" });
   const mismatch = /authenticated to AWS account 999999999999, expected 123456789012/;
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), mismatch);
@@ -1812,8 +1730,6 @@ test("every AWS mutation rejects the wrong caller account before side effects", 
     assert.equal(calls.match(/sts get-caller-identity/g)?.length, 5);
     assert.doesNotMatch(calls, /dynamodb|ecr |ecs update-service|secretsmanager/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_ACCOUNT;
-    else process.env.AWS_FAKE_ACCOUNT = prior;
     fake.restore();
   }
 });
@@ -1874,8 +1790,7 @@ test("AWS omits optional secrets that are scheduled for deletion", (t) => {
 if (a.includes("secretsmanager get-secret-value")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", SecretString: ${JSON.stringify(TEST_SECRET_VALUE)} }));
 else console.log("");`,
   );
-  const prior = process.env.AWS_FAKE_SECRET_DELETED;
-  process.env.AWS_FAKE_SECRET_DELETED = "2026-08-03T22:01:01Z";
+  setEnv(t, { AWS_FAKE_SECRET_DELETED: "2026-08-03T22:01:01Z" });
   try {
     const arns = secretArns(oneServiceConfig());
     assert.equal(arns.OPENROUTER_API_KEY, undefined);
@@ -1883,8 +1798,6 @@ else console.log("");`,
     assert.match(calls, /secretsmanager describe-secret .*OPENROUTER_API_KEY/);
     assert.doesNotMatch(calls, /secretsmanager get-secret-value .*OPENROUTER_API_KEY/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_SECRET_DELETED;
-    else process.env.AWS_FAKE_SECRET_DELETED = prior;
     fake.restore();
   }
 });
@@ -1892,8 +1805,7 @@ else console.log("");`,
 test("AWS deploy rejects weak signing keys before mutation", async (t) => {
   const dir = tempDir(t, "qm-aws-weak-secret-");
   const fake = statefulAws(dir, oneServiceConfig());
-  const prior = process.env.AWS_FAKE_SECRET_VALUE;
-  process.env.AWS_FAKE_SECRET_VALUE = "short";
+  setEnv(t, { AWS_FAKE_SECRET_VALUE: "short" });
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true }),
@@ -1901,8 +1813,6 @@ test("AWS deploy rejects weak signing keys before mutation", async (t) => {
     );
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb put-item|ecr describe-images|ecs update-service/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = prior;
     fake.restore();
   }
 });
@@ -2067,8 +1977,7 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
   git("commit", "-m", "initial");
   const head = git("rev-parse", "HEAD");
   writeFileSync(join(sourceDir, "uncommitted.txt"), "dirty\n");
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const webUiConfig: QmConfig = {
     ...config,
     services: ["core", "web-ui", "portal"],
@@ -2119,7 +2028,6 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
     );
     assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /imagetools inspect/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -2166,8 +2074,7 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
       },
     },
   };
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const fake = statefulAws(dir, layeredConfig);
   try {
     await awsUp(layeredConfig, dir, { yes: true, buildFrom: true, buildFromPath: sourceDir });
@@ -2229,7 +2136,6 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
       /aws\.services\.core\.dockerfile is missing from the build checkout/,
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -2255,8 +2161,7 @@ test("AWS source-plugin provenance records the build source and detects source-m
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/bin/sh\necho 'Digest: sha256:${"a".repeat(64)}'\n`);
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const fake = statefulAws(dir, sourceConfig);
   try {
     await awsUp(sourceConfig, dir, { yes: true });
@@ -2289,7 +2194,6 @@ test("AWS source-plugin provenance records the build source and detects source-m
       /linear: image build provenance drift \(deployed from source, current workload uses a configured image\)/,
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -2504,23 +2408,13 @@ done
 `,
   );
   chmodSync(bin, 0o755);
-  const priorBin = process.env.AWS_BIN;
-  const priorLog = process.env.AWS_SECRET_PATH_LOG;
-  process.env.AWS_BIN = bin;
-  process.env.AWS_SECRET_PATH_LOG = log;
-  try {
-    await awsSecretsPush(config, dir);
-    const paths = readFileSync(log, "utf8").trim().split("\n");
-    assert.equal(paths.length, operatorSecrets.length);
-    for (const path of paths) {
-      assert.equal(existsSync(path), false);
-      assert.equal(existsSync(dirname(path)), false);
-    }
-  } finally {
-    if (priorBin === undefined) delete process.env.AWS_BIN;
-    else process.env.AWS_BIN = priorBin;
-    if (priorLog === undefined) delete process.env.AWS_SECRET_PATH_LOG;
-    else process.env.AWS_SECRET_PATH_LOG = priorLog;
+  setEnv(t, { AWS_BIN: bin, AWS_SECRET_PATH_LOG: log });
+  await awsSecretsPush(config, dir);
+  const paths = readFileSync(log, "utf8").trim().split("\n");
+  assert.equal(paths.length, operatorSecrets.length);
+  for (const path of paths) {
+    assert.equal(existsSync(path), false);
+    assert.equal(existsSync(dirname(path)), false);
   }
 });
 
@@ -2781,8 +2675,7 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
   chmodSync(dockerBin, 0o755);
   const single = oneServiceConfig();
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, {
       buildOnly: true,
@@ -2830,7 +2723,6 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     assert.ok(repeatCalls.includes(`--task-definition ${deployed.tasks.core} --launch-type FARGATE`));
     assert.ok(Number.isFinite(Date.parse(deployed.dbRestorePoint)));
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -3440,9 +3332,8 @@ test("AWS rollback restores the recorded layer without reading the broken curren
   state.objects[currentLayer.key] = currentBody;
   writeFileSync(fake.state, JSON.stringify(state));
   const priorFetch = globalThis.fetch;
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
   const bodies: string[] = [];
-  process.env.CORE_SIGNING_SECRET = "test-signing-secret";
+  setEnv(t, { CORE_SIGNING_SECRET: "test-signing-secret" });
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
     if (init?.method !== "PUT") {
       return new Response("current release is broken", { status: 503 });
@@ -3465,8 +3356,6 @@ test("AWS rollback restores the recorded layer without reading the broken curren
     assert.equal(JSON.parse(readFileSync(fake.state, "utf8")).dynamo["deployment/current"].manifestId.S, "old");
   } finally {
     globalThis.fetch = priorFetch;
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
     fake.restore();
   }
 });
@@ -3749,8 +3638,7 @@ test("AWS live check rejects an ingress target group without a healthy target", 
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(dir, single, manifestItems([{ id: "current", tasks: { core: taskArn } }], "current"));
-  const prior = process.env.AWS_FAKE_UNHEALTHY_TARGET;
-  process.env.AWS_FAKE_UNHEALTHY_TARGET = "1";
+  setEnv(t, { AWS_FAKE_UNHEALTHY_TARGET: "1" });
   try {
     await assert.rejects(
       () => awsCheckLive(single),
@@ -3760,8 +3648,6 @@ test("AWS live check rejects an ingress target group without a healthy target", 
         (error as { clause?: string }).clause === "aws.live-drift",
     );
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_UNHEALTHY_TARGET;
-    else process.env.AWS_FAKE_UNHEALTHY_TARGET = prior;
     fake.restore();
   }
 });
@@ -3771,8 +3657,7 @@ test("AWS live check rejects a reachable public URL returning a server error", a
   const single = oneServiceConfig();
   const taskArn = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
   const fake = statefulAws(dir, single, manifestItems([{ id: "current", tasks: { core: taskArn } }], "current"));
-  const prior = process.env.AWS_FAKE_HTTP_STATUS;
-  process.env.AWS_FAKE_HTTP_STATUS = "503";
+  setEnv(t, { AWS_FAKE_HTTP_STATUS: "503" });
   try {
     await assert.rejects(
       () => awsCheckLive(single),
@@ -3782,8 +3667,6 @@ test("AWS live check rejects a reachable public URL returning a server error", a
         (error as { clause?: string }).clause === "aws.live-drift",
     );
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_HTTP_STATUS;
-    else process.env.AWS_FAKE_HTTP_STATUS = prior;
     fake.restore();
   }
 });
@@ -3807,9 +3690,6 @@ test("AWS live check uses the package-pinned source image without consulting mut
       "current",
     ),
   );
-  const priorImageState = process.env.AWS_FAKE_IMAGE_STATE;
-  const priorAlbDns = process.env.AWS_FAKE_ALB_DNS;
-  const priorSecretValue = process.env.AWS_FAKE_SECRET_VALUE;
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
   const secretArn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf";
   const arns = Object.fromEntries(computedSecrets(single).map((secret) => [secret.name, secretArn]));
@@ -3831,14 +3711,12 @@ test("AWS live check uses the package-pinned source image without consulting mut
     `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`,
   );
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.doesNotReject(() => awsCheckLive(single, { report: false }));
-    process.env.AWS_FAKE_SECRET_VALUE = "short";
-    await assert.rejects(() => awsCheckLive(single, { report: false }), /secret CORE_SIGNING_SECRET/);
-    if (priorSecretValue === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = priorSecretValue;
+    await withEnv({ AWS_FAKE_SECRET_VALUE: "short" }, () =>
+      assert.rejects(() => awsCheckLive(single, { report: false }), /secret CORE_SIGNING_SECRET/),
+    );
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecr describe-images/);
     assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx imagetools inspect/);
     const overridden: QmConfig = {
@@ -3861,33 +3739,24 @@ test("AWS live check uses the package-pinned source image without consulting mut
     persistedManifest.imageProvenance = { core: { kind: "configured", source: manifestRef("core") } };
     persisted.dynamo["deployment/manifest/current"].manifest.S = JSON.stringify(persistedManifest);
     writeFileSync(fake.state, JSON.stringify(persisted));
-    process.env.AWS_FAKE_IMAGE_STATE = "FAILED";
-    await assert.rejects(
-      () => awsCheckLive(single, { report: false }),
-      /deploy image drift: AWS deploy image .* version 1 is not SUCCESSFUL and ACTIVE/,
+    await withEnv({ AWS_FAKE_IMAGE_STATE: "FAILED" }, () =>
+      assert.rejects(
+        () => awsCheckLive(single, { report: false }),
+        /deploy image drift: AWS deploy image .* version 1 is not SUCCESSFUL and ACTIVE/,
+      ),
     );
-    if (priorImageState === undefined) delete process.env.AWS_FAKE_IMAGE_STATE;
-    else process.env.AWS_FAKE_IMAGE_STATE = priorImageState;
-    process.env.AWS_FAKE_ALB_DNS = "127.0.0.1";
-    await assert.rejects(
-      () => awsCheckLive(single, { report: false }),
-      /public network drift: AWS public origin .* does not resolve to this stack's ALB 127\.0\.0\.1/,
+    await withEnv({ AWS_FAKE_ALB_DNS: "127.0.0.1" }, () =>
+      assert.rejects(
+        () => awsCheckLive(single, { report: false }),
+        /public network drift: AWS public origin .* does not resolve to this stack's ALB 127\.0\.0\.1/,
+      ),
     );
-    if (priorAlbDns === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = priorAlbDns;
     const otherLabel: QmConfig = { ...single, aws: { ...single.aws!, imageLabel: "other-release" } };
     await assert.rejects(
       () => awsCheckLive(otherLabel, { report: false }),
       /manifest label release does not match configured release other-release/,
     );
   } finally {
-    if (priorSecretValue === undefined) delete process.env.AWS_FAKE_SECRET_VALUE;
-    else process.env.AWS_FAKE_SECRET_VALUE = priorSecretValue;
-    process.env.PATH = priorPath;
-    if (priorImageState === undefined) delete process.env.AWS_FAKE_IMAGE_STATE;
-    else process.env.AWS_FAKE_IMAGE_STATE = priorImageState;
-    if (priorAlbDns === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = priorAlbDns;
     fake.restore();
   }
 });
@@ -3956,8 +3825,7 @@ test("AWS live check detects prebuilt plugin image drift from current config", a
     `#!/usr/bin/env node\nconsole.log("Digest: sha256:" + (process.argv.at(-1).includes("linear") ? "${"b".repeat(64)}" : "${"a".repeat(64)}"));\n`,
   );
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.rejects(
       () => awsCheckLive(pluginConfig, { report: false }),
@@ -3965,7 +3833,6 @@ test("AWS live check detects prebuilt plugin image drift from current config", a
     );
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecr describe-images|ecr batch-delete-image/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4095,8 +3962,7 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
     `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\nconsole.log("Digest: sha256:${"b".repeat(64)}");\n`,
   );
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const lines: string[] = [];
   const log = console.log;
   console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
@@ -4108,7 +3974,6 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
     assert.match(lines.join("\n"), new RegExp(`qm-core@sha256:${"a".repeat(64)}`));
   } finally {
     console.log = log;
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4124,8 +3989,7 @@ test("aws up resolves image digests only while holding the deploy lease", async 
   );
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig());
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const lines: string[] = [];
   const log = console.log;
   console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
@@ -4171,7 +4035,6 @@ test("aws up resolves image digests only while holding the deploy lease", async 
     assert.match(readFileSync(dockerLog, "utf8"), /--tag [^\s]+\/qm-core:qm-staging/);
   } finally {
     console.log = log;
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4231,8 +4094,7 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(multi, dir, { yes: true, only: ["core"] });
     const after = JSON.parse(readFileSync(baseline.state, "utf8"));
@@ -4244,7 +4106,6 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
       "web-ui": { kind: "configured", source: "ghcr.io/qm/qm-web-ui:0.1.0" },
     });
   } finally {
-    process.env.PATH = priorPath;
     baseline.restore();
   }
 });
@@ -4287,8 +4148,7 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(multi, dir, { yes: true, only: ["web-ui"] });
     const after = JSON.parse(readFileSync(baseline.state, "utf8"));
@@ -4307,7 +4167,6 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
     assert.match(rolledBack.services["acme-web-ui"].taskDefinition, /task-definition\/acme-web-ui:1$/);
     assert.equal(rolledBack.services["acme-web-ui"].desiredCount, 0);
   } finally {
-    process.env.PATH = priorPath;
     baseline.restore();
   }
 });
@@ -4318,8 +4177,7 @@ test("AWS up cleans staging tags when ECS deployment fails", async (t) => {
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { ignoreUpdate: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /did not reach the requested state/);
     const calls = readFileSync(fake.log, "utf8");
@@ -4327,7 +4185,6 @@ test("AWS up cleans staging tags when ECS deployment fails", async (t) => {
     assert.doesNotMatch(calls, /imageTag=release/);
     assert.ok(calls.indexOf("ecr batch-delete-image") < calls.indexOf("dynamodb delete-item"));
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4342,8 +4199,7 @@ test("AWS up succeeds while a protected old task keeps the rollout from completi
     return { ...base, aws: { ...base.aws!, alb: "legacy-alb" } };
   };
   const fake = statefulAws(dir, drainConfig(), {}, { drainRollout: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(drainConfig(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -4356,7 +4212,6 @@ test("AWS up succeeds while a protected old task keeps the rollout from completi
       "front-door lookup honors the configured ALB name",
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4367,8 +4222,7 @@ test("AWS up waits for native blue-green success instead of trusting the stale l
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { blueGreenBakePolls: 4 });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -4379,7 +4233,6 @@ test("AWS up waits for native blue-green success instead of trusting the stale l
     assert.match(calls, /ecs describe-service-revisions/);
     assert.doesNotMatch(calls, /--deployment-configuration/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4390,15 +4243,13 @@ test("AWS up tolerates a transient describe-services failure while polling the r
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { failDescribeOnceAfterUpdate: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.ok(state.describeFailedOnce, "the transient failure was actually injected");
     assert.ok(state.dynamo["deployment/current"], "deploy succeeded despite the transient poll failure");
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4417,15 +4268,13 @@ test("AWS up tolerates a transient native blue-green status failure while pollin
       failNativeStatusOnceAfterUpdate: true,
     },
   );
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.ok(state.nativeStatusFailedOnce, "the transient failure was actually injected");
     assert.ok(state.dynamo["deployment/current"], "deploy succeeded despite the transient poll failure");
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4436,15 +4285,13 @@ test("AWS up aborts failed tasks only after four polls with no replacement runni
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { primaryFailedTasks: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true }),
       /keeps failing tasks with no replacement starting \(failedTasks=1, 0\/1 running across \d+ polls\)/,
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4455,15 +4302,13 @@ test("AWS up survives a three-poll failed-task flake that ECS replaces — the w
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { transientFailedTaskPolls: 3 });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.ok(state.failedTaskPolls >= 3, "the failed-task polls were actually served");
     assert.ok(state.dynamo["deployment/current"], "deploy succeeded despite the transient task failure");
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4475,8 +4320,7 @@ test("AWS up survives alternating single-service stale reads — only the same w
   chmodSync(dockerBin, 0o755);
   const multi = twoServiceConfig();
   const fake = statefulAws(dir, multi, {}, { alternateStaleReadPolls: 4 });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(multi, dir, { yes: true });
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -4486,7 +4330,6 @@ test("AWS up survives alternating single-service stale reads — only the same w
       "deploy succeeded despite four polls of alternating transient failures",
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4497,12 +4340,10 @@ test("AWS up still fails fast on a FAILED rollout state — the ECS circuit-brea
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { rolloutFailed: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /PRIMARY rollout is FAILED/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4513,15 +4354,13 @@ test("AWS up preserves the staging tag when stable-label promotion fails", async
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { failPromotion: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /dynamodb transact-write-items/);
     assert.doesNotMatch(calls, /ecr batch-delete-image .*imageTag=qm-/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4532,15 +4371,13 @@ test("AWS up treats an already-current stable label as successful promotion", as
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { promotionAlreadyCurrent: true });
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(oneServiceConfig(), dir, { yes: true });
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /ecr put-image/);
     assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4552,8 +4389,7 @@ test("AWS up keeps a healthy rollout and its staging tag when the manifest write
   chmodSync(dockerBin, 0o755);
   const fake = statefulAws(dir, oneServiceConfig(), {}, { failTransactions: true });
   const initialTask = JSON.parse(readFileSync(fake.state, "utf8")).services["acme-core"].taskDefinition;
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true }),
@@ -4566,7 +4402,6 @@ test("AWS up keeps a healthy rollout and its staging tag when the manifest write
     assert.doesNotMatch(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
     assert.ok(calls.indexOf("dynamodb transact-write-items") < calls.indexOf("dynamodb delete-item"));
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4576,31 +4411,24 @@ test("AWS front door tolerates exactly one extra port-80 HTTPS-redirect listener
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(dockerBin, 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const run = async (mode: "redirect" | "forward" | undefined, expected?: RegExp): Promise<void> => {
     const fake = statefulAws(dir, oneServiceConfig());
-    const prior = process.env.AWS_FAKE_EXTRA_HTTP_LISTENER;
-    if (mode) process.env.AWS_FAKE_EXTRA_HTTP_LISTENER = mode;
     try {
-      if (expected) await assert.rejects(() => awsUp(oneServiceConfig(), dir, { dryRun: true }), expected);
-      else await awsUp(oneServiceConfig(), dir, { dryRun: true });
+      await withEnv(mode ? { AWS_FAKE_EXTRA_HTTP_LISTENER: mode } : {}, async () => {
+        if (expected) await assert.rejects(() => awsUp(oneServiceConfig(), dir, { dryRun: true }), expected);
+        else await awsUp(oneServiceConfig(), dir, { dryRun: true });
+      });
     } finally {
-      if (prior === undefined) delete process.env.AWS_FAKE_EXTRA_HTTP_LISTENER;
-      else process.env.AWS_FAKE_EXTRA_HTTP_LISTENER = prior;
       fake.restore();
     }
   };
-  try {
-    await run(undefined);
-    await run("redirect");
-    await run(
-      "forward",
-      /expected exactly one public listener plus at most one port-80 HTTPS-redirect listener, found HTTPS:443 \(default fixed-response\), HTTP:80 \(default forward\)/,
-    );
-  } finally {
-    process.env.PATH = priorPath;
-  }
+  await run(undefined);
+  await run("redirect");
+  await run(
+    "forward",
+    /expected exactly one public listener plus at most one port-80 HTTPS-redirect listener, found HTTPS:443 \(default fixed-response\), HTTP:80 \(default forward\)/,
+  );
 });
 
 test("AWS live check accepts a successful deploy mid-drain: PRIMARY at full strength (historical failed task included) while a protected old task keeps the rollout IN_PROGRESS", async (t) => {
@@ -4802,8 +4630,7 @@ for (const mode of ["draining", "stale", "failed"] as const) {
       },
     );
     const before = JSON.parse(readFileSync(fake.state, "utf8")).services;
-    const priorPath = process.env.PATH;
-    process.env.PATH = `${dir}:${priorPath}`;
+    setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
     try {
       if (mode === "draining") await awsUp(selected, dir, { yes: true });
       else
@@ -4847,7 +4674,6 @@ for (const mode of ["draining", "stale", "failed"] as const) {
         assert.equal(after.dynamo["deployment/current"], undefined);
       }
     } finally {
-      process.env.PATH = priorPath;
       fake.restore();
     }
   });
@@ -4858,8 +4684,7 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
   chmodSync(join(dir, "docker"), 0o755);
   const fake = statefulAws(dir, config);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(config, dir, { yes: true });
     const rolloutCalls = readFileSync(fake.log, "utf8");
@@ -4873,30 +4698,15 @@ test("AWS private canary reaches core without a core ingress target and refuses 
       /ecs list-tasks .*--service-name acme-core .*--desired-status RUNNING/,
     );
     assert.match(readFileSync(fake.log, "utf8"), /postdeploy-smoke\.ts.*http:\/\/10\.0\.1\.8:8080/);
-    const priorLarge = process.env.AWS_FAKE_LARGE_ROLLOUT;
-    process.env.AWS_FAKE_LARGE_ROLLOUT = "1";
-    try {
-      await awsCheckLive(config, { report: false });
-    } finally {
-      if (priorLarge === undefined) delete process.env.AWS_FAKE_LARGE_ROLLOUT;
-      else process.env.AWS_FAKE_LARGE_ROLLOUT = priorLarge;
-    }
+    await withEnv({ AWS_FAKE_LARGE_ROLLOUT: "1" }, () => awsCheckLive(config, { report: false }));
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /--no-paginate/);
     for (const [flag, failure] of [
       ["AWS_FAKE_NO_RUNNING_TASK", /no running tasks/],
       ["AWS_FAKE_STALE_CORE", /no current running task/],
     ] as const) {
-      const prior = process.env[flag];
-      process.env[flag] = "1";
-      try {
-        await assert.rejects(() => awsCheckLive(config, { report: false }), failure);
-      } finally {
-        if (prior === undefined) delete process.env[flag];
-        else process.env[flag] = prior;
-      }
+      await withEnv({ [flag]: "1" }, () => assert.rejects(() => awsCheckLive(config, { report: false }), failure));
     }
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -4904,10 +4714,7 @@ test("AWS private canary reaches core without a core ingress target and refuses 
 test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS name, and signed path", async (t) => {
   const dir = tempDir(t, "qm-aws-layer-target-");
   const fake = fakeAws(dir, "console.log('')");
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
-  const priorAlb = process.env.AWS_FAKE_ALB_DNS;
-  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
-  process.env.AWS_FAKE_ALB_DNS = "inactive-stack.elb.example";
+  setEnv(t, { CORE_SIGNING_SECRET: TEST_SECRET_VALUE, AWS_FAKE_ALB_DNS: "inactive-stack.elb.example" });
   const calls: Array<{ url: URL; options: https.RequestOptions; body: string }> = [];
   t.mock.method(https, "request", (url: URL, options: https.RequestOptions, callback: (response: unknown) => void) => {
     const request = new EventEmitter() as EventEmitter & { end(body?: string): void };
@@ -4952,19 +4759,12 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
   } finally {
     t.mock.restoreAll();
     fake.restore();
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
-    if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = priorAlb;
   }
 });
 
 test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is configured", async (t) => {
   const dir = tempDir(t, "qm-aws-layer-proxy-");
   const fake = fakeAws(dir, "console.log('')");
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
-  const priorProtocol = process.env.AWS_FAKE_LISTENER_PROTOCOL;
-  const priorCloudFront = process.env.AWS_FAKE_CLOUDFRONT;
   const distribution = {
     DomainName: "test.cloudfront.net",
     Status: "Deployed",
@@ -4982,12 +4782,12 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
       ],
     },
   };
-  const setDistribution = (value: unknown) => {
-    process.env.AWS_FAKE_CLOUDFRONT = JSON.stringify({ DistributionList: { Items: [value] } });
-  };
-  setDistribution(distribution);
-  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
-  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  const distributionList = (value: unknown): string => JSON.stringify({ DistributionList: { Items: [value] } });
+  setEnv(t, {
+    AWS_FAKE_CLOUDFRONT: distributionList(distribution),
+    AWS_FAKE_LISTENER_PROTOCOL: "HTTP",
+    CORE_SIGNING_SECRET: TEST_SECRET_VALUE,
+  });
   const calls: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(https, "request", () => {
     throw new Error("must not dial the HTTP origin with TLS");
@@ -5078,7 +4878,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
         { CustomOriginConfig: { OriginProtocolPolicy: "match-viewer", HTTPPort: 80 } },
       ].map((change) => ({ ...distribution, Origins: { Items: [{ ...distribution.Origins.Items[0], ...change }] } })),
     ]) {
-      setDistribution(invalid);
+      process.env.AWS_FAKE_CLOUDFRONT = distributionList(invalid);
       await assert.rejects(
         () => awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "PUT", body: "{}" }),
         /routing directly to the selected ALB/,
@@ -5086,14 +4886,8 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     }
     assert.equal(calls.length, 2);
   } finally {
-    if (priorCloudFront === undefined) delete process.env.AWS_FAKE_CLOUDFRONT;
-    else process.env.AWS_FAKE_CLOUDFRONT = priorCloudFront;
     t.mock.restoreAll();
     fake.restore();
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
-    if (priorProtocol === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
-    else process.env.AWS_FAKE_LISTENER_PROTOCOL = priorProtocol;
   }
 });
 
@@ -5142,9 +4936,7 @@ test("AWS core transport bounds streamed TLS bodies and destroys oversized respo
 test("AWS layer transport rejects invalid targets and propagates TLS and body failures without fallback", async (t) => {
   const dir = tempDir(t, "qm-aws-layer-failure-");
   const fake = fakeAws(dir, "console.log('')");
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
-  const priorAlb = process.env.AWS_FAKE_ALB_DNS;
-  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  setEnv(t, { CORE_SIGNING_SECRET: TEST_SECRET_VALUE });
   let calls = 0;
   let failBody = false;
   t.mock.method(
@@ -5169,7 +4961,7 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
   const send = (configured = config) =>
     awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "GET", body: "" });
   try {
-    process.env.AWS_FAKE_ALB_DNS = "invalid/target";
+    setEnv(t, { AWS_FAKE_ALB_DNS: "invalid/target" });
     await assert.rejects(send, /ALB hostname is invalid/);
     assert.equal(calls, 0);
     await assert.rejects(() => send({ ...config, apiUrl: "http://api.acme.example" }), /must be HTTPS/);
@@ -5183,10 +4975,6 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
   } finally {
     t.mock.restoreAll();
     fake.restore();
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
-    if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = priorAlb;
   }
 });
 
@@ -5204,8 +4992,7 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   assert.ok(address && typeof address !== "string");
   const dir = tempDir(t, "qm-aws-layer-abort-");
   const fake = fakeAws(dir, "console.log('')");
-  const priorSecret = process.env.CORE_SIGNING_SECRET;
-  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  setEnv(t, { CORE_SIGNING_SECRET: TEST_SECRET_VALUE });
   let calls = 0;
   t.mock.method(
     https,
@@ -5224,8 +5011,6 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   } finally {
     t.mock.restoreAll();
     fake.restore();
-    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-    else process.env.CORE_SIGNING_SECRET = priorSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -5288,8 +5073,7 @@ test("shared deployment state isolates company manifests and leases without muta
   const single = oneServiceConfig();
   single.aws!.deploymentState = { table: "fleet-deploy-locks", namespace: "acme" };
   const fake = statefulAws(dir, single);
-  const prior = process.env.AWS_FAKE_ALB_DNS;
-  process.env.AWS_FAKE_ALB_DNS = "192.0.2.1";
+  setEnv(t, { AWS_FAKE_ALB_DNS: "192.0.2.1" });
   try {
     await awsUp(single, dir, { yes: true, candidate: candidatePath, inactive: true });
     assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
@@ -5308,8 +5092,6 @@ test("shared deployment state isolates company manifests and leases without muta
     assert.match(calls, /"S":"acme\/deploy"/);
     assert.match(calls, /"S":"second\/deploy"/);
   } finally {
-    if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
-    else process.env.AWS_FAKE_ALB_DNS = prior;
     fake.restore();
   }
 });
@@ -5459,10 +5241,7 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
         sabotageProgress: mode === "write-failure",
       },
     );
-    const priorFile = process.env.QM_DEPLOY_PROGRESS_FILE;
-    const priorToken = process.env.QM_DEPLOY_PROGRESS_TOKEN;
-    process.env.QM_DEPLOY_PROGRESS_FILE = progressFile;
-    process.env.QM_DEPLOY_PROGRESS_TOKEN = "attempt-unique-token";
+    setEnv(t, { QM_DEPLOY_PROGRESS_FILE: progressFile, QM_DEPLOY_PROGRESS_TOKEN: "attempt-unique-token" });
     try {
       const deploy = () => awsUp(single, dir, { yes: true, candidate: candidatePath });
       if (mode === "migration-failure" || mode === "update-failure") {
@@ -5501,10 +5280,6 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
         }
       }
     } finally {
-      if (priorFile === undefined) delete process.env.QM_DEPLOY_PROGRESS_FILE;
-      else process.env.QM_DEPLOY_PROGRESS_FILE = priorFile;
-      if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
-      else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
       fake.restore();
     }
   });
@@ -5513,30 +5288,24 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
 test("AWS deployment progress rejects invalid options before AWS calls", async (t) => {
   const dir = tempDir(t, "qm-aws-progress-validation-");
   const fake = fakeAws(dir, "");
-  const priorFile = process.env.QM_DEPLOY_PROGRESS_FILE;
-  const priorToken = process.env.QM_DEPLOY_PROGRESS_TOKEN;
   try {
     for (const [file, token] of [
       ["relative.json", "attempt"],
       [join(dir, "receipt.json"), ""],
       ["", "attempt"],
     ]) {
-      process.env.QM_DEPLOY_PROGRESS_FILE = file;
-      process.env.QM_DEPLOY_PROGRESS_TOKEN = token;
-      await assert.rejects(
-        () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: "candidate.json" }),
-        /deployment progress requires/,
+      await withEnv({ QM_DEPLOY_PROGRESS_FILE: file, QM_DEPLOY_PROGRESS_TOKEN: token }, () =>
+        assert.rejects(
+          () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: "candidate.json" }),
+          /deployment progress requires/,
+        ),
       );
     }
-    process.env.QM_DEPLOY_PROGRESS_FILE = join(dir, "receipt.json");
-    process.env.QM_DEPLOY_PROGRESS_TOKEN = "attempt";
-    await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /deployment progress requires/);
+    await withEnv({ QM_DEPLOY_PROGRESS_FILE: join(dir, "receipt.json"), QM_DEPLOY_PROGRESS_TOKEN: "attempt" }, () =>
+      assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /deployment progress requires/),
+    );
     assert.equal(readFileSync(fake.log, "utf8"), "");
   } finally {
-    if (priorFile === undefined) delete process.env.QM_DEPLOY_PROGRESS_FILE;
-    else process.env.QM_DEPLOY_PROGRESS_FILE = priorFile;
-    if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
-    else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
     fake.restore();
   }
 });
@@ -5549,8 +5318,7 @@ test("inactive capacity proves exact drained unprotected cohorts without mutatin
   const base = twoServiceConfig();
   const configured: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
   const fake = statefulAws(dir, configured);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(configured, dir, { yes: true });
     const baseline = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -5750,7 +5518,6 @@ test("inactive capacity proves exact drained unprotected cohorts without mutatin
       /transact-write|put-item|delete-item|update-item|update-service|register-task-definition|run-task|update-task-protection|stop-task/,
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -5763,8 +5530,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
   const base = oneServiceConfig();
   const single: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
   const fake = statefulAws(dir, single);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+  setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   try {
     await awsUp(single, dir, { yes: true });
     const persisted = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -6019,7 +5785,6 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       /cannot fall back/,
     );
   } finally {
-    process.env.PATH = priorPath;
     fake.restore();
   }
 });
@@ -6029,8 +5794,7 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
     const dir = tempDir(t, "qm-aws-web-routing-");
     writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
     chmodSync(join(dir, "docker"), 0o755);
-    const priorPath = process.env.PATH;
-    process.env.PATH = `${dir}:${priorPath}`;
+    setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
     const fake = statefulAws(dir, config, {}, { drainPolls: 4 });
     try {
       await awsUp(config, dir, { yes: true });
@@ -6096,7 +5860,6 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
         );
       }
     } finally {
-      process.env.PATH = priorPath;
       fake.restore();
     }
   });

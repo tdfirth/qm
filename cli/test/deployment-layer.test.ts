@@ -13,7 +13,7 @@ import {
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
-import { tempDir } from "./support.ts";
+import { tempDir, withEnv } from "./support.ts";
 
 const SECRET = "conformance-test-secret";
 
@@ -86,9 +86,8 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes" },
   };
-  process.env.CORE_SIGNING_SECRET = SECRET;
-  try {
-    await assert.rejects(
+  await withEnv({ CORE_SIGNING_SECRET: SECRET }, () =>
+    assert.rejects(
       () =>
         syncDeploymentLayer({
           config,
@@ -97,10 +96,8 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
           sandboxDir: join(dir, "sandbox"),
         }),
       /1 MB/,
-    );
-  } finally {
-    delete process.env.CORE_SIGNING_SECRET;
-  }
+    ),
+  );
 });
 
 test("a missing sandbox directory skips sync instead of replacing the deployed layer with empty", async (t) => {
@@ -170,22 +167,6 @@ function makeConfig(publicUrl: string): QmConfig {
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes" },
   };
-}
-
-async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
-  const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
-  for (const [name, value] of Object.entries(vars)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
 }
 
 async function freeUnboundPort(): Promise<number> {

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { QmConfig } from "../src/config.ts";
 import { flyUp, mpgClusterId, mpgDirectUrl } from "../src/backends/fly.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 test("mpgClusterId matches a whole field regardless of column position or spacing", () => {
   const header = "ID              NAME          REGION  STATUS";
@@ -101,8 +101,7 @@ else console.log("ok");
 `,
   );
   chmodSync(fly, 0o755);
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = fly;
+  setEnv(t, { FLY_BIN: fly });
   const config: QmConfig = {
     contract: 1,
     orgId: "acme",
@@ -122,22 +121,17 @@ else console.log("ok");
   };
   const configPath = join(dir, "custom-deployment.jsonc");
   writeFileSync(configPath, JSON.stringify(config, null, 2));
-  try {
-    await flyUp(config, dir, { buildFrom: true, configPath });
-    const calls = readFileSync(log, "utf8");
-    assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
-    assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
-    assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
-    assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
-    assert.equal(
-      JSON.parse(readFileSync(configPath, "utf8")).imageOverrides.core,
-      `registry.fly.io/acme-core@sha256:${"b".repeat(64)}`,
-    );
-    assert.equal(existsSync(join(dir, "qm.config.jsonc")), false);
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-  }
+  await flyUp(config, dir, { buildFrom: true, configPath });
+  const calls = readFileSync(log, "utf8");
+  assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
+  assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
+  assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
+  assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
+  assert.equal(
+    JSON.parse(readFileSync(configPath, "utf8")).imageOverrides.core,
+    `registry.fly.io/acme-core@sha256:${"b".repeat(64)}`,
+  );
+  assert.equal(existsSync(join(dir, "qm.config.jsonc")), false);
 });
 
 test('--only "slack" explains the virtual service runs in-process on the core', async (t) => {

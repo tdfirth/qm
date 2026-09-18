@@ -11,6 +11,7 @@ import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
 import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
+import { setEnv } from "./support.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const brokerStack = join(repoRoot, "deploy", "stacks", "broker", "qm.config.jsonc");
@@ -244,7 +245,7 @@ test("a broker deployment with no allowlist at all is refused once secret values
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
 });
 
-test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
+test("fly up staging copies a changed .env email allowlist to auth, portal, and core", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
@@ -256,14 +257,8 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   chmodSync(fly, 0o755);
   writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = fly;
-  try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-  }
+  setEnv(t, { FLY_BIN: fly });
+  stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
   const calls = readFileSync(log, "utf8");
   const prefix = "acme";
   assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));

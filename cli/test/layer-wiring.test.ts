@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 function makeDeployment(
   t: TestContext,
@@ -40,9 +40,7 @@ function sandboxLayer(dir: string): void {
 }
 
 async function plan(t: TestContext, configDir: string, opts: { sandboxDir?: string } = {}): Promise<string> {
-  const xdg = tempDir(t, "qm-xdg-");
-  const prevXdg = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = xdg;
+  setEnv(t, { XDG_CONFIG_HOME: tempDir(t, "qm-xdg-") });
   const lines: string[] = [];
   const log = console.log,
     warn = console.warn;
@@ -54,8 +52,6 @@ async function plan(t: TestContext, configDir: string, opts: { sandboxDir?: stri
   } finally {
     console.log = log;
     console.warn = warn;
-    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = prevXdg;
   }
   return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
@@ -134,15 +130,9 @@ test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1,
 
 test("QM_BASE_PORT overrides the host port base for one run", async (t) => {
   const dir = makeDeployment(t, { services: ["core"] });
-  const prev = process.env.QM_BASE_PORT;
-  process.env.QM_BASE_PORT = "9000";
-  try {
-    const out = await plan(t, dir);
-    assert.match(out, /host :9000/);
-  } finally {
-    if (prev === undefined) delete process.env.QM_BASE_PORT;
-    else process.env.QM_BASE_PORT = prev;
-  }
+  setEnv(t, { QM_BASE_PORT: "9000" });
+  const out = await plan(t, dir);
+  assert.match(out, /host :9000/);
 });
 
 test("source + image plugins both appear in the plan", async (t) => {

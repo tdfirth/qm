@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "no
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 const SECRETS = {
   ANTHROPIC_API_KEY: "anthropic-supersecret",
@@ -61,9 +61,6 @@ process.exit(0);
 
 test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async (t) => {
   const dir = tempDir(t, "qm-docker-secrets-");
-  const priorPath = process.env.PATH;
-  const priorDb = process.env.DATABASE_URL;
-  const priorSecrets = new Map(Object.keys(SECRETS).map((name) => [name, process.env[name]]));
   const log = console.log,
     warn = console.warn;
   const lines: string[] = [];
@@ -128,10 +125,12 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       ].join("\n"),
     );
     const fake = fakeDocker(dir);
-    process.env.PATH = `${dir}:${priorPath}`;
-    process.env.DATABASE_URL = "postgres://external/db";
-    for (const name of Object.keys(SECRETS)) delete process.env[name];
-    process.env.ANTHROPIC_API_KEY = ambientAnthropic;
+    setEnv(t, {
+      ...Object.fromEntries(Object.keys(SECRETS).map((name) => [name, undefined])),
+      PATH: `${dir}:${process.env.PATH}`,
+      DATABASE_URL: "postgres://external/db",
+      ANTHROPIC_API_KEY: ambientAnthropic,
+    });
     console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
     console.warn = console.log;
     const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
@@ -229,13 +228,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
   } finally {
     console.log = log;
     console.warn = warn;
-    process.env.PATH = priorPath;
-    if (priorDb === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = priorDb;
-    for (const [name, value] of priorSecrets) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
   }
 });
 
@@ -245,9 +237,6 @@ test(
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-pg-");
     const xdg = tempDir(t, "qm-docker-secrets-xdg-");
-    const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
-    const priorXdg = process.env.XDG_CONFIG_HOME;
     const log = console.log,
       warn = console.warn;
     try {
@@ -266,9 +255,7 @@ test(
         `CAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
       );
       const fake = fakeDocker(dir);
-      process.env.PATH = `${dir}:${priorPath}`;
-      process.env.XDG_CONFIG_HOME = xdg;
-      delete process.env.DATABASE_URL;
+      setEnv(t, { PATH: `${dir}:${process.env.PATH}`, XDG_CONFIG_HOME: xdg, DATABASE_URL: undefined });
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
@@ -293,11 +280,6 @@ test(
     } finally {
       console.log = log;
       console.warn = warn;
-      process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
-      if (priorXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = priorXdg;
     }
   },
 );
@@ -307,9 +289,6 @@ test(
   { timeout: 60_000 },
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-gate-");
-    const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
-    const priorBot = process.env.SLACK_BOT_TOKEN;
     const log = console.log,
       warn = console.warn;
     try {
@@ -328,9 +307,11 @@ test(
         `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nCORE_SIGNING_SECRET=${"a".repeat(32)}\nPORTAL_IDENTITY_SECRET=identity\nSLACK_APP_TOKEN=app\n`,
       );
       const fake = fakeDocker(dir);
-      process.env.PATH = `${dir}:${priorPath}`;
-      process.env.DATABASE_URL = "postgres://external/db";
-      delete process.env.SLACK_BOT_TOKEN;
+      setEnv(t, {
+        PATH: `${dir}:${process.env.PATH}`,
+        DATABASE_URL: "postgres://external/db",
+        SLACK_BOT_TOKEN: undefined,
+      });
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
@@ -342,10 +323,6 @@ test(
     } finally {
       console.log = log;
       console.warn = warn;
-      process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
-      if (priorBot !== undefined) process.env.SLACK_BOT_TOKEN = priorBot;
     }
   },
 );
@@ -355,9 +332,6 @@ test(
   { timeout: 60_000 },
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-nl-");
-    const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
-    const priorSecret = process.env.CORE_SIGNING_SECRET;
     const log = console.log,
       warn = console.warn;
     try {
@@ -376,9 +350,11 @@ test(
         `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
       );
       fakeDocker(dir);
-      process.env.PATH = `${dir}:${priorPath}`;
-      process.env.DATABASE_URL = "postgres://external/db";
-      process.env.CORE_SIGNING_SECRET = "-----BEGIN KEY-----\nabc\n-----END KEY-----";
+      setEnv(t, {
+        PATH: `${dir}:${process.env.PATH}`,
+        DATABASE_URL: "postgres://external/db",
+        CORE_SIGNING_SECRET: "-----BEGIN KEY-----\nabc\n-----END KEY-----",
+      });
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
@@ -386,11 +362,6 @@ test(
     } finally {
       console.log = log;
       console.warn = warn;
-      process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
-      if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
-      else process.env.CORE_SIGNING_SECRET = priorSecret;
     }
   },
 );

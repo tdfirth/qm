@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { assertAwsPublicRouting } from "../src/backends/aws.ts";
 import { loadConfigAt } from "../src/config.ts";
 import { terraformVars } from "../src/terraform.ts";
-import { tempDir } from "./support.ts";
+import { setEnv, tempDir } from "./support.ts";
 
 function fixture(t: TestContext, paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2") {
   const dir = tempDir(t, "qm-public-paths-");
@@ -104,8 +104,7 @@ function fixture(t: TestContext, paths: unknown = ["/hooks/*"], blueGreen = fals
     `#!${process.execPath}\nconst responses=${JSON.stringify(responses)};for(const arg of process.argv){if(responses[arg]){console.log(JSON.stringify(responses[arg]));process.exit(0)}}process.exit(1);`,
     { mode: 0o755 },
   );
-  const prior = process.env.AWS_BIN;
-  process.env.AWS_BIN = bin;
+  setEnv(t, { AWS_BIN: bin });
   const services = new Map(
     names.map((name) => [
       name,
@@ -126,69 +125,42 @@ function fixture(t: TestContext, paths: unknown = ["/hooks/*"], blueGreen = fals
       },
     ]),
   );
-  return {
-    configPath,
-    services,
-    close() {
-      if (prior === undefined) delete process.env.AWS_BIN;
-      else process.env.AWS_BIN = prior;
-    },
-  };
+  return { configPath, services };
 }
 
 for (const blueGreen of [false, true]) {
   test(`declared public plugin paths qualify ${blueGreen ? "blue/green" : "rolling"} ingress`, (t) => {
     const f = fixture(t, undefined, blueGreen);
-    try {
-      const config = loadConfigAt(f.configPath).config;
-      assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
-      assert.match(terraformVars(config, "", ["core_public_hosts"]), /"public_paths": \[\s*"\/hooks\/\*"/);
-    } finally {
-      f.close();
-    }
+    const config = loadConfigAt(f.configPath).config;
+    assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
+    assert.match(terraformVars(config, "", ["core_public_hosts"]), /"public_paths": \[\s*"\/hooks\/\*"/);
   });
   test(`public plugin cannot sit behind core or portal ${blueGreen ? "blue/green" : "rolling"} routes`, (t) => {
     const f = fixture(t, undefined, blueGreen, "15");
-    try {
-      assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
-    } finally {
-      f.close();
-    }
+    assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
   });
 }
 
 test("public plugin live routing cannot broaden declared paths", (t) => {
   const f = fixture(t, ["/hooks/events/*"]);
-  try {
-    assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /exactly its declared/);
-  } finally {
-    f.close();
-  }
+  assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /exactly its declared/);
 });
 
 for (const paths of [[], ["/*"], ["/v1/*"], ["/hooks/../*"], ["/hooks/?"], ["/hooks/*", "/hooks/*"]]) {
   test(`reject unsafe public plugin paths ${JSON.stringify(paths)}`, (t) => {
     const f = fixture(t, paths);
-    try {
-      assert.throws(() => loadConfigAt(f.configPath), /publicPaths/);
-    } finally {
-      f.close();
-    }
+    assert.throws(() => loadConfigAt(f.configPath), /publicPaths/);
   });
 }
 
 for (const name of ["v1", "d", "key", "models", "slack"]) {
   test(`a plugin cannot claim the core ${name} namespace`, (t) => {
     const f = fixture(t);
-    try {
-      const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
-      raw.plugins[0].name = name;
-      raw.aws.services[name] = { ...raw.aws.services.hooks, publicPaths: [`/${name}/*`] };
-      delete raw.aws.services.hooks;
-      writeFileSync(f.configPath, JSON.stringify(raw));
-      assert.throws(() => loadConfigAt(f.configPath), /publicPaths|collides|built-in/);
-    } finally {
-      f.close();
-    }
+    const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
+    raw.plugins[0].name = name;
+    raw.aws.services[name] = { ...raw.aws.services.hooks, publicPaths: [`/${name}/*`] };
+    delete raw.aws.services.hooks;
+    writeFileSync(f.configPath, JSON.stringify(raw));
+    assert.throws(() => loadConfigAt(f.configPath), /publicPaths|collides|built-in/);
   });
 }
