@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-"));
@@ -29,31 +29,20 @@ function mention(text: string, channel: string, root: string): TurnRequest {
   };
 }
 
-async function pollDeliveries(
-  deliveries: { pending(type: string): Promise<unknown[]> },
-  deadlineMs = 5_000,
-): Promise<any[]> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const pending = (await deliveries.pending("slack")) as any[];
-    if (pending.length) return pending;
-    await sleep(50);
-  }
-  return [];
+function pollDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }, deadlineMs = 5_000): Promise<any[]> {
+  return waitFor(
+    () => deliveries.pending("slack") as Promise<any[]>,
+    (pending) => pending.length > 0,
+    deadlineMs,
+  );
 }
 
-async function pollFor(
+function pollFor(
   deliveries: { pending(type: string): Promise<unknown[]> },
   match: (d: any) => boolean,
   deadlineMs = 5_000,
 ): Promise<any> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const hit = ((await deliveries.pending("slack")) as any[]).find(match);
-    if (hit) return hit;
-    await sleep(50);
-  }
-  return undefined;
+  return waitFor(async () => ((await deliveries.pending("slack")) as any[]).find(match), Boolean, deadlineMs);
 }
 
 test("spine ON: react/edit/delete route through the SAME reach chokepoint to the current conversation", async () => {

@@ -9,8 +9,8 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));
@@ -47,18 +47,17 @@ function startFulfiller(app: any, messages: unknown[]) {
   };
 }
 
-async function subToolResult(built: any, root: string, tool: string, deadlineMs = 6_000): Promise<any> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const sub = await built.sessions.getByThread(`ch:${root}`);
-    if (sub) {
+function subToolResult(built: any, root: string, deadlineMs = 6_000): Promise<any> {
+  return waitFor(
+    async () => {
+      const sub = await built.sessions.getByThread(`ch:${root}`);
+      if (!sub) return undefined;
       const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
-    }
-    await sleep(50);
-  }
-  throw new Error(`no assistant reply for ${tool}`);
+      return entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string")?.payload.text;
+    },
+    Boolean,
+    deadlineMs,
+  );
 }
 
 test("read_thread leaves an omitted limit to the surface provider", async () => {
@@ -77,7 +76,7 @@ test("read_thread leaves an omitted limit to the surface provider", async () => 
   })();
   try {
     await built.app.turn(mention("!read_thread", "C10", "1000.1"));
-    assert.match(await subToolResult(built, "C10:1000.1", "read_thread"), /read 0 message/);
+    assert.match(await subToolResult(built, "C10:1000.1"), /read 0 message/);
     assert.equal(queries.length, 1);
     assert.equal(queries[0].count, undefined);
   } finally {
@@ -101,7 +100,7 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   ]);
   try {
     await built.app.turn(mention("!whats_new", "C10", "1000.1"));
-    const reply = await subToolResult(built, root, "whats_new");
+    const reply = await subToolResult(built, root);
     assert.match(reply, /whats_new here=3 others=1/);
   } finally {
     await stop();
@@ -120,7 +119,7 @@ test("enabled mirror search uses the current channel and returns author/snippet 
   ]);
   try {
     await built.app.turn(mention("!search budget", "C11", "1100.1"));
-    const reply = await subToolResult(built, root, "search");
+    const reply = await subToolResult(built, root);
     assert.match(reply, /search\(cache\) 1 hit/);
     assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
     assert.match(reply, /first=Bob:the budget doc/);
@@ -135,7 +134,7 @@ test("read_members lists the current container's roster (its resolved audience),
   const root = "C12:1200.1";
   try {
     await built.app.turn(mention("!read_members", "C12", "1200.1"));
-    const reply = await subToolResult(built, root, "read_members");
+    const reply = await subToolResult(built, root);
     assert.match(reply, /members: /);
     assert.match(reply, /Ada/);
     assert.match(reply, /Bob/);
@@ -158,20 +157,20 @@ test("read_file returns text content for a text blob and a POINTER (never bytes)
     );
 
     await built.app.turn(mention(`!read_file ${textBlob.blobId}`, "C13", "1300.1"));
-    const txt = await subToolResult(built, "C13:1300.1", "read_file");
+    const txt = await subToolResult(built, "C13:1300.1");
     assert.match(txt, /file: hello from the shared file/);
 
     await built.app.turn(mention(`!read_file ${binBlob.blobId}`, "C14", "1400.1"));
-    const bin = await subToolResult(built, "C14:1400.1", "read_file");
+    const bin = await subToolResult(built, "C14:1400.1");
     assert.match(bin, /file-pointer:/);
     assert.doesNotMatch(bin, /hello from the shared file/);
 
     await built.app.turn(mention(`!read_file ${jpegLike.blobId}`, "C16", "1600.1"));
-    const jpg = await subToolResult(built, "C16:1600.1", "read_file");
+    const jpg = await subToolResult(built, "C16:1600.1");
     assert.match(jpg, /file-pointer:/);
 
     await built.app.turn(mention("!read_file deadbeefdeadbeefdeadbeefdeadbeef", "C15", "1500.1"));
-    const gone = await subToolResult(built, "C15:1500.1", "read_file");
+    const gone = await subToolResult(built, "C15:1500.1");
     assert.match(gone, /couldn't read file/);
   } finally {
     await built.runtime.stop();
@@ -266,10 +265,10 @@ test("search/whats_new surface the mirror coverage window end-to-end once the mi
   const stop = startFulfiller(built.app, [{ ts: "3000.1", author: "Bob", text: "the budget doc" }]);
   try {
     await built.app.turn(mention("!search budget", "C30", "3000.1"));
-    const searchReply = await subToolResult(built, root, "search");
+    const searchReply = await subToolResult(built, root);
     assert.match(searchReply, /coverage=\d{4}-\d\d-\d\d/, "the search reply carries the mirror coverage floor");
     await built.app.turn(mention("!whats_new", "C30", "3000.2"));
-    const wnReply = await subToolResult(built, "C30:3000.2", "whats_new");
+    const wnReply = await subToolResult(built, "C30:3000.2");
     assert.match(wnReply, /coverage=\d{4}-\d\d-\d\d/, "whats_new carries the mirror coverage floor");
   } finally {
     await stop();
@@ -295,7 +294,7 @@ test("search source=slack routes through the live-search seam; an unconfigured p
   })();
   try {
     await built.app.turn(mention("!search source=slack budget", "C31", "3100.1"));
-    const reply = await subToolResult(built, root, "search");
+    const reply = await subToolResult(built, root);
     assert.match(reply, /live search isn't configured/);
   } finally {
     running = false;
@@ -322,7 +321,7 @@ test("search source=slack with no connected login for the asker tells the agent 
   })();
   try {
     await built.app.turn(mention("!search source=slack budget", "C32", "3200.1"));
-    const reply = await subToolResult(built, root, "search");
+    const reply = await subToolResult(built, root);
     assert.match(reply, /no connected one/, "the miss explains the missing login");
     assert.match(reply, /self-connect|Connectors page/, "and points at the session-gated self-connect page");
   } finally {
@@ -339,13 +338,13 @@ test("set_standing_order writes the channel policy the ambient judge reads (reco
     await built.app.turn(
       mention("!set_standing_order when someone posts a tweet link, reply with a piratey line", "C20", "2000.1"),
     );
-    const reply = await subToolResult(built, "C20:2000.1", "set_standing_order");
+    const reply = await subToolResult(built, "C20:2000.1");
     assert.match(reply, /standing order set/);
     const policy = await built.app.getChannelPolicy("C20");
     assert.ok(policy && /piratey/.test(policy.orders), "the policy store holds what the tool wrote");
 
     await built.app.turn(mention("!get_standing_order", "C20", "2000.2"));
-    const got = await subToolResult(built, "C20:2000.2", "get_standing_order");
+    const got = await subToolResult(built, "C20:2000.2");
     assert.match(got, /piratey/);
   } finally {
     await built.runtime.stop();

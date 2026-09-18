@@ -33,6 +33,7 @@ import {
   planCompaction,
 } from "../src/harness/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
+import { waitFor } from "./support/settle.ts";
 import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
@@ -169,26 +170,17 @@ async function summaryEntries(sessions: SessionStore, sessionId: string): Promis
   return (await sessions.getEntries(sessionId)).filter((e) => contextSummaryPayload(e));
 }
 
-async function waitForSummary(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<SessionEntry[]> {
-  const deadline = Date.now() + deadlineMs;
-  for (;;) {
-    const found = await summaryEntries(sessions, sessionId);
-    if (found.length || Date.now() > deadline) return found;
-    await new Promise((r) => setTimeout(r, 10));
-  }
+function waitForSummary(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<SessionEntry[]> {
+  return waitFor(
+    () => summaryEntries(sessions, sessionId),
+    (found) => found.length > 0,
+    deadlineMs,
+  );
 }
 
 async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<void> {
-  const deadline = Date.now() + deadlineMs;
-  for (;;) {
-    const { lease } = await sessions.acquireLease(sessionId);
-    if (lease) {
-      await sessions.releaseLease(lease);
-      return;
-    }
-    assert.ok(Date.now() < deadline, "the background pass never released the session lease");
-    await new Promise((r) => setTimeout(r, 10));
-  }
+  const lease = await waitFor(async () => (await sessions.acquireLease(sessionId)).lease, Boolean, deadlineMs);
+  await sessions.releaseLease(lease!);
 }
 
 test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
@@ -235,12 +227,7 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
   );
   assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
 
-  const deadline = Date.now() + 3_000;
-  while (!holders.includes("compaction") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(
-    holders.includes("compaction"),
-    "the post-turn background pass takes the lock as compaction, not as a turn",
-  );
+  await waitFor(() => holders.includes("compaction"));
   assert.ok(holders.includes("turn"), "…and the turn itself takes it as a turn");
   await waitForLeaseRelease(sessions, sid);
 });
@@ -699,11 +686,9 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
   const res = await orch.handleTurn(spineTurn("!histcount"));
   assert.equal(res.status, "ok");
 
-  const deadline = Date.now() + 3_000;
-  while (!(await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed")) {
-    assert.ok(Date.now() < deadline, "background compaction never reported failure");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await waitFor(async () =>
+    (await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed"),
+  );
   assert.equal((await summaryEntries(sessions, sid)).length, 0);
   assert.equal(
     (await sessions.getTape(sid)).some(
@@ -875,14 +860,6 @@ function gatedHarness() {
   return { harness, compactCalls, resetCalls, open };
 }
 
-async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_000): Promise<void> {
-  const deadline = Date.now() + deadlineMs;
-  while (!predicate()) {
-    assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
-
 test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
   const { harness, compactCalls, open } = gatedHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
@@ -892,7 +869,7 @@ test("the background pass leaves the session writable while it summarizes — a 
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+  await waitFor(() => compactCalls.length === 1);
 
   const { lease } = await sessions.acquireLease(sid, "turn");
   assert.ok(lease, "background compaction must not hold the write-lock across its model call");
@@ -924,7 +901,7 @@ test("the background pass summarizes first and requests its lease only after the
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
+  await waitFor(() => events.includes("summarize:start"));
 
   assert.ok(
     !events.includes("acquire:compaction"),
@@ -952,7 +929,7 @@ test("the background pass waits out a turn that holds the lock rather than throw
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+  await waitFor(() => compactCalls.length === 1);
 
   const { lease: held } = await sessions.acquireLease(sid, "turn");
   assert.ok(held);
@@ -979,7 +956,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+  await waitFor(() => compactCalls.length === 1);
   const beforeTurn = ((await sessions.getEntries(sid)).at(-1)?.seq ?? -1) + 1;
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
@@ -1012,7 +989,7 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+  await waitFor(() => compactCalls.length === 1);
 
   const { lease: rival } = await sessions.acquireLease(sid, "compaction");
   assert.ok(rival);

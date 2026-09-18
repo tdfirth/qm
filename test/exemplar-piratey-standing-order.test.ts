@@ -7,8 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { waitFor } from "./support/settle.ts";
 
 const X_LINK_TS = "300.1";
 const DIRECTIVE = [
@@ -42,12 +41,11 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
       { name: "qm", mentionId: "UBOT" },
     );
 
-    const deadline = Date.now() + 5_000;
-    let pending: any[] = [];
-    while (Date.now() < deadline && !pending.length) {
-      pending = (await built.deliveries.pending("slack")) as any[];
-      if (!pending.length) await sleep(50);
-    }
+    const pending = (await waitFor(
+      () => built.deliveries.pending("slack"),
+      (p) => p.length > 0,
+      5_000,
+    )) as any[];
     assert.equal(pending.length, 1, "exactly one pirate reply");
     assert.equal(
       pending[0].destination.target,

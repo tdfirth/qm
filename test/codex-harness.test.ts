@@ -37,6 +37,7 @@ import { CodexAppServer, redactCodexDiagnostics } from "../src/harness/codex-app
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
 import { readCodexOAuthAuthFile } from "../src/harness/codex-auth.ts";
 import { acquireCodexOAuthAuthLock } from "../src/harness/codex-auth.ts";
+import { waitFor } from "./support/settle.ts";
 
 const replaySmokeItems = [
   { type: "message", role: "user", content: [{ type: "input_text", text: "earlier question" }] },
@@ -1523,11 +1524,7 @@ test("a user stop whose interrupted turn reports status=failed is a clean stop, 
       ({ ...entry, sessionId: "stop-failed-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
     recordModelCall: () => {},
   });
-  const deadline = Date.now() + 4_000;
-  while (!existsSync(join(dir, "started"))) {
-    if (Date.now() > deadline) throw new Error("mock codex never started its turn");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await waitFor(() => existsSync(join(dir, "started")), Boolean, 4_000);
   await signals.send("run-stop-failed", { kind: "abort" });
   const result = await running;
   assert.equal(result.stopped, true, "an interrupted turn the provider calls failed is still a user stop");
@@ -1920,11 +1917,7 @@ test("Codex steers extracted documents into the active turn without copying cont
       ],
     }),
   });
-  const deadline = Date.now() + 5_000;
-  while (!existsSync(join(dir, "started"))) {
-    if (Date.now() > deadline) throw new Error("mock Codex did not start");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await waitFor(() => existsSync(join(dir, "started")), Boolean, 5_000);
   await signals.send("steer-document-run", { kind: "steer", text: "read the document", ts: "doc.1" });
   await running;
   assert.match(readFileSync(capture, "utf8"), /STEER-PRIVATE-492/);

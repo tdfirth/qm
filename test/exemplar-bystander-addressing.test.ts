@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 const REQUEST = "<@U_CAROL> can you review these drafts and flag anything I missed?";
 
@@ -61,19 +61,18 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
     };
     await built.app.turn(req);
 
-    const deadline = Date.now() + 5_000;
-    let trigger: any;
-    while (Date.now() < deadline && !trigger) {
-      const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-      if (sub) {
+    const trigger = (await waitFor(
+      async () => {
+        const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
+        if (!sub) return undefined;
         const entries = await built.sessions.getEntries(sub.id);
-        trigger = entries.find(
+        return entries.find(
           (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("review these drafts"),
         );
-      }
-      if (!trigger) await sleep(50);
-    }
-    assert.ok(trigger, "the message reached the turn's session");
+      },
+      Boolean,
+      5_000,
+    ))!;
     assert.equal((trigger.payload as any).name, "Alice", "the trigger is author-attributed");
     assert.equal((trigger.payload as any).text, REQUEST, "the message text is preserved");
 

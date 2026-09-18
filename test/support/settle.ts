@@ -1,4 +1,5 @@
 import type { Scheduler } from "../../src/cron/scheduler.ts";
+import { sleep } from "../../src/util/async.ts";
 
 export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
   const r = await scheduler.runNow(cronId);
@@ -15,7 +16,21 @@ export const settle = async (check: () => Promise<boolean>): Promise<void> => {
     } catch (err) {
       lastError = err;
     }
-    await new Promise((r) => setTimeout(r, 100));
+    await sleep(100);
   }
   if (lastError !== undefined) console.error("[settle] condition never held; last error:", lastError);
 };
+
+export async function waitFor<T>(
+  probe: () => T | Promise<T>,
+  pred: (value: T) => boolean = Boolean,
+  timeoutMs = 3_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await probe();
+    if (pred(value)) return value;
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for condition`);
+    await sleep(20);
+  }
+}

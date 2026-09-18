@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 async function listFull(store: any, opts?: any): Promise<any[]> {
   const rows = await store.list(opts);
@@ -20,17 +20,12 @@ function freshApp() {
   return buildApp(testConfig({ dataDir }));
 }
 
-async function pollDeliveries(
-  deliveries: { pending(type: string): Promise<unknown[]> },
-  deadlineMs = 5_000,
-): Promise<any[]> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const pending = (await deliveries.pending("slack")) as any[];
-    if (pending.length) return pending;
-    await sleep(50);
-  }
-  return [];
+function pollDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }, deadlineMs = 5_000): Promise<any[]> {
+  return waitFor(
+    () => deliveries.pending("slack") as Promise<any[]>,
+    (pending) => pending.length > 0,
+    deadlineMs,
+  );
 }
 
 test("ingest → ambient judge engages → spawns a smart-model worker that posts to the container", async () => {
@@ -1021,11 +1016,11 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
   await built.app.ingestSurfaceEvents([
     { container, ts: "100.2", authorId: "U2", text: "same here, meetup page too", createdAt: 2 },
   ]);
-  let signals: any[] = [];
-  for (const deadline = Date.now() + 5_000; !signals.length && Date.now() < deadline;) {
-    signals = await built.signals.takePending(live!.id);
-    if (!signals.length) await sleep(50);
-  }
+  const signals = await waitFor(
+    () => built.signals.takePending(live!.id),
+    (s) => s.length > 0,
+    5_000,
+  );
   assert.equal(signals.length, 1, "the second wake steered the live run");
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text!, /meetup page too/);

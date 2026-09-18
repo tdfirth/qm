@@ -15,8 +15,8 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { sleep } from "../src/util/async.ts";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
   actor,

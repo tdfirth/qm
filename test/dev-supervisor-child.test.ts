@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Child } from "../scripts/dev/supervisor/children.ts";
 import { portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
-import { sleep } from "../scripts/dev/lib/util.ts";
 import type { ChildSpec } from "../scripts/dev/lib/types.ts";
+import { waitFor } from "./support/settle.ts";
 
 const FAKE = join(import.meta.dirname, "../scripts/dev/test-helpers/fake-child.mjs");
 
@@ -65,11 +65,8 @@ test("a crashed child is auto-restarted with backoff", async () => {
     () => crashes.push(Date.now()),
   );
   assert.equal((await child.start()).ok, true);
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline && crashes.length === 0) await sleep(100);
-  assert.ok(crashes.length >= 1, "child crash was observed");
-  while (Date.now() < deadline && child.state !== "healthy") await sleep(100);
-  assert.equal(child.state, "healthy");
+  await waitFor(() => crashes.length >= 1, Boolean, 10_000);
+  await waitFor(() => child.state === "healthy", Boolean, 10_000);
   assert.ok(child.restarts >= 1);
   await child.stop();
   rmSync(lock, { recursive: true, force: true });

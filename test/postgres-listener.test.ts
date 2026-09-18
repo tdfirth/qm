@@ -4,16 +4,11 @@ import pg from "pg";
 import { subscribePostgresChannel } from "../src/persistence/postgres-listener.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { waitFor } from "./support/settle.ts";
 
 const url = process.env.DATABASE_URL;
 const skip = !url;
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 8_000;
-  while (!(await check())) {
-    assert.ok(Date.now() < deadline, "condition timed out");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
+const until = (check: () => boolean | Promise<boolean>) => waitFor(check, Boolean, 8_000);
 
 test("channels share a backend, recover after termination, and release it after unsubscribe", { skip }, async () => {
   const observer = new pg.Client({ connectionString: url });

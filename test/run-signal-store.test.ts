@@ -2,18 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
-  const deadline = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
-    await sleep(20);
-  }
-};
 
 test("memory store: send appends, takePending drains in order and consumes", async () => {
   const store = createMemoryRunSignalStore();
@@ -64,7 +57,7 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
     { onSteer: async () => {}, onAbort: async () => void loserAborts++ },
     { intervalMs: 20 },
   );
-  await until(() => loserAborts >= 1);
+  await waitFor(() => loserAborts >= 1);
   await loser();
   assert.deepEqual(
     (await store.pending("r1")).map((s) => s.signal.kind),
@@ -78,7 +71,7 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
     { onSteer: async () => {}, onAbort: async () => void reclaimerAborts++ },
     { intervalMs: 20 },
   );
-  await until(() => reclaimerAborts >= 1);
+  await waitFor(() => reclaimerAborts >= 1);
   await reclaimer();
   assert.deepEqual(
     (await store.takePending("r1")).map((s) => s.kind),
@@ -108,16 +101,16 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
   );
   try {
     await store.send("r1", { kind: "steer", text: "first" });
-    await until(() => steered.length === 1);
+    await waitFor(() => steered.length === 1);
     await store.send("r1", { kind: "abort" });
     await store.send("r1", { kind: "abort" });
     releaseFirst();
-    await until(() => aborts === 1, 500);
+    await waitFor(() => aborts === 1, Boolean, 500);
     await sleep(50);
     assert.equal(aborts, 1, "one drain delivers a batch of stops once");
     await store.send("r1", { kind: "steer", text: "second" });
-    await until(() => steered.length === 2, 500);
-    await until(() => aborts === 2, 500);
+    await waitFor(() => steered.length === 2, Boolean, 500);
+    await waitFor(() => aborts === 2, Boolean, 500);
     assert.deepEqual(steered, ["first", "second"], "steers still flow while a stop is pending");
   } finally {
     await stop();
@@ -143,7 +136,7 @@ test("startSignalPoll: a stop whose delivery throws is retried on the next drain
   );
   try {
     await store.send("r1", { kind: "abort" });
-    await until(() => attempts >= 2);
+    await waitFor(() => attempts >= 2);
   } finally {
     await stop();
   }
@@ -183,7 +176,7 @@ test("startSignalPoll: doorbell dispatches a signal immediately, far before the 
   );
   try {
     await store.send("r1", { kind: "steer", text: "now" });
-    await until(() => steered.length === 1, 500);
+    await waitFor(() => steered.length === 1, Boolean, 500);
     assert.deepEqual(steered, ["now"]);
   } finally {
     stop();
@@ -206,7 +199,7 @@ test("startSignalPoll: a steer's ts is dispatched to onSteer (so the harness can
   );
   try {
     await store.send("r1", { kind: "steer", text: "send it", ts: "900.001" });
-    await until(() => seen.length === 1, 500);
+    await waitFor(() => seen.length === 1, Boolean, 500);
     assert.deepEqual(seen, [{ text: "send it", ts: "900.001" }]);
   } finally {
     stop();
@@ -229,7 +222,7 @@ test("startSignalPoll: a legacy durable followUp row is dispatched as a steer du
   );
   try {
     await store.send("r1", { kind: "followUp", text: "legacy text" } as never);
-    await until(() => seen.length === 1, 500);
+    await waitFor(() => seen.length === 1, Boolean, 500);
     assert.deepEqual(seen, ["legacy text"]);
   } finally {
     await stop();
@@ -255,10 +248,10 @@ test("startSignalPoll: a doorbell during a slow drain queues one re-drain (no si
   );
   try {
     await store.send("r1", { kind: "steer", text: "first" });
-    await until(() => seen.length === 1);
+    await waitFor(() => seen.length === 1);
     await store.send("r1", { kind: "steer", text: "second" });
     releaseFirst();
-    await until(() => seen.length === 2);
+    await waitFor(() => seen.length === 2);
     assert.deepEqual(seen, ["first", "second"]);
   } finally {
     stop();
@@ -285,7 +278,7 @@ test("startSignalPoll: stop consumes nothing more — an undrained signal stays 
     { intervalMs: 60_000 },
   );
   await store.send("r1", { kind: "steer", text: "first" });
-  await until(() => seen.length === 1);
+  await waitFor(() => seen.length === 1);
   await store.send("r1", { kind: "steer", text: "second" });
   const stopped = stop();
   releaseFirst();
@@ -307,7 +300,7 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
     const off = receiver.onSignal(runId, () => rings++);
     await sleep(300);
     await sender.send(runId, { kind: "steer", text: "hello" });
-    await until(() => rings >= 1);
+    await waitFor(() => rings >= 1);
     off();
     const taken = await receiver.takePending(runId);
     assert.deepEqual(taken, [{ kind: "steer", text: "hello" }], "the durable row is still the truth");
@@ -489,7 +482,7 @@ test("startSignalPoll delivers the request and files even when a steer has no ca
   });
   try {
     await signals.send("files", { kind: "steer", request, ts: "1" });
-    await until(() => received !== undefined);
+    await waitFor(() => received !== undefined);
     assert.deepEqual(received, { text: "", ts: "1", request });
   } finally {
     await stop();
@@ -517,7 +510,7 @@ test("failed preparation preserves the entire pending batch for retry", async ()
       },
     },
   );
-  await until(() => failed);
+  await waitFor(() => failed);
   await stop();
   assert.deepEqual(
     (await store.takePending("prepare-failure")).map((s) => s.text),
@@ -541,7 +534,7 @@ test("a declined late steer stays durable for terminal replay without spinning",
     { intervalMs: 10 },
   );
   await store.send("late-steer", { kind: "steer", text: "late" });
-  await until(() => attempts > 0);
+  await waitFor(() => attempts > 0);
   await sleep(35);
   await stop();
   assert.equal(attempts, 1);
@@ -567,7 +560,7 @@ test("failed attachment preparation does not block Stop", async () => {
     { intervalMs: 5 },
   );
   try {
-    await until(() => aborted);
+    await waitFor(() => aborted);
   } finally {
     await stop();
   }

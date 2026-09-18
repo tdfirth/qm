@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 const QUESTION = "can you summarize the time constraints discussed here for the customer workshop next month";
 
@@ -55,19 +55,17 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     };
     await built.app.turn(req);
 
-    const deadline = Date.now() + 5_000;
-    let entries: any[] = [];
-    while (Date.now() < deadline) {
-      const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-      if (sub) entries = await built.sessions.getEntries(sub.id);
-      if (
-        entries.some(
+    const entries: any[] = await waitFor(
+      async () => {
+        const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
+        return sub ? await built.sessions.getEntries(sub.id) : [];
+      },
+      (found) =>
+        found.some(
           (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("time constraints"),
-        )
-      )
-        break;
-      await sleep(50);
-    }
+        ),
+      5_000,
+    );
     const users = entries.filter((e: any) => e.type === "user").map((e: any) => e.payload as any);
     assert.ok(
       users.some((p) => (p.text ?? "").includes("time constraints") && p.name === "alice"),
@@ -108,22 +106,24 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
       liveActor: true,
       async: true,
     });
-    let pulled = false;
-    const d2 = Date.now() + 5_000;
-    while (Date.now() < d2 && !pulled) {
-      const sub2 = await built.sessions.getByThread(`ch:${channel}:${root2}`);
-      if (sub2) {
-        const e2 = await built.sessions.getEntries(sub2.id);
-        pulled = e2.some(
-          (e: any) =>
-            e.type === "tool_result" && (e.payload as any)?.tool === "whats_new" && (e.payload as any)?.ok === true,
-        );
-      }
-      if (!pulled) await sleep(50);
+    try {
+      await waitFor(
+        async () => {
+          const sub2 = await built.sessions.getByThread(`ch:${channel}:${root2}`);
+          if (!sub2) return false;
+          const e2 = await built.sessions.getEntries(sub2.id);
+          return e2.some(
+            (e: any) =>
+              e.type === "tool_result" && (e.payload as any)?.tool === "whats_new" && (e.payload as any)?.ok === true,
+          );
+        },
+        Boolean,
+        5_000,
+      );
+    } finally {
+      fulfilling = false;
+      await fulfiller;
     }
-    fulfilling = false;
-    await fulfiller;
-    assert.ok(pulled, "the channel history is readable on demand (whats_new succeeded)");
   } finally {
     await built.runtime.stop();
   }

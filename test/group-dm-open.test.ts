@@ -6,6 +6,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/types.ts";
+import { waitFor } from "./support/settle.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },
@@ -423,8 +424,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
 
     locked = false;
-    const deadline = Date.now() + 2000;
-    while (!pushes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+    await waitFor(() => pushes.length > 0, Boolean, 2000);
 
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
     assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
@@ -473,10 +473,8 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     });
 
     await dir.forceDirectorySync(client, "C1", "kai@x.com");
-    const deadline = Date.now() + 2000;
-    while (pushes.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+    await waitFor(() => pushes.length >= 2, Boolean, 2000);
 
-    assert.ok(pushes.length >= 2, "the refused push is retried");
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
     assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
   });

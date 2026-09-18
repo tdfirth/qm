@@ -9,6 +9,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { waitFor } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -26,11 +27,6 @@ before(async () => {
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
 });
-
-async function until(cond: () => boolean, ms: number): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-}
 
 function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
@@ -69,7 +65,7 @@ test(
         createdBy: "U1",
         ownerScopeId: scopeId("personal", "U1"),
       });
-      await until(() => calls.length >= 1, 30_000);
+      await waitFor(() => calls.length >= 1, Boolean, 30_000);
       assert.equal(calls.length, 1, "the due slot starts exactly one turn");
       await new Promise((r) => setTimeout(r, 16_000));
       assert.equal(calls.length, 1, "no sibling or reconcile re-run while (or after) the slow turn runs");
@@ -101,8 +97,7 @@ test(
         ownerScopeId: scopeId("personal", "U2"),
       });
       const fires = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
-      await until(() => fires() >= 3, 45_000);
-      assert.ok(fires() >= 3, "a recurring cron chains fire jobs across instances");
+      await waitFor(() => fires() >= 3, Boolean, 45_000);
       const keys = calls.map((c) => c.idempotencyKey);
       assert.equal(new Set(keys).size, keys.length, "no slot fires twice");
 

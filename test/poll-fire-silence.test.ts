@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
+import { waitFor } from "./support/settle.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-pollsilence-"));
@@ -113,13 +113,11 @@ test("interactive mention: the first-block ack still posts immediately (unchange
       liveActor: true,
       async: true,
     });
-    const deadline = Date.now() + 5_000;
-    let ack: any;
-    while (Date.now() < deadline && !ack) {
-      ack = (await slackDeliveries(built.deliveries)).find((d) => d.text === "On it — checking.");
-      if (!ack) await sleep(50);
-    }
-    assert.ok(ack, "a person is waiting: the ack still posts mid-turn");
+    await waitFor(
+      async () => (await slackDeliveries(built.deliveries)).find((d) => d.text === "On it — checking."),
+      Boolean,
+      5_000,
+    );
   } finally {
     await built.runtime.stop();
   }

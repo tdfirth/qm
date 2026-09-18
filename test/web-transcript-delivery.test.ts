@@ -11,6 +11,7 @@ import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { waitFor } from "./support/settle.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -302,8 +303,7 @@ async function terminalRun(
   await duringTurn?.();
   if ("fail" in result) await runs.fail(run.id, claimed?.leaseToken ?? "", result.fail, { retry: true });
   else await runs.complete(run.id, claimed?.leaseToken ?? "", result);
-  const deadline = Date.now() + 2_000;
-  while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);
+  await waitFor(async () => (await inner.pending("web")).length > 0, Boolean, 2_000);
   return run.id;
 }
 
@@ -332,8 +332,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
-  const deadline = Date.now() + 2_000;
-  while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);
+  await waitFor(async () => (await inner.pending("web")).length > 0, Boolean, 2_000);
 
   let drained = await deliveries.pending("web");
   for (let i = 0; i < 100 && drained.length === 0; i++) {

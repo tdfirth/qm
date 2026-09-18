@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import { waitFor } from "./support/settle.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -387,14 +388,6 @@ const internalUser = (id: string, name: string) => ({
   real_name: name,
   profile: { display_name: name, real_name: name, email: `${name.toLowerCase()}@example.com` },
 });
-
-async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
 
 async function fixture(
   options: {

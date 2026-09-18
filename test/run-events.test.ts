@@ -7,8 +7,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { App } from "../src/api/app.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+import { sleep } from "../src/util/async.ts";
 
 test("run events push deltas without snapshot polling and recover a separate worker's prefix", async () => {
   const bus = createMemoryEventBus<RunStreamEvent>("test");

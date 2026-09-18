@@ -5,8 +5,7 @@ import { createProcessReaper, createReaperKillHook } from "../src/processes/proc
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceLayer } from "../src/types.ts";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 const ID = "00000000-0000-0000-0000-000000000abc";
 
