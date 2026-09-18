@@ -35,11 +35,12 @@ test("colored session actions keep their row hue at rest and on hover", () => {
   );
 });
 
-test("conversation colors use the earth-and-ocean palette on every list surface", () => {
-  assert.match(tsSource, /const SESSION_COLORS = \["#d2664d", "#b98a52", "#7d884f", "#5f8b83", "#527d99", "#8b5d52"\]/);
+test("conversation colors use the refined spectrum palette on every list surface", () => {
+  assert.match(tsSource, /const SESSION_COLORS = \["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"\]/);
   assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
   assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
-  assert.match(shellCss, /conic-gradient\(#d2664d, #b98a52, #7d884f, #5f8b83, #527d99, #8b5d52, #d2664d\)/);
+  assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
+  assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\([\s\S]*?border-left: 2px solid/);
 });
 
 test("pinned conversations use the same header and child alignment as project conversations", () => {

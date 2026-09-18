@@ -1105,14 +1105,20 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
   `;
 }
 
-const SESSION_COLORS = ["#d2664d", "#b98a52", "#7d884f", "#5f8b83", "#527d99", "#8b5d52"] as const;
+const SESSION_COLORS = ["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"] as const;
 const LEGACY_SESSION_COLORS = new Map([
   ["#ef4444", SESSION_COLORS[0]],
   ["#f59e0b", SESSION_COLORS[1]],
   ["#22c55e", SESSION_COLORS[2]],
-  ["#3b82f6", SESSION_COLORS[4]],
-  ["#a855f7", SESSION_COLORS[3]],
+  ["#3b82f6", SESSION_COLORS[3]],
+  ["#a855f7", SESSION_COLORS[4]],
   ["#ec4899", SESSION_COLORS[5]],
+  ["#d2664d", SESSION_COLORS[0]],
+  ["#b98a52", SESSION_COLORS[1]],
+  ["#7d884f", SESSION_COLORS[2]],
+  ["#5f8b83", SESSION_COLORS[2]],
+  ["#527d99", SESSION_COLORS[3]],
+  ["#8b5d52", SESSION_COLORS[5]],
 ]);
 
 function displaySessionColor(color: string | null | undefined): string | null {

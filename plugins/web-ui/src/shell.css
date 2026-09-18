@@ -690,7 +690,6 @@ a.chat-row-open {
 }
 .pinned-head-glyph svg {
   flex: 0 0 auto;
-  opacity: 0.8;
 }
 .pinned-children {
   display: flex;
@@ -708,20 +707,42 @@ a.chat-row-open {
   --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
 }
 .session-row.colored .session {
-  background: color-mix(in srgb, var(--session-color) 14%, transparent);
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--session-color) 22%, transparent),
+    color-mix(in srgb, var(--session-color) 10%, transparent)
+  );
+  border-left: 2px solid color-mix(in srgb, var(--session-color) 55%, transparent);
 }
 .session-row.colored .session:hover,
 .session-row.colored.menu-open .session {
-  background: color-mix(in srgb, var(--session-color) 24%, transparent);
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--session-color) 30%, transparent),
+    color-mix(in srgb, var(--session-color) 16%, transparent)
+  );
 }
 .session-row.colored.active .session {
-  background: color-mix(in srgb, var(--session-color) 30%, var(--secondary));
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--session-color) 34%, var(--secondary)),
+    color-mix(in srgb, var(--session-color) 20%, var(--secondary))
+  );
 }
 .list-row.chat-row.colored {
-  background: color-mix(in srgb, var(--session-color) 12%, transparent);
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--session-color) 20%, transparent),
+    color-mix(in srgb, var(--session-color) 8%, transparent)
+  );
+  border-left: 2px solid color-mix(in srgb, var(--session-color) 50%, transparent);
 }
 .list-row.chat-row.colored:hover {
-  background: color-mix(in srgb, var(--session-color) 20%, transparent);
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--session-color) 28%, transparent),
+    color-mix(in srgb, var(--session-color) 14%, transparent)
+  );
 }
 
 .session-menu-colors {
@@ -751,7 +772,7 @@ a.chat-row-open {
   position: relative;
   display: inline-flex;
   overflow: hidden;
-  background: conic-gradient(#d2664d, #b98a52, #7d884f, #5f8b83, #527d99, #8b5d52, #d2664d);
+  background: conic-gradient(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e);
 }
 .color-swatch.custom input[type="color"] {
   position: absolute;
