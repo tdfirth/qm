@@ -958,9 +958,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         clearTimeout(setupTimer);
         setupTimer = undefined;
       }
-      const requestTimeoutMs = deadline
-        ? Math.min(opts.threadStartTimeoutMs ?? CODEX_START_TIMEOUT_MS, Math.max(1, deadline - Date.now()))
-        : (opts.threadStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
+      const remainingWallClockMs = deadline ? Math.max(1, deadline - Date.now()) : undefined;
+      let requestTimeoutMs = remainingWallClockMs ?? CODEX_START_TIMEOUT_MS;
+      if (opts.threadStartTimeoutMs)
+        requestTimeoutMs = remainingWallClockMs
+          ? Math.min(opts.threadStartTimeoutMs, remainingWallClockMs)
+          : opts.threadStartTimeoutMs;
       let requestTimer: NodeJS.Timeout | undefined;
       const requestAbort = new AbortController();
       let requestTimedOut = false;

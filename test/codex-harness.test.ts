@@ -268,6 +268,29 @@ process.on("SIGTERM", () => {
   return path;
 }
 
+function delayedThreadStartCodexBinary(dir: string, delayMs: number): string {
+  const path = join(dir, "delayed-thread-start-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") return setTimeout(() => send({ id: msg.id, result: { thread: { id: "thread-delayed" } } }), ${delayMs});
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn-delayed", status: "inProgress" } } });
+    return setImmediate(() => send({ method: "turn/completed", params: { threadId: "thread-delayed", turn: { id: "turn-delayed", status: "completed", items: [] } } }));
+  }
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function refreshThenNonresponsiveCodexBinary(dir: string): string {
   const path = join(dir, "refresh-then-nonresponsive-codex");
   const accessToken = oauthAccessToken("startup-account", "startup-after");
@@ -1249,6 +1272,77 @@ test("the turn wall-clock boundary preserves a pending Codex thread/start deadli
   );
   assert.equal(existsSync(join(dir, "thread-started")), true);
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test(
+  "a positive turn wall clock above 30 seconds remains the Codex thread/start deadline",
+  { timeout: 40_000 },
+  async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-long-thread-start-test-"));
+    const harness = createCodexHarness({
+      binaryPath: delayedThreadStartCodexBinary(dir, 30_100),
+      env: testHarnessEnv(dir),
+      appServerStartTimeoutMs: 1_000,
+      turnWallClockMs: 35_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+    const startedAt = Date.now();
+    const result = await harness.turns.runTurn({
+      session: { id: "long-thread-start" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) =>
+        ({ ...entry, sessionId: "long-thread-start", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    });
+    assert.ok(Date.now() - startedAt > 30_000);
+    assert.deepEqual(result, { reply: "", modelCalls: 1 });
+  },
+);
+
+test("the absolute wall timer is rearmed after Codex thread/start succeeds", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-rearm-test-"));
+  const harness = createCodexHarness({
+    binaryPath: delayedThreadStartCodexBinary(dir, 300),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 1_000,
+    turnWallClockMs: 1_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const startedAt = Date.now();
+  await assert.rejects(
+    harness.turns.runTurn({
+      session: { id: "thread-start-rearm" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async () => new Promise<SessionEntry>(() => {}),
+      recordModelCall: () => {},
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof NonRetryableTurnError);
+      assert.equal(error.message, "Codex turn exceeded 1s wall clock");
+      return true;
+    },
+  );
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed >= 850, `wall timer fired too early after ${elapsed}ms`);
+  assert.ok(elapsed < 1_250, `wall timer did not retain its absolute deadline after ${elapsed}ms`);
 });
 
 test("cancelling a pending Codex thread/start remains a clean stop", async (t) => {

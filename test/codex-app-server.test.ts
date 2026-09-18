@@ -22,16 +22,27 @@ const readline = require("node:readline");
 const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const message = JSON.parse(line);
-  if (message.method === "pending") return setTimeout(() => send({ id: message.id, result: "late" }), 30);
+  if (message.method === "pending") {
+    send({ method: "pending/received" });
+    return setTimeout(() => {
+      send({ id: message.id, result: "late" });
+      send({ method: "late/written" });
+    }, 30);
+  }
   if (message.method === "ping") send({ id: message.id, result: "pong" });
 });
 `,
   );
   chmodSync(binary, 0o755);
+  const pendingReceived = Promise.withResolvers<void>();
+  const lateWritten = Promise.withResolvers<void>();
   const server = new CodexAppServer({
     binaryPath: binary,
     cwd: dir,
-    onNotification: () => {},
+    onNotification: (method) => {
+      if (method === "pending/received") pendingReceived.resolve();
+      if (method === "late/written") lateWritten.resolve();
+    },
     onRequest: async () => ({}),
   });
   t.after(async () => {
@@ -40,9 +51,10 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   });
   const abort = new AbortController();
   const pending = server.request("pending", {}, abort.signal);
-  setTimeout(() => abort.abort(), 5);
+  await pendingReceived.promise;
+  abort.abort();
   await assert.rejects(pending, /request cancelled/);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await lateWritten.promise;
   assert.equal(await server.request("ping"), "pong");
   assert.equal(server.error(), null);
 });
