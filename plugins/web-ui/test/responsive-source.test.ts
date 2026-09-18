@@ -108,7 +108,6 @@ test("touch layouts expose row actions and preserve readable composer choices", 
     compactCss,
     /\.composer-toolbar \.icon-btn,\s*\.composer-toolbar \.menu-button,\s*\.composer-toolbar \.send-btn \{\s*min-height: 44px;/,
   );
-  assert.match(compactCss, /@media \(max-width: 360px\)[\s\S]*\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
   assert.match(compactCss, /\.project-create-button \{\s*width: 44px;\s*height: 44px;/);
   assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label="New project"/);
   assert.match(

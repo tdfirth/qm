@@ -3358,10 +3358,6 @@ qm-markdown .tok-in {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.model-control .menu-button {
-  max-width: min(280px, 46vw);
-  color: var(--foreground);
-}
 .menu-popover {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -5620,9 +5616,6 @@ a.connector-widget:focus-visible {
   .menu-button {
     max-width: min(44vw, 190px);
   }
-  .model-control .menu-button {
-    max-width: min(48vw, 220px);
-  }
   .composer-toolbar .icon-btn,
   .composer-toolbar .menu-button,
   .composer-toolbar .send-btn {
@@ -5679,13 +5672,6 @@ a.connector-widget:focus-visible {
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  .model-control {
-    flex: 1;
-  }
-  .model-control .menu-button {
-    width: 100%;
-    max-width: none;
-  }
   .menu-button {
     max-width: 150px;
   }
@@ -5697,16 +5683,6 @@ a.connector-widget:focus-visible {
   }
   .message-bubble {
     max-width: 94%;
-  }
-}
-
-@media (max-width: 360px) {
-  .composer-right .model-control {
-    flex: 1 1 96px;
-  }
-  .composer-right .menu-button {
-    padding-right: 4px;
-    padding-left: 4px;
   }
 }
 
