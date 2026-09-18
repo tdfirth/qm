@@ -18,22 +18,21 @@ import {
   type PorterSandboxLike,
 } from "./porter-client.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import { createExecExport, createBackendBlobStaging, createExecFileOps } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { createExecSandboxIo } from "./exec-sandbox-base.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
-  ExecOptions,
   ExecResult,
   ProvisionOptions,
   Sandbox,
@@ -230,6 +229,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   }
 
   const { execRaw, writeAbsBytes, readAbsBytes } = createPorterExec(client, async (id) => (await refFor(id)).sb.id);
+  const io = createExecSandboxIo({ label: "porter", defaultTimeoutSec, exec: execRaw, writeAbsBytes, readAbsBytes });
 
   const profile: AgentComputerProfile = {
     backend: "porter",
@@ -283,6 +283,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
     ...blobStaging,
+    ...io,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -324,8 +325,8 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
           layers,
           handle,
           {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
+            readFile: io.readFile,
+            writeFileBytes: io.writeFileBytes,
             exec: (script, t) => execRaw(name, script, t),
           },
           { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "porter" },
@@ -336,42 +337,6 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         await sandbox.teardown(handle).catch(swallowAs("porter-sandbox: teardown after failed provision", undefined));
         throw err;
       }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("porter-sandbox: kill in-flight exec", undefined));
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
     },
 
     exportFiles: execExport.exportFiles,

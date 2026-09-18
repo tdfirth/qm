@@ -27,63 +27,24 @@ export const sandboxScopeName = (prefix: string, id: string): string => {
   return `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
 };
 
-export interface ExecSandboxBaseDeps {
-  workspace: WorkspaceStore;
+interface ExecSandboxIoDeps {
   label: string;
-  prefix: string;
-  homeDir: string;
   defaultTimeoutSec: number;
-  credentialPaths: CredentialPathSpec[];
-  egressProxyUrl?: string;
-  deleteFailureCode: string;
-  onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
   exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
-  ensureResident(name: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
-  isProvisioned(name: string): boolean;
-  recreateScratch(name: string): Promise<void>;
-  deleteInstance(name: string): Promise<void>;
-  forgetInstance?(name: string): void;
-  ensureEgress?(name: string): Promise<void>;
-  installLayerTools?: LayerToolInstaller;
-  combineLayerToolPrep?: boolean;
 }
 
-export interface ExecSandboxBase {
-  workspaceDir: string;
-  provisionQueue: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
-  scopeFor(name: string): string | undefined;
-  provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
+interface ExecSandboxIo {
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
   readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;
-  teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
 }
 
-export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
-  const { workspace, label, prefix, homeDir, defaultTimeoutSec } = deps;
-  if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
-    throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
-  }
-  const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
-  const provisionQueue = createKeyedQueue<string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
-
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !deps.isProvisioned(name)) await deps.recreateScratch(name);
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
-    });
-  }
+export function createExecSandboxIo(deps: ExecSandboxIoDeps): ExecSandboxIo {
+  const { label, defaultTimeoutSec } = deps;
 
   async function writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void> {
     await deps.writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
@@ -100,6 +61,82 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   async function readFile(handle: SandboxHandle, relPath: string): Promise<string | null> {
     const bytes = await readFileBytes(handle, relPath);
     return bytes === null ? null : Buffer.from(bytes).toString("utf8");
+  }
+
+  async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
+    const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
+    const exports = Object.entries(handle.env ?? {})
+      .map(([k, v]) => `export ${k}=${shq(v)}`)
+      .join("; ");
+    const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
+    const signal = execOpts?.signal;
+    if (!signal) return deps.exec(handle.id, script, timeoutSec);
+    const killUid = randomUUID();
+    const fireKill = () => {
+      deps
+        .exec(handle.id, killScript(killUid), 15)
+        .catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
+    };
+    signal.throwIfAborted();
+    const onAbort = () => fireKill();
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  return { run, writeFileBytes, writeFile, readFileBytes, readFile };
+}
+
+export interface ExecSandboxBaseDeps extends ExecSandboxIoDeps {
+  workspace: WorkspaceStore;
+  prefix: string;
+  homeDir: string;
+  credentialPaths: CredentialPathSpec[];
+  egressProxyUrl?: string;
+  deleteFailureCode: string;
+  onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
+  ensureResident(name: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
+  isProvisioned(name: string): boolean;
+  recreateScratch(name: string): Promise<void>;
+  deleteInstance(name: string): Promise<void>;
+  forgetInstance?(name: string): void;
+  ensureEgress?(name: string): Promise<void>;
+  installLayerTools?: LayerToolInstaller;
+  combineLayerToolPrep?: boolean;
+}
+
+export interface ExecSandboxBase extends ExecSandboxIo {
+  workspaceDir: string;
+  provisionQueue: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
+  scopeFor(name: string): string | undefined;
+  provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
+  teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
+}
+
+export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
+  const { workspace, label, prefix, homeDir } = deps;
+  if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
+    throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
+  }
+  const io = createExecSandboxIo(deps);
+  const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
+  const provisionQueue = createKeyedQueue<string>();
+  const scopeByName = new Map<string, string>();
+  const scratchKeyByName = new Map<string, string>();
+  const activeScratch = new Map<string, number>();
+
+  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
+    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    return provisionQueue(`scratch:${key}`, async () => {
+      scratchKeyByName.set(name, key);
+      const active = activeScratch.get(name) ?? 0;
+      if (active === 0 && !deps.isProvisioned(name)) await deps.recreateScratch(name);
+      activeScratch.set(name, active + 1);
+      return { name, coldStart: active === 0 };
+    });
   }
 
   async function teardown(handle: SandboxHandle, tdOpts?: TeardownOptions): Promise<void> {
@@ -182,8 +219,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         layers,
         handle,
         {
-          readFile,
-          writeFileBytes,
+          readFile: io.readFile,
+          writeFileBytes: io.writeFileBytes,
           exec: (script, t) => deps.exec(name, script, t),
         },
         { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
@@ -197,40 +234,12 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     }
   }
 
-  async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
-    const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-    const exports = Object.entries(handle.env ?? {})
-      .map(([k, v]) => `export ${k}=${shq(v)}`)
-      .join("; ");
-    const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-    const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec);
-    const killUid = randomUUID();
-    const fireKill = () => {
-      deps
-        .exec(handle.id, killScript(killUid), 15)
-        .catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
-    };
-    signal.throwIfAborted();
-    const onAbort = () => fireKill();
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-
   return {
+    ...io,
     workspaceDir,
     provisionQueue,
     scopeFor: (name) => scopeByName.get(name),
     provision,
-    run,
-    writeFileBytes,
-    writeFile,
-    readFileBytes,
-    readFile,
     teardown,
   };
 }
