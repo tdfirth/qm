@@ -1,21 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { JSDOM } from "jsdom";
+import { withDom } from "./dom-fixture.ts";
 
-const dom = new JSDOM("<!doctype html><body></body>", { url: "https://agent.example.com", pretendToBeVisual: true });
-for (const key of [
-  "window",
-  "document",
-  "customElements",
-  "HTMLElement",
-  "Element",
-  "Document",
-  "CSSStyleSheet",
-  "ShadowRoot",
-  "location",
-] as const) {
-  Object.defineProperty(globalThis, key, { configurable: true, value: dom.window[key] });
-}
+const { dom } = withDom("<!doctype html><body></body>", {
+  url: "https://agent.example.com",
+  pretendToBeVisual: true,
+  matchMedia: false,
+  globals: [
+    "window",
+    "document",
+    "customElements",
+    "HTMLElement",
+    "Element",
+    "Document",
+    "CSSStyleSheet",
+    "ShadowRoot",
+    "location",
+  ],
+});
 await import("../src/slack-setup.ts");
 const links = {
   tokenUrl: "https://api.slack.com/apps",

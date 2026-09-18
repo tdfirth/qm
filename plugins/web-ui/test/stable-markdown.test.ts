@@ -1,22 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
+import { withDom } from "./dom-fixture.ts";
 
-const dom = new JSDOM("<!doctype html><body></body>", { pretendToBeVisual: true, url: "http://localhost" });
-for (const key of [
-  "localStorage",
-  "window",
-  "document",
-  "customElements",
-  "HTMLElement",
-  "Element",
-  "Node",
-  "Document",
-  "CSSStyleSheet",
-  "ShadowRoot",
-] as const) {
-  Object.defineProperty(globalThis, key, { value: dom.window[key], configurable: true });
-}
+const { dom } = withDom("<!doctype html><body></body>", {
+  pretendToBeVisual: true,
+  url: "http://localhost",
+  matchMedia: false,
+  globals: [
+    "localStorage",
+    "window",
+    "document",
+    "customElements",
+    "HTMLElement",
+    "Element",
+    "Node",
+    "Document",
+    "CSSStyleSheet",
+    "ShadowRoot",
+  ],
+});
 const { StableMarkdown } = await import("../src/stable-markdown.ts");
 const { installMarkdownSanitizer } = await import("../src/markdown-sanitize.ts");
 installMarkdownSanitizer();

@@ -1,42 +1,29 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { CoreContext } from "../src/core-bridge.ts";
+import { DOM_GLOBALS, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 test("project interactions preserve focus and successful local mutations", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+  const { dom } = withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/web-ui/?view=contexts",
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    globals: [
+      ...DOM_GLOBALS,
+      "HTMLDialogElement",
+      "customElements",
+      "Node",
+      "Event",
+      "MouseEvent",
+      "SubmitEvent",
+      "InputEvent",
+    ],
+    define: (window) => ({ ...timeoutFrames, getComputedStyle: window.getComputedStyle.bind(window) }),
   });
   Object.defineProperty(dom.window.HTMLDialogElement.prototype, "showModal", {
     value(this: HTMLDialogElement) {
       this.open = true;
     },
   });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    HTMLDialogElement: dom.window.HTMLDialogElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    MouseEvent: dom.window.MouseEvent,
-    SubmitEvent: dom.window.SubmitEvent,
-    InputEvent: dom.window.InputEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 
   let resolveContexts!: (response: Response) => void;
   const staleContexts = new Promise<Response>((resolve) => {

@@ -1,10 +1,10 @@
 import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Conversation } from "../src/conv-types.ts";
 import type { PendingApproval } from "../src/core-bridge.ts";
+import { DOM_GLOBALS, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,32 +21,16 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 test("worker transcripts allow approvals without enabling the composer", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+  const { restore } = withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/",
+    globals: [...DOM_GLOBALS, "customElements", "Node", "Event", "InputEvent", "KeyboardEvent"],
+    define: (window) => ({
+      ...timeoutFrames,
+      getComputedStyle: window.getComputedStyle.bind(window),
+      EventSource: undefined,
+      fetch: globalThis.fetch,
+    }),
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    InputEvent: dom.window.InputEvent,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    EventSource: undefined,
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 
   const approval: PendingApproval = { requestId: "a1", command: "echo test", reason: "requires approval" };
   const row = {
@@ -62,7 +46,6 @@ test("worker transcripts allow approvals without enabling the composer", async (
   const decision = deferred<Response>();
   const continuation = deferred<Response>();
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
-  const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     requests.push({ path, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
@@ -143,7 +126,6 @@ test("worker transcripts allow approvals without enabling the composer", async (
     conv?.composer.dispose();
     conv?.dispose();
     await vite.close();
-    globalThis.fetch = originalFetch;
-    dom.window.close();
+    restore();
   }
 });

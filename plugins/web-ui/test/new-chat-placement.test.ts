@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Conversation } from "../src/conv-types.ts";
+import { DOM_GLOBALS, NoopResizeObserver, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 interface Canvas {
   panes: () => number;
@@ -22,49 +22,26 @@ async function withCanvas(
   run: (canvas: Canvas) => void | Promise<void>,
   stacked: boolean | "single" = false,
 ): Promise<void> {
-  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/web-ui/" });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    PointerEvent: dom.window.PointerEvent,
-    MouseEvent: dom.window.MouseEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    fetch: async () =>
-      Response.json({
-        scopeId: "personal:tester",
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: [] },
-        modelCatalog: {},
-        fastModeModelIds: [],
-        interactiveFastMode: false,
-        effective: { harnessId: "pi", modelId: "" },
-        sessions: [],
-        items: [],
-      }),
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div>', {
+    url: "http://localhost/web-ui/",
+    globals: [...DOM_GLOBALS, "Element", "Node", "Event", "PointerEvent", "MouseEvent", "customElements"],
+    define: (window) => ({
+      getComputedStyle: window.getComputedStyle.bind(window),
+      ...timeoutFrames,
+      ResizeObserver: NoopResizeObserver,
+      fetch: async () =>
+        Response.json({
+          scopeId: "personal:tester",
+          approvedHarnesses: ["pi"],
+          modelsByHarness: { pi: [] },
+          modelCatalog: {},
+          fastModeModelIds: [],
+          interactiveFastMode: false,
+          effective: { harnessId: "pi", modelId: "" },
+          sessions: [],
+          items: [],
+        }),
+    }),
   });
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
@@ -166,11 +143,7 @@ async function withCanvas(
     await new Promise((resolve) => setTimeout(resolve, 500));
   } finally {
     await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    restore();
   }
 }
 

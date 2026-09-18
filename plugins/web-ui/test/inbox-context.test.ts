@@ -1,20 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { DOM_GLOBALS, withDom } from "./dom-fixture.ts";
 
 test("conversation details include the waiting message after prior context with correctly routed attachments", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/web-ui/",
+    globals: [...DOM_GLOBALS, "Node"],
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of ["window", "document", "location", "history", "localStorage", "navigator", "HTMLElement", "Node"])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
@@ -67,6 +60,6 @@ test("conversation details include the waiting message after prior context with 
     }
   } finally {
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });

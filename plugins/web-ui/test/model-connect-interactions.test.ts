@@ -1,34 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { DOM_GLOBALS, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 test("AI account modal interactions", async (t) => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><button id="opener">Manage AI accounts</button>', {
-    url: "http://localhost/settings",
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const [key, value] of Object.entries({
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    navigator: dom.window.navigator,
-    localStorage: dom.window.localStorage,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    customElements: dom.window.customElements,
-    Event: dom.window.Event,
-    CustomEvent: dom.window.CustomEvent,
-    requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  }))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  const { dom, restore } = withDom(
+    '<!doctype html><div id="app"></div><button id="opener">Manage AI accounts</button>',
+    {
+      url: "http://localhost/settings",
+      globals: [...DOM_GLOBALS, "Element", "Node", "customElements", "Event", "CustomEvent"],
+      define: (window) => ({ ...timeoutFrames, getComputedStyle: window.getComputedStyle.bind(window) }),
+    },
+  );
   const vite = await createServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
     server: { middlewareMode: true, hmr: false },
@@ -108,7 +92,7 @@ test("AI account modal interactions", async (t) => {
   t.after(async () => {
     close();
     await vite.close();
-    dom.window.close();
+    restore();
   });
 
   await t.test("Escape, focus trap, backdrop close, and focus restoration work", async () => {

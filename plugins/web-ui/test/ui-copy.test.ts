@@ -1,47 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { brandName, copyText } from "../src/ui.ts";
+import { withDom } from "./dom-fixture.ts";
 
 test("brand name defaults to QM", () => {
-  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: new JSDOM("").window.document,
-  });
+  const { restore } = withDom("", { matchMedia: false, globals: ["document"] });
   try {
     assert.equal(brandName(), "QM");
   } finally {
-    if (documentDescriptor) Object.defineProperty(globalThis, "document", documentDescriptor);
-    else delete (globalThis as { document?: Document }).document;
+    restore();
   }
 });
 
 test("brand name follows the server-injected deployment label", () => {
-  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: new JSDOM('<meta name="brand-self-label" content="qm">').window.document,
+  const { restore } = withDom('<meta name="brand-self-label" content="qm">', {
+    matchMedia: false,
+    globals: ["document"],
   });
   try {
     assert.equal(brandName(), "qm");
   } finally {
-    if (documentDescriptor) Object.defineProperty(globalThis, "document", documentDescriptor);
-    else delete (globalThis as { document?: Document }).document;
+    restore();
   }
 });
 
 test("rapid copy feedback toggles a class and never rewrites the button markup", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-  Object.defineProperty(globalThis, "navigator", {
-    configurable: true,
-    value: { clipboard: { writeText: async () => {} } },
+  const { document, restore } = withDom('<button><svg data-icon="copy"></svg><span>Copy URL</span></button>', {
+    matchMedia: false,
+    globals: [],
+    define: () => ({ navigator: { clipboard: { writeText: async () => {} } } }),
   });
   try {
-    const button = new JSDOM(
-      '<button><svg data-icon="copy"></svg><span>Copy URL</span></button>',
-    ).window.document.querySelector("button") as HTMLButtonElement;
+    const button = document.querySelector("button") as HTMLButtonElement;
     const original = button.innerHTML;
     await copyText("first", button);
     await copyText("second", button);
@@ -52,7 +43,6 @@ test("rapid copy feedback toggles a class and never rewrites the button markup",
     t.mock.timers.tick(1);
     assert.ok(!button.classList.contains("copied"));
   } finally {
-    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
-    else delete (globalThis as { navigator?: Navigator }).navigator;
+    restore();
   }
 });

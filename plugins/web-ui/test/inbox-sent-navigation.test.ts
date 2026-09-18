@@ -1,40 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM, VirtualConsole } from "jsdom";
+import { VirtualConsole } from "jsdom";
 import { createServer } from "vite";
 import type { LedgerItem } from "../src/inbox.ts";
+import { DOM_GLOBALS, withDom } from "./dom-fixture.ts";
 
 test("Sent opens from a split pane and retains drafts and queued sends after navigation", async () => {
   const domErrors: Error[] = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => domErrors.push(error));
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main></main><div id="split"></div>', {
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div><main></main><div id="split"></div>', {
     url: "https://review.example/",
     virtualConsole,
+    globals: [...DOM_GLOBALS, "Node", "DOMParser"],
+    define: (window) => ({ getComputedStyle: window.getComputedStyle.bind(window), fetch: globalThis.fetch }),
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of [
-    "window",
-    "document",
-    "location",
-    "history",
-    "localStorage",
-    "navigator",
-    "HTMLElement",
-    "Node",
-    "DOMParser",
-  ])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  Object.defineProperty(globalThis, "getComputedStyle", {
-    configurable: true,
-    value: dom.window.getComputedStyle.bind(dom.window),
-  });
-  const originalFetch = globalThis.fetch;
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   const waitFor = async (condition: () => boolean): Promise<void> => {
     for (let i = 0; i < 100 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -178,8 +158,7 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     inbox.resetInboxState();
     assert.deepEqual(domErrors, []);
   } finally {
-    globalThis.fetch = originalFetch;
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });

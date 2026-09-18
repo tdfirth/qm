@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { toggleFormMenu, closeFormMenus } from "../src/ui.ts";
+import { withDom } from "./dom-fixture.ts";
 
 for (const scenario of [
   { name: "opens upward inside a shorter dialog", dialog: true, anchorTop: 340, upward: true },
@@ -10,13 +10,10 @@ for (const scenario of [
   { name: "opens upward at the viewport bottom", dialog: false, anchorTop: 710, upward: true },
 ]) {
   test(`form menu ${scenario.name}`, () => {
-    const dom = new JSDOM(
+    const { dom, restore } = withDom(
       `<body>${scenario.dialog ? "<dialog open>" : ""}<div class="form-menu-control"><button class="menu-button"></button><div class="menu-popover" hidden></div></div>${scenario.dialog ? "</dialog>" : ""}</body>`,
+      { matchMedia: false, globals: ["window", "document"] },
     );
-    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-    const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-    Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true });
-    Object.defineProperty(globalThis, "document", { value: dom.window.document, configurable: true });
     try {
       const document = dom.window.document;
       const control = document.querySelector<HTMLElement>(".form-menu-control")!;
@@ -36,11 +33,7 @@ for (const scenario of [
       assert.equal(menu.hidden, true);
       assert.equal(menu.classList.contains("drop-up"), false);
     } finally {
-      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
-      else Reflect.deleteProperty(globalThis, "window");
-      if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
-      else Reflect.deleteProperty(globalThis, "document");
-      dom.window.close();
+      restore();
     }
   });
 }

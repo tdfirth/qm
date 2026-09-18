@@ -1,40 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ConvCtx, ComposerSurface } from "../src/conv-types.ts";
+import { DOM_GLOBALS, timeoutFrames, withDom } from "./dom-fixture.ts";
 import { runtimeConfig } from "./runtime-fixture.ts";
 
 test("runtime defaults are shared while pane choices and editor drafts remain local", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+  const { restore } = withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/",
+    globals: [...DOM_GLOBALS, "customElements", "Node", "Event", "InputEvent", "KeyboardEvent"],
+    define: (window) => ({
+      ...timeoutFrames,
+      getComputedStyle: window.getComputedStyle.bind(window),
+      EventSource: undefined,
+      fetch: globalThis.fetch,
+    }),
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    InputEvent: dom.window.InputEvent,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    EventSource: undefined,
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 
-  const originalFetch = globalThis.fetch;
   const configs = new Map(
     ["personal:owner", "channel:other"].map((scope) => [scope, runtimeConfig(scope, { fastModeModelIds: ["model"] })]),
   );
@@ -145,7 +128,6 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     resetPanel?.();
     for (const { composer } of panes) composer.dispose();
     await vite.close();
-    globalThis.fetch = originalFetch;
-    dom.window.close();
+    restore();
   }
 });

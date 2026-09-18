@@ -1,31 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
-test("superseded session refreshes observe the winning refresh's list", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+import { DOM_GLOBALS, timeoutFrames, withDom, type Dom } from "./dom-fixture.ts";
+
+function mount(): Dom {
+  return withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/web-ui/",
+    globals: [...DOM_GLOBALS, "customElements", "Node", "Event"],
+    define: (window) => ({ ...timeoutFrames, getComputedStyle: window.getComputedStyle.bind(window) }),
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+}
+
+test("superseded session refreshes observe the winning refresh's list", async () => {
+  mount();
 
   const sessionA = {
     id: "sess-a",
@@ -78,28 +65,7 @@ test("superseded session refreshes observe the winning refresh's list", async ()
 });
 
 test("a failed lone refresh still settles sessionsReady and reports the error path", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/web-ui/",
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const [key, value] of Object.entries({
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  }))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  mount();
   globalThis.fetch = async (input) => {
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error("network down");
@@ -114,34 +80,8 @@ test("a failed lone refresh still settles sessionsReady and reports the error pa
   }
 });
 
-function jsdomGlobals(): JSDOM {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/web-ui/",
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const [key, value] of Object.entries({
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  }))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  return dom;
-}
-
 test("opening a conversation joins the list refresh already in flight instead of starting its own", async () => {
-  const dom = jsdomGlobals();
+  const { restore } = mount();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
     const path = String(input);
@@ -172,12 +112,12 @@ test("opening a conversation joins the list refresh already in flight instead of
     pending[1]!(Response.json({ sessions: [] }));
   } finally {
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });
 
 test("a failed list load does not lock out the next conversation open", async () => {
-  const dom = jsdomGlobals();
+  const { restore } = mount();
   let hits = 0;
   globalThis.fetch = async (input) => {
     const path = String(input);
@@ -196,12 +136,12 @@ test("a failed list load does not lock out the next conversation open", async ()
     assert.equal(hits, 2, "nothing is in flight to defer to — the open must retry");
   } finally {
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });
 
 test("an open that joined a refresh whose answer was discarded asks again itself", async () => {
-  const dom = jsdomGlobals();
+  const { restore } = mount();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
     const path = String(input);
@@ -227,12 +167,12 @@ test("an open that joined a refresh whose answer was discarded asks again itself
     pending[1]!(Response.json({ sessions: [{ id: "b", threadRef: "web:alex:b", scopeId: "personal:alex" }] }));
   } finally {
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });
 
 test("an open that joined a refresh that simply failed does not double the load", async () => {
-  const dom = jsdomGlobals();
+  const { restore } = mount();
   let hits = 0;
   let fail = (): void => {};
   const failed = new Promise<void>((resolve) => (fail = resolve));
@@ -256,6 +196,6 @@ test("an open that joined a refresh that simply failed does not double the load"
     assert.equal(hits, 1, "a refresh that failed is not worth asking three more times while the server is down");
   } finally {
     await vite.close();
-    dom.window.close();
+    restore();
   }
 });

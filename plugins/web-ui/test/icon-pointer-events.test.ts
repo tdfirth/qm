@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { JSDOM } from "jsdom";
+import { withDom } from "./dom-fixture.ts";
 
-const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/" });
-for (const [key, value] of Object.entries({
-  window: dom.window,
-  document: dom.window.document,
-  HTMLElement: dom.window.HTMLElement,
-  Node: dom.window.Node,
-  customElements: dom.window.customElements,
-}))
-  Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+const { dom } = withDom("<!doctype html><body></body>", {
+  url: "http://localhost/",
+  matchMedia: false,
+  globals: ["window", "document", "HTMLElement", "Node", "customElements"],
+});
 
 const { html, render } = await import("lit");
 const { Archive, Link, X } = await import("lucide");

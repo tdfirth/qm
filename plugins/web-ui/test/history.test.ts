@@ -1,8 +1,8 @@
 import { buildTimeline, messageWorkTimeline } from "../src/timeline.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { JSDOM } from "jsdom";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { withDom } from "./dom-fixture.ts";
 import {
   attachPendingApprovals,
   continuableMessages,
@@ -206,10 +206,7 @@ test("currentEarlierCount hides inherited entries from the earlier-messages coun
 });
 
 test("a stale show load never lands on the next fork; reset revives the control", async () => {
-  const dom = new JSDOM("<!doctype html><main></main>");
-  Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
-  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: dom.window.HTMLElement });
-  Object.defineProperty(globalThis, "Event", { configurable: true, value: dom.window.Event });
+  withDom("<!doctype html><main></main>", { matchMedia: false, globals: ["document", "HTMLElement", "Event"] });
   const { createForkOriginController } = await import("../src/fork-origin.ts");
   const state = { inheritedMessages: [] as SessionEntry[], inheritedLoaded: false, inheritedExpanded: false };
   const pending: Array<(entries: SessionEntry[]) => void> = [];
@@ -316,10 +313,10 @@ test("fork origin remains visible when a deep-link tail contains only post-fork 
 });
 
 test("fork origin DOM navigates, reports access failure once, pages, toggles, survives refresh, and resets", async () => {
-  const dom = new JSDOM('<!doctype html><main id="chat"></main>');
-  Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
-  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: dom.window.HTMLElement });
-  Object.defineProperty(globalThis, "Event", { configurable: true, value: dom.window.Event });
+  const { dom, restore } = withDom('<!doctype html><main id="chat"></main>', {
+    matchMedia: false,
+    globals: ["document", "HTMLElement", "Event"],
+  });
   const [{ render }, { createForkOriginController, forkOriginView }] = await Promise.all([
     import("lit"),
     import("../src/fork-origin.ts"),
@@ -421,7 +418,7 @@ test("fork origin DOM navigates, reports access failure once, pages, toggles, su
   const noOrigin = forkOriginDetails({}, 0);
   render(noOrigin ? forkOriginView({ ...noOrigin, expanded: false, navigate() {}, toggle() {} }) : null, host);
   assert.equal(host.querySelector(".fork-origin-badge"), null);
-  dom.window.close();
+  restore();
 });
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<

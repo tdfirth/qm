@@ -2,46 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
+import { DOM_GLOBALS, withDom } from "./dom-fixture.ts";
 
 test("stopping blocks send and queue through render, input, keyboard, and form without blocking drafting", async (t) => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
+  const requests: string[] = [];
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
+    globals: [...DOM_GLOBALS, "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "Event", "customElements"],
+    define: (window) => ({
+      getComputedStyle: window.getComputedStyle.bind(window),
+      requestAnimationFrame: window.requestAnimationFrame.bind(window),
+      cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+      fetch: async (input: RequestInfo | URL) => {
+        requests.push(String(input));
+        return Response.json({ runId: "queued-test", sessions: [] });
+      },
+    }),
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const requests: string[] = [];
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
-    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
-    fetch: async (input: RequestInfo | URL) => {
-      requests.push(String(input));
-      return Response.json({ runId: "queued-test", sessions: [] });
-    },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   let composer: ComposerSurface | undefined;
   try {
@@ -190,11 +170,7 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
   } finally {
     composer?.dispose();
     await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    restore();
   }
 });
 

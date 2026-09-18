@@ -1,21 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
-import { JSDOM } from "jsdom";
 import type { TemplateResult } from "lit";
+import { withDom } from "./dom-fixture.ts";
 
-const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/" });
-const globals = {
-  window: dom.window,
-  document: dom.window.document,
-  navigator: { clipboard: { writeText: async () => {} } },
-  HTMLElement: dom.window.HTMLElement,
-  Node: dom.window.Node,
-  Event: dom.window.Event,
-  customElements: dom.window.customElements,
-};
-for (const [key, value] of Object.entries(globals))
-  Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+withDom("<!doctype html><body></body>", {
+  url: "http://localhost/",
+  matchMedia: false,
+  globals: ["window", "document", "HTMLElement", "Node", "Event", "customElements"],
+  define: () => ({ navigator: { clipboard: { writeText: async () => {} } } }),
+});
 
 const { html, render } = await import("lit");
 const { Check, Copy } = await import("lucide");

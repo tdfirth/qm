@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { withDom } from "./dom-fixture.ts";
 
 test("confetti celebrates only the highest supported effort and respects reduced motion", async () => {
   const vite = await createServer({
@@ -12,13 +12,12 @@ test("confetti celebrates only the highest supported effort and respects reduced
     optimizeDeps: { noDiscovery: true },
     appType: "custom",
   });
-  const dom = new JSDOM('<button><span class="effort-peak">Extra high</span></button>');
-  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  const { dom, restore } = withDom('<button><span class="effort-peak">Extra high</span></button>', {
+    matchMedia: false,
+    globals: ["window", "document"],
+  });
   let reducedMotion = false;
   Object.defineProperty(dom.window, "matchMedia", { value: () => ({ matches: reducedMotion }) });
-  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window });
-  Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
   const completions: Array<() => void> = [];
   Object.defineProperty(dom.window.HTMLElement.prototype, "animate", {
     value: () => ({ finished: new Promise<void>((resolve) => completions.push(resolve)) }),
@@ -73,10 +72,6 @@ test("confetti celebrates only the highest supported effort and respects reduced
     await finishBurst();
   } finally {
     await vite.close();
-    dom.window.close();
-    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
-    else Reflect.deleteProperty(globalThis, "window");
-    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
-    else Reflect.deleteProperty(globalThis, "document");
+    restore();
   }
 });

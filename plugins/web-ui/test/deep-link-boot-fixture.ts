@@ -1,5 +1,5 @@
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { DOM_GLOBALS, NoopResizeObserver, withDom } from "./dom-fixture.ts";
 
 export interface Harness {
   requests: string[];
@@ -37,40 +37,8 @@ export const SESSION = {
 };
 
 export async function harness(opts: HarnessOptions): Promise<Harness> {
-  const dom = new JSDOM('<!doctype html><div id="app"></div>', {
-    url: `http://localhost${opts.path}`,
-    pretendToBeVisual: true,
-  });
-  if (opts.savedCanvas)
-    dom.window.localStorage.setItem(
-      "web-ui:split-canvas:v1",
-      JSON.stringify({
-        v: 1,
-        active: true,
-        root: {
-          kind: "split",
-          a: { kind: "leaf", threadRef: "web:tester:old-a" },
-          b: { kind: "leaf", threadRef: "web:tester:old-b" },
-        },
-      }),
-    );
   let connectedItems: unknown[] = opts.connectionReturn ? [{ id: "ca_test", toolkit: "gmail" }] : [];
   let connectedStatus = 200;
-  if (opts.connectionReturn)
-    dom.window.sessionStorage.setItem(
-      "qm-connection-return:test:tester",
-      JSON.stringify({
-        state: "return-nonce",
-        user: "test:tester",
-        path: "/s/sess-deep",
-        service: { id: "gmail", name: "Gmail" },
-        accountId: "ca_test",
-        widget: opts.returnWidget ?? "welcome",
-        expiresAt: Date.now() + 60000,
-        picker: { query: "mail", expanded: true },
-        scrollTop: 0,
-      }),
-    );
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -129,59 +97,75 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     return Response.json({ contexts: [], items: [], crons: [] });
   };
 
-  const globals = {
-    fetch: (input: RequestInfo | URL): Promise<Response> => {
-      const answer = respond(input);
-      inFlight.add(answer);
-      void answer.finally(() => inFlight.delete(answer)).catch(() => {});
-      return answer;
-    },
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    sessionStorage: dom.window.sessionStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    PointerEvent: dom.window.PointerEvent,
-    MouseEvent: dom.window.MouseEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    cancelAnimationFrame: clearTimeout,
-    EventSource: undefined,
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    setTimeout: ((...args: Parameters<typeof setTimeout>) => {
-      const id = realSetTimeout(...args);
-      timers.add(id);
-      return id;
-    }) as typeof setTimeout,
-    setInterval: ((...args: Parameters<typeof setInterval>) => {
-      const id = realSetInterval(...args);
-      timers.add(id);
-      return id;
-    }) as typeof setInterval,
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      const id = realSetTimeout(() => callback(Date.now()), 0);
-      timers.add(id);
-      return id as unknown as number;
-    },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div>', {
+    url: `http://localhost${opts.path}`,
+    pretendToBeVisual: true,
+    globals: [
+      ...DOM_GLOBALS,
+      "sessionStorage",
+      "Element",
+      "Node",
+      "Event",
+      "PointerEvent",
+      "MouseEvent",
+      "customElements",
+    ],
+    define: (window) => ({
+      fetch: (input: RequestInfo | URL): Promise<Response> => {
+        const answer = respond(input);
+        inFlight.add(answer);
+        void answer.finally(() => inFlight.delete(answer)).catch(() => {});
+        return answer;
+      },
+      getComputedStyle: window.getComputedStyle.bind(window),
+      cancelAnimationFrame: clearTimeout,
+      EventSource: undefined,
+      ResizeObserver: NoopResizeObserver,
+      setTimeout: ((...args: Parameters<typeof setTimeout>) => {
+        const id = realSetTimeout(...args);
+        timers.add(id);
+        return id;
+      }) as typeof setTimeout,
+      setInterval: ((...args: Parameters<typeof setInterval>) => {
+        const id = realSetInterval(...args);
+        timers.add(id);
+        return id;
+      }) as typeof setInterval,
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        const id = realSetTimeout(() => callback(Date.now()), 0);
+        timers.add(id);
+        return id as unknown as number;
+      },
+    }),
   });
+  if (opts.savedCanvas)
+    dom.window.localStorage.setItem(
+      "web-ui:split-canvas:v1",
+      JSON.stringify({
+        v: 1,
+        active: true,
+        root: {
+          kind: "split",
+          a: { kind: "leaf", threadRef: "web:tester:old-a" },
+          b: { kind: "leaf", threadRef: "web:tester:old-b" },
+        },
+      }),
+    );
+  if (opts.connectionReturn)
+    dom.window.sessionStorage.setItem(
+      "qm-connection-return:test:tester",
+      JSON.stringify({
+        state: "return-nonce",
+        user: "test:tester",
+        path: "/s/sess-deep",
+        service: { id: "gmail", name: "Gmail" },
+        accountId: "ca_test",
+        widget: opts.returnWidget ?? "welcome",
+        expiresAt: Date.now() + 60000,
+        picker: { query: "mail", expanded: true },
+        scrollTop: 0,
+      }),
+    );
 
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   const shell = await vite.ssrLoadModule("/src/shell.ts");
@@ -218,12 +202,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         await new Promise((resolve) => realSetTimeout(resolve, 0));
       }
       await vite.close();
-      dom.window.close();
       for (const id of timers) clearTimeout(id);
-      for (const [key, descriptor] of descriptors) {
-        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-        else delete (globalThis as Record<string, unknown>)[key];
-      }
+      restore();
     },
   };
 }

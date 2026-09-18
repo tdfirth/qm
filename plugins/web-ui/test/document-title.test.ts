@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
+import { DOM_GLOBALS, NoopResizeObserver, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
@@ -43,38 +43,15 @@ test("active session selection follows conversation switches and title updates",
 });
 
 test("document title follows session switches, split-pane focus, and sign-out", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/web-ui/" });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    PointerEvent: dom.window.PointerEvent,
-    MouseEvent: dom.window.MouseEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    fetch: globalThis.fetch,
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div>', {
+    url: "http://localhost/web-ui/",
+    globals: [...DOM_GLOBALS, "Element", "Node", "Event", "PointerEvent", "MouseEvent", "customElements"],
+    define: (window) => ({
+      getComputedStyle: window.getComputedStyle.bind(window),
+      ...timeoutFrames,
+      ResizeObserver: NoopResizeObserver,
+      fetch: globalThis.fetch,
+    }),
   });
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
@@ -160,10 +137,6 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     await new Promise((resolve) => setTimeout(resolve, 250));
   } finally {
     await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    restore();
   }
 });

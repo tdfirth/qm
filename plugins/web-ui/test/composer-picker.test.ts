@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 import type { RuntimeConfig } from "../src/core-bridge.ts";
 import type { ModelMetadata } from "../src/pi-models.ts";
 import type { LoadoutEntry } from "../src/composer-loadout.ts";
+import { DOM_GLOBALS, NoopResizeObserver, withDom } from "./dom-fixture.ts";
 
 function model(id: string, label: string, provider = "anthropic"): ModelMetadata {
   return {
@@ -26,12 +26,62 @@ function model(id: string, label: string, provider = "anthropic"): ModelMetadata
 }
 
 test("the model picker remembers compatible harnesses without duplicating or changing models", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
+  const updates: Record<string, unknown>[] = [];
+  let failNextGet = true;
+  let failNextPut = false;
+  let deferNextPut = false;
+  let pendingPut: Promise<void> | undefined;
+  const extraComposers: ComposerSurface[] = [];
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/web-ui/",
     pretendToBeVisual: true,
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    globals: [
+      ...DOM_GLOBALS,
+      "HTMLInputElement",
+      "HTMLTextAreaElement",
+      "Element",
+      "Node",
+      "Event",
+      "MouseEvent",
+      "KeyboardEvent",
+      "customElements",
+    ],
+    define: (window) => ({
+      getComputedStyle: window.getComputedStyle.bind(window),
+      requestAnimationFrame: window.requestAnimationFrame.bind(window),
+      cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+      ResizeObserver: NoopResizeObserver,
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
+          if (failNextGet) {
+            failNextGet = false;
+            return Response.json({ error: "initial load failed" }, { status: 500 });
+          }
+          return Response.json(config);
+        }
+        if (String(input) !== "/api/runtime-config" || init?.method !== "PUT")
+          throw new Error(`Unexpected request: ${String(input)}`);
+        if (failNextPut) {
+          failNextPut = false;
+          return Response.json({ error: "default save failed" }, { status: 500 });
+        }
+        const change = JSON.parse(String(init.body));
+        updates.push(change);
+        if (deferNextPut) {
+          deferNextPut = false;
+          await pendingPut;
+        }
+        const effective = {
+          harnessId: change.harnessId,
+          modelId: change.modelId,
+          effortLevel: change.effortLevel,
+          fastMode: change.fastMode,
+        };
+        return new Response(JSON.stringify({ ...config, effective, scopeOverride: { ...effective, orgRevision: 1 } }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    }),
   });
   Object.defineProperty(dom.window.HTMLElement.prototype, "offsetParent", {
     configurable: true,
@@ -46,72 +96,6 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     this.removeAttribute("open");
     this.dispatchEvent(new dom.window.Event("close"));
   };
-  const updates: Record<string, unknown>[] = [];
-  let failNextGet = true;
-  let failNextPut = false;
-  let deferNextPut = false;
-  let pendingPut: Promise<void> | undefined;
-  const extraComposers: ComposerSurface[] = [];
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    MouseEvent: dom.window.MouseEvent,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
-    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
-        if (failNextGet) {
-          failNextGet = false;
-          return Response.json({ error: "initial load failed" }, { status: 500 });
-        }
-        return Response.json(config);
-      }
-      if (String(input) !== "/api/runtime-config" || init?.method !== "PUT")
-        throw new Error(`Unexpected request: ${String(input)}`);
-      if (failNextPut) {
-        failNextPut = false;
-        return Response.json({ error: "default save failed" }, { status: 500 });
-      }
-      const change = JSON.parse(String(init.body));
-      updates.push(change);
-      if (deferNextPut) {
-        deferNextPut = false;
-        await pendingPut;
-      }
-      const effective = {
-        harnessId: change.harnessId,
-        modelId: change.modelId,
-        effortLevel: change.effortLevel,
-        fastMode: change.fastMode,
-      };
-      return new Response(JSON.stringify({ ...config, effective, scopeOverride: { ...effective, orgRevision: 1 } }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
   const config: RuntimeConfig = {
     scopeId: "personal:tester",
     approvedHarnesses: ["pi", "claude", "opencode", "codex"],
@@ -473,10 +457,6 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     siblingComposer?.dispose();
     for (const extra of extraComposers) extra.dispose();
     await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    restore();
   }
 });

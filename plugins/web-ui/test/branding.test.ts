@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { JSDOM } from "jsdom";
+import { withDom } from "./dom-fixture.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/v1/surface-config")) {
@@ -101,12 +101,14 @@ test("brandName() reads the injected self-label and falls back to the product na
   const ui = await import("../src/ui.ts");
   const brandName = (ui as { brandName?: () => string }).brandName;
   assert.equal(typeof brandName, "function", "ui.ts exports brandName()");
-  const dom = new JSDOM('<head><meta name="brand-self-label" content="Acme"></head>');
-  (globalThis as { document?: Document }).document = dom.window.document;
+  const { restore } = withDom('<head><meta name="brand-self-label" content="Acme"></head>', {
+    matchMedia: false,
+    globals: ["document"],
+  });
   try {
     assert.equal(brandName!(), "Acme");
   } finally {
-    delete (globalThis as { document?: Document }).document;
+    restore();
   }
   assert.equal(brandName!(), "QM");
 });

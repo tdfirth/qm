@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { DOM_GLOBALS, NoopResizeObserver, timeoutFrames, withDom } from "./dom-fixture.ts";
 
 async function withTabs(run: (requests: string[]) => Promise<void>): Promise<void> {
-  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/" });
   const requests: string[] = [];
   const list = ["a", "b", "c"].map((id) => ({
     id,
@@ -14,53 +13,32 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
     threadRef: `web:tester:${id}`,
     createdAt: 1,
   }));
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    MouseEvent: dom.window.MouseEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      requests.push(`${init?.method ?? "GET"} ${path.split("?")[0]}`);
-      if (path.includes("/share")) return Response.json({ share: null });
-      const session = list.find((s) => path.split("?")[0] === `/api/sessions/${s.id}`);
-      return Response.json({
-        session,
-        sessions: list,
-        entries: [],
-        approvals: [],
-        items: [],
-        scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
-        modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "" },
-      });
-    },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div>', {
+    url: "http://localhost/",
+    globals: [...DOM_GLOBALS, "Element", "Node", "Event", "MouseEvent", "customElements"],
+    define: (window) => ({
+      getComputedStyle: window.getComputedStyle.bind(window),
+      ...timeoutFrames,
+      ResizeObserver: NoopResizeObserver,
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        requests.push(`${init?.method ?? "GET"} ${path.split("?")[0]}`);
+        if (path.includes("/share")) return Response.json({ share: null });
+        const session = list.find((s) => path.split("?")[0] === `/api/sessions/${s.id}`);
+        return Response.json({
+          session,
+          sessions: list,
+          entries: [],
+          approvals: [],
+          items: [],
+          scopeId: "personal:tester",
+          approvedHarnesses: [],
+          modelsByHarness: {},
+          modelCatalog: {},
+          effective: { harnessId: "pi", modelId: "" },
+        });
+      },
+    }),
   });
   dom.window.HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
@@ -128,11 +106,7 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
     split?.exitSplitIfActive();
     await new Promise((resolve) => setTimeout(resolve, 500));
     await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    restore();
   }
 }
 

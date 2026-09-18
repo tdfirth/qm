@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { DOM_GLOBALS, timeoutFrames, withDom } from "./dom-fixture.ts";
 import { metadata } from "./model-metadata.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { SessionEntry } from "../src/core-bridge.ts";
@@ -58,31 +58,17 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 test("post replies remain visible in new and continuing conversations", async (t) => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', { url: "http://localhost/" });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  const { dom, restore } = withDom('<!doctype html><div id="app"></div><main id="main"></main>', {
+    url: "http://localhost/",
+    globals: [...DOM_GLOBALS, "customElements", "Node", "Event", "InputEvent", "KeyboardEvent"],
+    define: (window) => ({
+      ...timeoutFrames,
+      getComputedStyle: window.getComputedStyle.bind(window),
+      EventSource: FakeEventSource,
+      fetch: globalThis.fetch,
+    }),
   });
   Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    InputEvent: dom.window.InputEvent,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    EventSource: FakeEventSource,
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   const row = {
     id: "s1",
     threadRef: "web:owner:repro",
@@ -114,7 +100,6 @@ test("post replies remain visible in new and continuing conversations", async (t
   let transcriptFails = false;
   let intercept: ((path: string) => Promise<Response> | undefined) | undefined;
   const requests: string[] = [];
-  const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     requests.push(path);
@@ -493,7 +478,6 @@ test("post replies remain visible in new and continuing conversations", async (t
     conv?.dispose();
     for (const es of FakeEventSource.instances) es.close();
     await vite.close();
-    globalThis.fetch = originalFetch;
-    dom.window.close();
+    restore();
   }
 });
