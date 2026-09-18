@@ -12,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
@@ -40,16 +41,11 @@ test("file memory compare-and-set permits only one writer for a revision", async
 });
 
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, actor, thread);
 }
 
 function channel(text: string): TurnRequest {
-  return {
-    surface: "test",
-    actor,
-    conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] },
-    text,
-  };
+  return turnRequest(text, actor, { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] });
 }
 
 test("remembers a fact stated in one DM thread when asked in another (continuity)", async () => {

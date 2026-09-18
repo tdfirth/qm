@@ -7,15 +7,11 @@ import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { testOrchestrator } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
-const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> => ({
-  surface: "test",
-  actor,
-  conversation: { kind: "dm", threadRef: thread, audience: [actor] } as Conversation,
-  origin: { kind: "direct" },
-  text,
-});
+const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> =>
+  orchestratorTurn(text, actor, { kind: "dm", threadRef: thread, audience: [actor] } as Conversation);
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 

@@ -21,6 +21,7 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { channelTurn, dmTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
@@ -49,24 +50,14 @@ function spyProvisioning(sandbox: Sandbox) {
 const internalActor = { externalId: "U1" };
 
 function dm(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
-  return {
-    surface: "test",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-    text,
-    ...extra,
-  };
+  return dmTurn(text, internalActor, "dm:U1:t1", extra);
 }
 
 function channel(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
-  return {
-    surface: "slack",
-    actor: internalActor,
-    conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [internalActor] },
-    text,
+  return channelTurn(text, internalActor, "C1", "t1", {
     gatewayContext: { reactionGuidance: "react with a Slack emoji short-name like :pray:" },
     ...extra,
-  };
+  });
 }
 
 async function grantCred(acl: AclStore, org: ScopeId, slug: string, grantee: ScopeId = org): Promise<void> {
@@ -995,17 +986,19 @@ test("identity grounding: the roster lists this conversation's participants by t
     { principalId: "U3", displayName: "taylor", type: "internal" },
     { principalId: "U9", displayName: "Outsider Olive", type: "internal" },
   ]);
-  const prompt = await app.turn({
-    surface: "slack",
-    actor: internalActor,
-    conversation: {
-      kind: "channel",
-      threadRef: "ch:roster:t1",
-      channelRef: "C-roster",
-      audience: [internalActor, { externalId: "U2" }, { externalId: "U3" }],
-    },
-    text: "!sysprompt",
-  });
+  const prompt = await app.turn(
+    turnRequest(
+      "!sysprompt",
+      internalActor,
+      {
+        kind: "channel",
+        threadRef: "ch:roster:t1",
+        channelRef: "C-roster",
+        audience: [internalActor, { externalId: "U2" }, { externalId: "U3" }],
+      },
+      { surface: "slack" },
+    ),
+  );
   const sp = prompt.reply ?? "";
   assert.match(sp, /## Who's in this conversation/);
   assert.match(sp, /Alice Example \(U1\)/);
@@ -1103,14 +1096,8 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     return realProvision(layers, opts);
   };
 
-  const adminTurn = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
-    surface: "test",
-    actor: { externalId: "admin-alice" },
-    conversation: { kind: "dm", threadRef: "dm:admin-alice:t1" },
-    text: "!run echo hi",
-    liveActor: true,
-    ...extra,
-  });
+  const adminTurn = (extra: Partial<TurnRequest> = {}): TurnRequest =>
+    dmTurn("!run echo hi", { externalId: "admin-alice" }, "dm:admin-alice:t1", { liveActor: true, ...extra });
 
   assert.equal((await app.turn(adminTurn())).status, "ok");
   const adminClaims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
@@ -1158,63 +1145,51 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   const admin = { externalId: "admin-alice" };
 
   assert.equal(
-    (
-      await app.turn({
-        surface: "cron",
-        actor: admin,
-        conversation: { kind: "dm", threadRef: "dm:admin-alice:auto" },
-        text: "!run echo hi",
-      })
-    ).status,
+    (await app.turn(dmTurn("!run echo hi", admin, "dm:admin-alice:auto", { surface: "cron" }))).status,
     "ok",
   );
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "an autonomous turn must not attest liveness");
   assert.equal(claims!.memory?.orgWrite, undefined);
-  const autoPrompt = await app.turn({
-    surface: "cron",
-    actor: admin,
-    conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
-    text: "!sysprompt",
-  });
+  const autoPrompt = await app.turn(dmTurn("!sysprompt", admin, "dm:admin-alice:auto2", { surface: "cron" }));
   assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin/);
 
   captured = undefined;
   assert.equal(
     (
-      await app.turn({
-        surface: "test",
-        actor: admin,
-        conversation: {
-          kind: "group",
-          threadRef: "grp:G1:det",
-          channelRef: "G1",
-          audience: [admin],
-          publishMembers: [admin, { externalId: "bob" }],
-        },
-        text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
-      })
+      await app.turn(
+        turnRequest(
+          "!run echo hi",
+          admin,
+          {
+            kind: "group",
+            threadRef: "grp:G1:det",
+            channelRef: "G1",
+            audience: [admin],
+            publishMembers: [admin, { externalId: "bob" }],
+          },
+          { liveActor: true, unprompted: true },
+        ),
+      )
     ).status,
     "ok",
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveAuthor, true, "an author-live detection turn attests authorship");
-  const threadPrompt = await app.turn({
-    surface: "test",
-    actor: admin,
-    conversation: {
-      kind: "group",
-      threadRef: "grp:G1:det",
-      channelRef: "G1",
-      audience: [admin],
-      publishMembers: [admin, { externalId: "bob" }],
-    },
-    text: "!sysprompt",
-    liveActor: true,
-    unprompted: true,
-  });
+  const threadPrompt = await app.turn(
+    turnRequest(
+      "!sysprompt",
+      admin,
+      {
+        kind: "group",
+        threadRef: "grp:G1:det",
+        channelRef: "G1",
+        audience: [admin],
+        publishMembers: [admin, { externalId: "bob" }],
+      },
+      { liveActor: true, unprompted: true },
+    ),
+  );
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
 
   assert.equal(
@@ -1226,16 +1201,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
 
   captured = undefined;
   assert.equal(
-    (
-      await app.turn({
-        surface: "test",
-        actor: admin,
-        conversation: { kind: "dm", threadRef: "dm:admin-alice:det" },
-        text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
-      })
-    ).status,
+    (await app.turn(dmTurn("!run echo hi", admin, "dm:admin-alice:det", { liveActor: true, unprompted: true }))).status,
     "ok",
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
@@ -1245,14 +1211,14 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   captured = undefined;
   assert.equal(
     (
-      await app.turn({
-        surface: "test",
-        actor: admin,
-        conversation: { kind: "group", threadRef: "grp:G2:det", channelRef: "G2", audience: [admin] },
-        text: "!run echo hi",
-        liveActor: true,
-        unprompted: true,
-      })
+      await app.turn(
+        turnRequest(
+          "!run echo hi",
+          admin,
+          { kind: "group", threadRef: "grp:G2:det", channelRef: "G2", audience: [admin] },
+          { liveActor: true, unprompted: true },
+        ),
+      )
     ).status,
     "ok",
   );
@@ -1261,15 +1227,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
 
   captured = undefined;
   assert.equal(
-    (
-      await app.turn({
-        surface: "test",
-        actor: admin,
-        conversation: { kind: "dm", threadRef: "dm:admin-alice:det2" },
-        text: "!run echo hi",
-        unprompted: true,
-      })
-    ).status,
+    (await app.turn(dmTurn("!run echo hi", admin, "dm:admin-alice:det2", { unprompted: true }))).status,
     "ok",
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
@@ -1279,14 +1237,13 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   captured = undefined;
   assert.equal(
     (
-      await app.turn({
-        surface: "cron",
-        actor: admin,
-        conversation: { kind: "dm", threadRef: "dm:admin-alice:trigger-live" },
-        text: "!run echo hi",
-        triggered: true,
-        liveActor: true,
-      })
+      await app.turn(
+        dmTurn("!run echo hi", admin, "dm:admin-alice:trigger-live", {
+          surface: "cron",
+          triggered: true,
+          liveActor: true,
+        }),
+      )
     ).status,
     "ok",
   );
@@ -1301,19 +1258,20 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   captured = undefined;
   assert.equal(
     (
-      await app.turn({
-        surface: "test",
-        actor: admin,
-        conversation: {
-          kind: "channel",
-          threadRef: "ch:C9:t1",
-          channelRef: "C9",
-          audience: [admin],
-          publishMembers: [admin, { externalId: "visitor", isExternalGuest: true }],
-        },
-        text: "!run echo hi",
-        liveActor: true,
-      })
+      await app.turn(
+        turnRequest(
+          "!run echo hi",
+          admin,
+          {
+            kind: "channel",
+            threadRef: "ch:C9:t1",
+            channelRef: "C9",
+            audience: [admin],
+            publishMembers: [admin, { externalId: "visitor", isExternalGuest: true }],
+          },
+          { liveActor: true },
+        ),
+      )
     ).status,
     "ok",
   );
@@ -1326,19 +1284,20 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     captured = undefined;
     assert.equal(
       (
-        await app.turn({
-          surface: "test",
-          actor: admin,
-          conversation: {
-            kind: "channel",
-            threadRef: `ch:C10:${publishMembers ? "empty" : "absent"}`,
-            channelRef: "C10",
-            audience: [admin],
-            ...(publishMembers ? { publishMembers } : {}),
-          },
-          text: "!run echo hi",
-          liveActor: true,
-        })
+        await app.turn(
+          turnRequest(
+            "!run echo hi",
+            admin,
+            {
+              kind: "channel",
+              threadRef: `ch:C10:${publishMembers ? "empty" : "absent"}`,
+              channelRef: "C10",
+              audience: [admin],
+              ...(publishMembers ? { publishMembers } : {}),
+            },
+            { liveActor: true },
+          ),
+        )
       ).status,
       "ok",
     );
@@ -1656,13 +1615,12 @@ test("an unprompted thread message the colleague wouldn't answer is silent (no r
 
 test("a poll fire that ends with no message resolves to silent, not a delivered empty reply", async () => {
   const { app } = freshApp();
-  const cron = {
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm" as const, threadRef: "dm:U1:cron" },
-    text: "!silent",
-    triggered: true,
-  };
+  const cron = turnRequest(
+    "!silent",
+    internalActor,
+    { kind: "dm" as const, threadRef: "dm:U1:cron" },
+    { surface: "cron", triggered: true },
+  );
   const res = await app.turn(cron);
   assert.equal(res.status, "silent", "the agent had nothing to add, so the turn is silent");
   assert.ok(res.sessionId, "the turn still ran — it's silent, not skipped");
@@ -1670,25 +1628,17 @@ test("a poll fire that ends with no message resolves to silent, not a delivered 
 
 test("a poll fire whose final line is a bare silence token resolves to silent", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron2" },
-    text: "!run printf %s '[no-update]'",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!run printf %s '[no-update]'", internalActor, "dm:U1:cron2", { surface: "cron", triggered: true }),
+  );
   assert.equal(res.status, "silent");
 });
 
 test("a poll fire with a real reply still delivers (status ok), and a non-triggered empty reply is not silenced", async () => {
   const { app } = freshApp();
-  const real = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron3" },
-    text: "!run printf %s 'PTO is due today'",
-    triggered: true,
-  });
+  const real = await app.turn(
+    dmTurn("!run printf %s 'PTO is due today'", internalActor, "dm:U1:cron3", { surface: "cron", triggered: true }),
+  );
   assert.equal(real.status, "ok");
   assert.match(real.reply ?? "", /PTO is due today/);
   const interactive = await app.turn(dm("!silent"));
@@ -1697,13 +1647,9 @@ test("a poll fire with a real reply still delivers (status ok), and a non-trigge
 
 test("a poll fire whose only output is an attached file delivers it — files, not silence", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron6" },
-    text: "!writeattach digest.png PNG",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!writeattach digest.png PNG", internalActor, "dm:U1:cron6", { surface: "cron", triggered: true }),
+  );
   assert.equal(res.status, "ok", "files are a real update — the empty reply must not silence the fire");
   assert.equal(res.reply, "");
   assert.deepEqual(
@@ -1714,13 +1660,9 @@ test("a poll fire whose only output is an attached file delivers it — files, n
 
 test("a poll fire that attaches a file and then finishes silently still delivers the file", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron7" },
-    text: "!attachsilent digest.png PNG",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!attachsilent digest.png PNG", internalActor, "dm:U1:cron7", { surface: "cron", triggered: true }),
+  );
   assert.equal(res.status, "ok", "the file was confirmed to the model, so silence must not discard it");
   assert.deepEqual(
     (res.attachments ?? []).map((a) => a.name),
@@ -1730,13 +1672,9 @@ test("a poll fire that attaches a file and then finishes silently still delivers
 
 test("a poll fire that calls finish_silently ends the turn with an empty reply and resolves to silent", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron4" },
-    text: "!finish-silent",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!finish-silent", internalActor, "dm:U1:cron4", { surface: "cron", triggered: true }),
+  );
   assert.equal(res.status, "silent", "the tool terminates the turn — the empty closing reply is the silence");
   assert.equal(res.reply, undefined, "nothing is delivered — the model never gets a step to narrate its silence");
 });
@@ -1750,13 +1688,9 @@ test("finish_silently is a no-op off a poll fire — the agent's reply still del
 
 test("finish_silently on a poll fire wins over a coexisting collected approval", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron5" },
-    text: "!finish-silent-approval",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!finish-silent-approval", internalActor, "dm:U1:cron5", { surface: "cron", triggered: true }),
+  );
   assert.equal(res.status, "silent", "explicit silence must win over the pending-approval branch");
   assert.equal(res.reply, undefined, "no narration leaks");
   assert.equal(res.pendingApprovals, undefined, "no approval prompt is surfaced on a silenced poll fire");
@@ -1764,13 +1698,9 @@ test("finish_silently on a poll fire wins over a coexisting collected approval",
 
 test("a poll fire that PAUSED on a gated command is never silenced — the approval persists", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: internalActor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cron7" },
-    text: "!finish-silent-paused",
-    triggered: true,
-  });
+  const res = await app.turn(
+    dmTurn("!finish-silent-paused", internalActor, "dm:U1:cron7", { surface: "cron", triggered: true }),
+  );
   assert.equal(
     res.status,
     "pending_approval",
@@ -3587,12 +3517,14 @@ test("thinking always reaches the run activity feed, with the model-bound signat
 
 test("channel session for an all-internal audience runs and is channel-scoped", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "test",
-    actor: internalActor,
-    conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [internalActor] },
-    text: "hi channel",
-  });
+  const res = await app.turn(
+    turnRequest("hi channel", internalActor, {
+      kind: "channel",
+      threadRef: "C1:t1",
+      channelRef: "C1",
+      audience: [internalActor],
+    }),
+  );
   assert.equal(res.status, "ok");
   const found = await app.getSession(res.sessionId!);
   assert.equal(found!.session.scopeId, "channel:C1");

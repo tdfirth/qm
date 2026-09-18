@@ -10,6 +10,7 @@ import { createControlService, type ControlService } from "../src/api/control-se
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { turnRequest } from "./support/turns.ts";
 
 const SECRET = "control-service-test";
 
@@ -738,19 +739,17 @@ test("a cron's mode (runAs) is editable in place, but only by the owner", async 
 
 test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
   const { built } = setup();
-  const base = {
-    surface: "cron",
-    actor: { externalId: "U1" },
-    conversation: {
+  const base = turnRequest(
+    "compute digest",
+    { externalId: "U1" },
+    {
       kind: "channel" as const,
       channelRef: "C9",
       threadRef: "t-union",
       audience: [{ externalId: "U1" }],
     },
-    text: "compute digest",
-    triggered: true,
-    async: true,
-  };
+    { surface: "cron", triggered: true, async: true },
+  );
   const withUnion = await built.app.turn({ ...base, ownerKeychainUnion: true });
   assert.equal(withUnion.status, "queued");
   const runU = await built.runs.get((withUnion as { runId?: string }).runId!);

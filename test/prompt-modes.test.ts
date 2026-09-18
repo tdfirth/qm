@@ -10,6 +10,7 @@ import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const ORG = "default-org";
 
@@ -262,13 +263,10 @@ test("org branding renames the assistant and the organization across both modes"
 
 test("web conversation surface label carries the configured name", async () => {
   const branding: OrgBranding = { selfLabel: "straylight" };
-  const webPrompt = await sysprompt(buildOrchestrator({ branding }), {
-    surface: "web",
-    actor,
-    conversation: dmConversation,
-    text: "",
-    origin: { kind: "direct" },
-  });
+  const webPrompt = await sysprompt(
+    buildOrchestrator({ branding }),
+    orchestratorTurn("", actor, dmConversation, { surface: "web" }),
+  );
   assert.match(webPrompt, /over the straylight web app\./);
 });
 
@@ -316,13 +314,15 @@ test("a Slack handle differing from the identity name appears as a mention adjun
 
 test("a display name containing template tokens cannot break prompt rendering", async () => {
   const hostileActor: Principal = { id: "U9", type: "internal", displayName: "Al{{ice}}" };
-  const prompt = await sysprompt(buildOrchestrator(), {
-    surface: "slack",
-    actor: hostileActor,
-    conversation: { kind: "dm", threadRef: "dm:U9:pm9", audience: [hostileActor] },
-    text: "",
-    origin: { kind: "direct" },
-  });
+  const prompt = await sysprompt(
+    buildOrchestrator(),
+    orchestratorTurn(
+      "",
+      hostileActor,
+      { kind: "dm", threadRef: "dm:U9:pm9", audience: [hostileActor] },
+      { surface: "slack" },
+    ),
+  );
   const systemPrompt = prompt.split("\n\n<environment>")[0]!;
   assert.match(systemPrompt, /1:1 with Alice/);
   assert.doesNotMatch(systemPrompt, /\{\{/);

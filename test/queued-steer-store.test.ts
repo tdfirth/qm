@@ -6,6 +6,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryRunSignalStore, type RunSignal } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { dmTurn } from "./support/turns.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
@@ -34,13 +35,7 @@ for (const backend of ["memory", "postgres"] as const) {
           kind: "steer",
           text: "",
           dedupeKey: randomUUID(),
-          request: {
-            surface: "web",
-            actor: { externalId: actor.id },
-            conversation: { kind: "dm", threadRef: sessionId },
-            text: "",
-            attachments,
-          },
+          request: dmTurn("", { externalId: actor.id }, sessionId, { surface: "web", attachments }),
         };
         const moved = await Promise.all([
           runs.steerQueued(queued.id, target.id, signal, signals),

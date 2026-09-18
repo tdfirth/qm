@@ -12,6 +12,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import { toolContext } from "./support/fakes.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
@@ -158,12 +159,7 @@ function freshApp(extra: Partial<Config> = {}) {
   return buildApp(config);
 }
 
-const dm = (text: string): TurnRequest => ({
-  surface: "test",
-  actor: { externalId: "U1" },
-  conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-  text,
-});
+const dm = (text: string): TurnRequest => dmTurn(text, { externalId: "U1" }, "dm:U1:t1");
 
 test("a scratch turn runs on a separate volumeless box with NO capability tokens in its env", async () => {
   const { app } = freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });

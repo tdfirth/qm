@@ -6,6 +6,7 @@ import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 function setup() {
   const store = createMemoryMap<TaskAckState>();
@@ -144,15 +145,12 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({
       sessionId: "task-session",
-      request: {
+      request: orchestratorTurn(
+        "Do the task",
         actor,
-        conversation: { kind: "dm", threadRef: "dm:D1", audience: [actor] },
-        origin: { kind: "human" },
-        surface: "slack",
-        surfaceTools: outbound !== "run",
-        deliveryTarget: "D1",
-        text: "Do the task",
-      } as OrchestratorInput,
+        { kind: "dm", threadRef: "dm:D1", audience: [actor] },
+        { surface: "slack", origin: { kind: "human" }, surfaceTools: outbound !== "run", deliveryTarget: "D1" },
+      ) as OrchestratorInput,
     });
     await manager.move(client, run.id, "D1", "10.1");
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });

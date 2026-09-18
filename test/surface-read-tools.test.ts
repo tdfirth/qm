@@ -11,6 +11,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { turnRequest } from "./support/turns.ts";
 
 function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));
@@ -21,15 +22,12 @@ const actor = { externalId: "U1", displayName: "Ada" };
 const mate = { externalId: "U2", displayName: "Bob", type: "internal" as const };
 
 function mention(text: string, channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
-    deliveryTarget: `${channel}:${root}`,
+  return turnRequest(
     text,
-    liveActor: true,
-    async: true,
-  };
+    actor,
+    { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
+    { surface: "slack", deliveryTarget: `${channel}:${root}`, liveActor: true, async: true },
+  );
 }
 
 function startFulfiller(app: any, messages: unknown[]) {

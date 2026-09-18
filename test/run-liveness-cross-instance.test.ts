@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 test("a run executing on another instance still reports alive", async () => {
   const built = buildApp(
@@ -20,13 +21,12 @@ test("a run executing on another instance still reports alive", async () => {
   try {
     const { run } = await built.runs.enqueue({
       sessionId: "t1",
-      request: {
-        surface: "test",
-        actor: { id: "u1", type: "internal" },
-        conversation: { kind: "dm", threadRef: "t1", audience: [{ id: "u1", type: "internal" }] },
-        text: "hello",
-        origin: { kind: "human" },
-      },
+      request: orchestratorTurn(
+        "hello",
+        { id: "u1", type: "internal" },
+        { kind: "dm", threadRef: "t1", audience: [{ id: "u1", type: "internal" }] },
+        { origin: { kind: "human" } },
+      ),
     });
     const claimed = await built.runs.claim("some-other-instance", 60_000);
     assert.equal(claimed?.id, run.id, "the foreign worker holds the run");
@@ -52,13 +52,12 @@ test("a run whose lease has lapsed is not alive", async () => {
   try {
     const { run } = await built.runs.enqueue({
       sessionId: "t2",
-      request: {
-        surface: "test",
-        actor: { id: "u1", type: "internal" },
-        conversation: { kind: "dm", threadRef: "t2", audience: [{ id: "u1", type: "internal" }] },
-        text: "hello",
-        origin: { kind: "human" },
-      },
+      request: orchestratorTurn(
+        "hello",
+        { id: "u1", type: "internal" },
+        { kind: "dm", threadRef: "t2", audience: [{ id: "u1", type: "internal" }] },
+        { origin: { kind: "human" } },
+      ),
     });
     await built.runs.claim("some-other-instance", 1);
     await new Promise((r) => setTimeout(r, 20));

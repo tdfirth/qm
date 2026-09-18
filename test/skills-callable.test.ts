@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp() {
   const config = testConfig({
@@ -39,33 +40,25 @@ test("a published personal skill is advertised + materialized in the owner's DM"
   const { app, skills } = freshApp();
   await publishPersonalSkill(skills);
 
-  const sys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-    text: "!sysprompt",
-  } as TurnRequest);
+  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:t1") as TurnRequest);
   assert.match(sys.reply ?? "", /## Skills/);
   assert.match(sys.reply ?? "", /make-digest/);
 
-  const read = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:t2" },
-    text: "!read skills/make-digest/SKILL.md",
-  } as TurnRequest);
+  const read = await app.turn(dmTurn("!read skills/make-digest/SKILL.md", actor, "dm:U1:t2") as TurnRequest);
   assert.match(read.reply ?? "", /Step 1: gather/);
 });
 
 test("a channel session does NOT see a personal skill (scope boundary)", async () => {
   const { app, skills } = freshApp();
   await publishPersonalSkill(skills);
-  const sys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] },
-    text: "!sysprompt",
-  } as TurnRequest);
+  const sys = await app.turn(
+    turnRequest("!sysprompt", actor, {
+      kind: "channel",
+      threadRef: "C1:t1",
+      channelRef: "C1",
+      audience: [actor],
+    }) as TurnRequest,
+  );
   assert.doesNotMatch(sys.reply ?? "", /make-digest/);
 });
 
@@ -88,12 +81,7 @@ test("ordinary sandbox work reconciles ownership without copying skill contents"
     if (path.startsWith("skills/")) touched.push(path);
     return remove(handle, path);
   };
-  await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:no-sync" },
-    text: "!read missing.txt",
-  } as TurnRequest);
+  await app.turn(dmTurn("!read missing.txt", actor, "dm:U1:no-sync") as TurnRequest);
   assert.deepEqual(touched, ["skills/.index", "skills/.index"]);
 });
 

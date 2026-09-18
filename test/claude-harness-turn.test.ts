@@ -5,6 +5,7 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { turnRequest } from "./support/turns.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -504,13 +505,12 @@ for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
 test("steering forwards prepared images and file paths while retaining the original caption in history", async () => {
   const signals = createMemoryRunSignalStore();
   const runId = "run-steer-files";
-  const request = {
-    surface: "web",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "files" },
-    text: "check this",
-    attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1" }],
-  };
+  const request = turnRequest(
+    "check this",
+    { externalId: "U1" },
+    { kind: "dm" as const, threadRef: "files" },
+    { surface: "web", attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1" }] },
+  );
   let injected: unknown;
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();

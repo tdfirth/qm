@@ -4,18 +4,16 @@ import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()): TurnRequest {
-  return {
+  return dmTurn(text, { externalId: "U1" }, `dm:D1${threadTs ? `:${threadTs}` : ""}`, {
     surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: `dm:D1${threadTs ? `:${threadTs}` : ""}` },
     deliveryTarget: `D1${threadTs ? `:${threadTs}` : ""}`,
-    text,
     async: true,
     liveActor: true,
     redeliveryKey: key,
-  };
+  });
 }
 
 async function fixture() {

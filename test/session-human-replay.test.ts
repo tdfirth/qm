@@ -5,6 +5,7 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
@@ -62,17 +63,17 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   await built.signals.send(run.id, {
     kind: "steer",
     text: "Please continue the investigation",
-    request: {
-      surface: "web",
-      actor: { externalId: "sender" },
-      conversation: {
+    request: turnRequest(
+      "Please continue the investigation",
+      { externalId: "sender" },
+      {
         kind: "group",
         channelRef,
         threadRef: child.threadRef,
         audience: [],
       },
-      text: "Please continue the investigation",
-    },
+      { surface: "web" },
+    ),
   });
   const [receipt] = await built.signals.pending(run.id);
   assert.ok(receipt);
@@ -117,12 +118,7 @@ test("late child signals remain pending behind approval and requestless steers r
   await built.signals.send(run.id, {
     kind: "steer",
     text: "human followup",
-    request: {
-      surface: "web",
-      actor: { externalId: actor.id },
-      conversation: { kind: "dm", threadRef: child.threadRef },
-      text: "human followup",
-    },
+    request: dmTurn("human followup", { externalId: actor.id }, child.threadRef, { surface: "web" }),
   });
   const turn = built.app.turn;
   t.mock.method(built.app, "turn", async () => ({ status: "pending_approval", sessionId: child.id }));

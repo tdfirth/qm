@@ -10,6 +10,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { waitFor } from "./support/settle.ts";
+import { channelTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
@@ -18,40 +19,29 @@ function freshApp(securityScreener?: SecurityScreener) {
 
 const actor = { externalId: "U1" };
 function mention(text: string, channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+  return channelTurn(text, actor, channel, root, {
     deliveryTarget: `slack:${channel}:${root}`,
-    text,
     liveActor: true,
     async: true,
-  };
+  });
 }
 
 function overheard(text: string, channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor: { externalId: "U2" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-    deliveryTarget: `slack:${channel}:${root}`,
+  return turnRequest(
     text,
-    unprompted: true,
-    liveActor: true,
-    async: true,
-  };
+    { externalId: "U2" },
+    { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+    { surface: "slack", deliveryTarget: `slack:${channel}:${root}`, unprompted: true, liveActor: true, async: true },
+  );
 }
 
 function dm(text: string, channel: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "dm", threadRef: `dm:${channel}`, audience: [actor] },
-    deliveryTarget: `slack:${channel}`,
+  return turnRequest(
     text,
-    liveActor: true,
-    async: true,
-  };
+    actor,
+    { kind: "dm", threadRef: `dm:${channel}`, audience: [actor] },
+    { surface: "slack", deliveryTarget: `slack:${channel}`, liveActor: true, async: true },
+  );
 }
 
 // A web turn. Web is deliberately excluded from core-side mid-turn steering: on web a mid-turn
@@ -59,14 +49,12 @@ function dm(text: string, channel: string): TurnRequest {
 // and steering is a separate, explicit act on the queued row. So a turn that reaches core mid-run
 // must stay a real second run; folding it into the live one would be the bug.
 function web(text: string, threadRef: string): TurnRequest {
-  return {
-    surface: "web",
-    actor,
-    conversation: { kind: "dm", threadRef, audience: [actor] },
+  return turnRequest(
     text,
-    liveActor: true,
-    async: true,
-  };
+    actor,
+    { kind: "dm", threadRef, audience: [actor] },
+    { surface: "web", liveActor: true, async: true },
+  );
 }
 
 test("spine ON: a mid-turn DM message STEERS the live run instead of forking a second reply", async () => {
@@ -339,15 +327,12 @@ test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => 
 });
 
 function automationRun(channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor: { externalId: "U-owner" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
-    deliveryTarget: `slack:${channel}:${root}`,
-    text: "check the deploy and report back",
-    triggered: true,
-    async: true,
-  };
+  return turnRequest(
+    "check the deploy and report back",
+    { externalId: "U-owner" },
+    { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
+    { surface: "slack", deliveryTarget: `slack:${channel}:${root}`, triggered: true, async: true },
+  );
 }
 
 test("a person's reply never steers into a live AUTOMATION run — it enqueues behind it with its own claims", async () => {
@@ -401,15 +386,12 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
   const first = await built.app.turn(automationRun(channel, root));
   const liveRunId = first.runId!;
 
-  const synthetic: TurnRequest = {
-    surface: "slack",
-    actor: { externalId: "U2" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-    deliveryTarget: `slack:${channel}:${root}`,
-    text: "bot posted: build finished",
-    unprompted: true,
-    async: true,
-  };
+  const synthetic: TurnRequest = turnRequest(
+    "bot posted: build finished",
+    { externalId: "U2" },
+    { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+    { surface: "slack", deliveryTarget: `slack:${channel}:${root}`, unprompted: true, async: true },
+  );
   const follow = await built.app.turn(synthetic);
   assert.equal(follow.runId, liveRunId, "the synthetic detection folded into the live run as context");
   const signals = await built.signals.takePending(liveRunId);
@@ -418,19 +400,21 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
 });
 
 function spawnedWorker(channel: string, askTs: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor: { externalId: "jordan@acme.test", displayName: "Jordan" },
-    conversation: { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
-    deliveryTarget: channel,
-    text: "can you check the deploy?",
-    liveActor: true,
-    triggerTs: askTs,
-    surfaceTools: true,
-    async: true,
-    spawned: true,
-    idempotencyKey: `ambient:acme:slack:${channel}:${askTs}`,
-  };
+  return turnRequest(
+    "can you check the deploy?",
+    { externalId: "jordan@acme.test", displayName: "Jordan" },
+    { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
+    {
+      surface: "slack",
+      deliveryTarget: channel,
+      liveActor: true,
+      triggerTs: askTs,
+      surfaceTools: true,
+      async: true,
+      spawned: true,
+      idempotencyKey: `ambient:acme:slack:${channel}:${askTs}`,
+    },
+  );
 }
 
 test("a keyed live turn does NOT steer (it routes to enqueue where it dedupes); an unkeyed one DOES", async () => {
@@ -640,14 +624,14 @@ test("an automation wake queued behind a live turn stays out of the composer que
   const threadRef = "web:U1:wake";
   const first = await built.app.turn(web("summarize the incident", threadRef));
   await built.runs.claimById(first.runId!, "w1", 30_000);
-  const wake = await built.app.turn({
-    surface: "monitor",
-    actor,
-    conversation: { kind: "dm", threadRef, audience: [actor] },
-    text: '<wake reason="monitor" surface="monitor" process-id="p1" at="2026-09-02T00:00:00.000Z">…</wake>',
-    triggered: true,
-    async: true,
-  });
+  const wake = await built.app.turn(
+    turnRequest(
+      '<wake reason="monitor" surface="monitor" process-id="p1" at="2026-09-02T00:00:00.000Z">…</wake>',
+      actor,
+      { kind: "dm", threadRef, audience: [actor] },
+      { surface: "monitor", triggered: true, async: true },
+    ),
+  );
   const typed = await built.app.turn(web("and who was paged", threadRef));
 
   assert.notEqual(wake.runId, first.runId, "the wake is its own run, waiting behind the live turn");

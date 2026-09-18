@@ -12,6 +12,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { waitFor } from "./support/settle.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -281,14 +282,13 @@ test("a web delivery whose target session is missing is delivered as a nudge, lo
 });
 
 const actor: Principal = { id: "alice@example.com", type: "internal" };
-const webTurn = (threadRef: string): OrchestratorInput => ({
-  surface: "web",
-  deliveryTarget: threadRef,
-  actor,
-  conversation: { kind: "dm", threadRef, audience: [actor] },
-  origin: { kind: "direct" },
-  text: "do the thing",
-});
+const webTurn = (threadRef: string): OrchestratorInput =>
+  orchestratorTurn(
+    "do the thing",
+    actor,
+    { kind: "dm", threadRef, audience: [actor] },
+    { surface: "web", deliveryTarget: threadRef },
+  );
 
 async function terminalRun(
   deliveries: DeliveryStore,

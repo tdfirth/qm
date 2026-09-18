@@ -9,6 +9,7 @@ import { createTurnStream, goalViewFromEntry } from "../src/runs/turn-stream.ts"
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
+import { dmTurn } from "./support/turns.ts";
 
 test("accumulates deltas per run and isolates runs", () => {
   const s = createTurnStream();
@@ -115,13 +116,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "t1", { async: true }));
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     const run = await built.app.getRun(ack.runId!);
@@ -143,13 +138,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "!run echo hi",
-      async: true,
-    });
+    const ack = await built.app.turn(dmTurn("!run echo hi", { externalId: "U1" }, "t1", { async: true }));
     assert.equal(ack.status, "queued");
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
@@ -174,13 +163,7 @@ test("getRun projects durable tasks for its surface poller", async () => {
       reaperIntervalMs: 60_000,
     }),
   );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "task-view" },
-    text: "hello",
-    async: true,
-  });
+  const ack = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "task-view", { async: true }));
   await built.tasks.create({
     id: "task-1",
     sessionId: "task-view",
@@ -205,13 +188,7 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "t1", { async: true }));
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
 
@@ -287,13 +264,9 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-fb" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
+    const ack = await built.app.turn(
+      dmTurn("!preamble On it — checking.", { externalId: "U1" }, "t-fb", { async: true }),
+    );
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     const run = await built.app.getRun(ack.runId!);
@@ -316,13 +289,9 @@ test("a harvested first block is stripped from the final reply (never shown twic
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-strip" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
+    const ack = await built.app.turn(
+      dmTurn("!preamble On it — checking.", { externalId: "U1" }, "t-strip", { surface: "slack", async: true }),
+    );
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
@@ -343,13 +312,9 @@ test("a long first block is harvested too (no length gate) and stripped from the
   built.runtime.start();
   try {
     const long = "x".repeat(400);
-    const ack = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-held" },
-      text: `!preamble ${long}`,
-      async: true,
-    });
+    const ack = await built.app.turn(
+      dmTurn(`!preamble ${long}`, { externalId: "U1" }, "t-held", { surface: "slack", async: true }),
+    );
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.equal(
@@ -373,13 +338,9 @@ test("a non-slack surface never strips the first block from the reply", async ()
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-web" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
+    const ack = await built.app.turn(
+      dmTurn("!preamble On it — checking.", { externalId: "U1" }, "t-web", { async: true }),
+    );
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
     assert.ok(

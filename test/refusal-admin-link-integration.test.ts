@@ -9,6 +9,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { refusalNote } from "../src/slack/lib.ts";
 import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const ADMIN = "https://portal.example.com";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -28,13 +29,9 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
-  const request = {
-    surface: "test",
-    actor,
-    conversation: { kind: "channel", threadRef, audience: [actor] } as Conversation,
+  const request = orchestratorTurn("!boom", actor, { kind: "channel", threadRef, audience: [actor] } as Conversation, {
     origin: { kind: "direct" as const },
-    text: "!boom",
-  };
+  });
   const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
 
   const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);

@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 test("renders gateway + location + identifier lines", () => {
   const out = renderGatewayContext("slack", {
@@ -65,13 +66,12 @@ function freshApp() {
 
 test("gateway context flows into the system prompt the harness sees", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-    text: "!sysprompt",
-    gatewayContext: { location: "a direct message with the user", details: { channel: "D9" } },
-  });
+  const res = await app.turn(
+    dmTurn("!sysprompt", { externalId: "U1" }, "dm:U1:t1", {
+      surface: "slack",
+      gatewayContext: { location: "a direct message with the user", details: { channel: "D9" } },
+    }),
+  );
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /## Where you are/);
   assert.match(res.reply ?? "", /over slack, in a direct message with the user/);
@@ -80,12 +80,7 @@ test("gateway context flows into the system prompt the harness sees", async () =
 
 test("no gateway context: prompt names the surface but adds no identifier lines", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "slack",
-    actor: { externalId: "U2" },
-    conversation: { kind: "dm", threadRef: "dm:U2:t1" },
-    text: "!sysprompt",
-  });
+  const res = await app.turn(dmTurn("!sysprompt", { externalId: "U2" }, "dm:U2:t1", { surface: "slack" }));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /over slack\./);
   assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
@@ -93,12 +88,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
 
 test("web prompt tells cron creators to use a real notification destination", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "web",
-    actor: { externalId: "U3" },
-    conversation: { kind: "dm", threadRef: "web:U3:t1" },
-    text: "!sysprompt",
-  });
+  const res = await app.turn(dmTurn("!sysprompt", { externalId: "U3" }, "web:U3:t1", { surface: "web" }));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /web UI cannot receive future external notifications/);
   assert.match(res.reply ?? "", /recipient.*Slack DM/s);
@@ -107,19 +97,18 @@ test("web prompt tells cron creators to use a real notification destination", as
 
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
   const { app } = freshApp();
-  const res = await app.turn({
-    surface: "cron",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "cron:c1:slot" },
-    text: "!sysprompt",
-    triggered: true,
-    triggerDestination: {
-      type: "principal",
-      target: "U1",
-      audienceScopeId: scopeId("personal", "U1"),
-      onBehalfOf: "U1",
-    },
-  });
+  const res = await app.turn(
+    dmTurn("!sysprompt", { externalId: "U1" }, "cron:c1:slot", {
+      surface: "cron",
+      triggered: true,
+      triggerDestination: {
+        type: "principal",
+        target: "U1",
+        audienceScopeId: scopeId("personal", "U1"),
+        onBehalfOf: "U1",
+      },
+    }),
+  );
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /platform-managed destination/);
   assert.match(res.reply ?? "", /Core will deliver your final reply/);

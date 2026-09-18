@@ -21,6 +21,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
@@ -89,21 +90,8 @@ async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>
   return session.id;
 }
 
-const turn = (text: string): OrchestratorInput => ({
-  surface: "test",
-  actor,
-  conversation: conv,
-  origin: { kind: "direct" },
-  text,
-});
-const spineTurn = (text: string): OrchestratorInput => ({
-  surface: "test",
-  actor,
-  conversation: conv,
-  origin: { kind: "direct" },
-  text,
-  surfaceTools: true,
-});
+const turn = (text: string): OrchestratorInput => orchestratorTurn(text, actor, conv);
+const spineTurn = (text: string): OrchestratorInput => orchestratorTurn(text, actor, conv, { surfaceTools: true });
 
 async function summaryEntries(sessions: SessionStore, sessionId: string): Promise<SessionEntry[]> {
   return (await sessions.getEntries(sessionId)).filter((e) => contextSummaryPayload(e));

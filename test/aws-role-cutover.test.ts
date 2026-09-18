@@ -9,6 +9,7 @@ import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
+import { turnRequest } from "./support/turns.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -168,12 +169,14 @@ test("credential_exec honors deployment approval rules before vending credential
   assert.equal(approved.status, "ok", approved.reason);
   assert.equal(assumes, 1, "approval unblocks exactly one vended invocation");
 
-  const unrelated = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "dm:credexec-approval-3" },
-    text: '!credential acmecli ["me"]',
-  });
+  const unrelated = await built.app.turn(
+    turnRequest(
+      '!credential acmecli ["me"]',
+      actor,
+      { ...conversation, threadRef: "dm:credexec-approval-3" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(unrelated.status, "ok", "subcommands without approval rules run without a grant");
   assert.equal(assumes, 1, "the broker's per-actor credential cache is reused within its TTL");
 });
@@ -214,12 +217,14 @@ test("a scope allow rule cannot override the ephemeral_only direct-execution den
   const direct = await built.app.turn({ surface: "slack", actor, conversation, text: "!run env" });
   assert.match(`${direct.reason ?? ""} ${direct.reply ?? ""}`, /credential_exec/);
 
-  const sanctioned = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "dm:credexec-scope-allow-2" },
-    text: "!credential acmecli []",
-  });
+  const sanctioned = await built.app.turn(
+    turnRequest(
+      "!credential acmecli []",
+      actor,
+      { ...conversation, threadRef: "dm:credexec-scope-allow-2" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(sanctioned.status, "ok", sanctioned.reason);
 });
 
@@ -293,28 +298,28 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     "the owner-auth body is destroyed after success",
   );
 
-  const brokeredAcmecli = await built.app.turn({
-    surface: "cron",
-    actor: bob,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:brokered-acmecli" },
-    text: "!owner mkdir -p /tmp/bin; printf '%s\\n' '#!/bin/sh' 'printf \"%s\" \"$AWS_ACCESS_KEY_ID\"' > /tmp/bin/acmecli; chmod +x /tmp/bin/acmecli; export PATH=\"/tmp/bin:$PATH\"; printf '%s|' \"$AWS_ACCESS_KEY_ID\"; acmecli",
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
+  const brokeredAcmecli = await built.app.turn(
+    turnRequest(
+      "!owner mkdir -p /tmp/bin; printf '%s\\n' '#!/bin/sh' 'printf \"%s\" \"$AWS_ACCESS_KEY_ID\"' > /tmp/bin/acmecli; chmod +x /tmp/bin/acmecli; export PATH=\"/tmp/bin:$PATH\"; printf '%s|' \"$AWS_ACCESS_KEY_ID\"; acmecli",
+      bob,
+      { ...conversation, threadRef: "ch:C-owner-auth:brokered-acmecli" },
+      { surface: "cron", triggered: true, ownerKeychainUnion: true },
+    ),
+  );
   assert.equal(
     brokeredAcmecli.reply,
     "AKIA_BOB_GENERAL|AKIA_BOB_GENERAL",
     "prefer-ephemeral direct execution retains the owner's legacy fallback without broker vending",
   );
 
-  const unpoisoned = await built.app.turn({
-    surface: "cron",
-    actor: bob,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:unpoisoned" },
-    text: "!owner cat ~/.config/acmecorp/auth.json",
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
+  const unpoisoned = await built.app.turn(
+    turnRequest(
+      "!owner cat ~/.config/acmecorp/auth.json",
+      bob,
+      { ...conversation, threadRef: "ch:C-owner-auth:unpoisoned" },
+      { surface: "cron", triggered: true, ownerKeychainUnion: true },
+    ),
+  );
   assert.equal(unpoisoned.reply, "file_BOB", "owner-box mutations never capture back into Bob's durable keychain");
   const ownerAudit = await built.auditLog.events();
   assert.ok(
@@ -325,14 +330,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     false,
   );
 
-  const scoped = await built.app.turn({
-    surface: "cron",
-    actor: bob,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:scoped" },
-    text: '!run printf \'%s|%s|%s|%s\' "${NPM_TOKEN-unset}" "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)" "$(test -e ~/.acmecli/session.json && echo found || echo absent)"',
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
+  const scoped = await built.app.turn(
+    turnRequest(
+      '!run printf \'%s|%s|%s|%s\' "${NPM_TOKEN-unset}" "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)" "$(test -e ~/.acmecli/session.json && echo found || echo absent)"',
+      bob,
+      { ...conversation, threadRef: "ch:C-owner-auth:scoped" },
+      { surface: "cron", triggered: true, ownerKeychainUnion: true },
+    ),
+  );
   assert.equal(scoped.status, "ok", scoped.reason);
   assert.equal(
     scoped.reply,
@@ -340,29 +345,35 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     "prefer-isolated keeps resident ACMECLI as a live fallback without placing Bob's private credentials on the room",
   );
 
-  const poisoned = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:poison" },
-    text: "!run printf poisoned > ~/.acmecli/session.json",
-  });
+  const poisoned = await built.app.turn(
+    turnRequest(
+      "!run printf poisoned > ~/.acmecli/session.json",
+      alice,
+      { ...conversation, threadRef: "ch:C-owner-auth:poison" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(poisoned.status, "ok", poisoned.reason);
 
-  const aliceTurn = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:alice" },
-    text: '!run printf \'%s|%s|%s\' "${NPM_TOKEN-unset}" "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)"',
-  });
+  const aliceTurn = await built.app.turn(
+    turnRequest(
+      '!run printf \'%s|%s|%s\' "${NPM_TOKEN-unset}" "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)"',
+      alice,
+      { ...conversation, threadRef: "ch:C-owner-auth:alice" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(aliceTurn.status, "ok", aliceTurn.reason);
   assert.equal(aliceTurn.reply, "unset|unset|absent");
 
-  const aliceAcmecli = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:alice-acmecli" },
-    text: '!owner mkdir -p /tmp/bin; printf \'%s\\n\' \'#!/bin/sh\' \'printf "%s" "$AWS_ACCESS_KEY_ID"\' > /tmp/bin/acmecli; chmod +x /tmp/bin/acmecli; export PATH="/tmp/bin:$PATH"; acmecli; printf \'|%s|%s\' "${NPM_TOKEN-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)"',
-  });
+  const aliceAcmecli = await built.app.turn(
+    turnRequest(
+      '!owner mkdir -p /tmp/bin; printf \'%s\\n\' \'#!/bin/sh\' \'printf "%s" "$AWS_ACCESS_KEY_ID"\' > /tmp/bin/acmecli; chmod +x /tmp/bin/acmecli; export PATH="/tmp/bin:$PATH"; acmecli; printf \'|%s|%s\' "${NPM_TOKEN-unset}" "$(test -e ~/.config/acmecorp/auth.json && echo found || echo absent)"',
+      alice,
+      { ...conversation, threadRef: "ch:C-owner-auth:alice-acmecli" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(aliceAcmecli.status, "ok", aliceAcmecli.reason);
   assert.equal(
     aliceAcmecli.reply,
@@ -375,12 +386,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   );
 
   await built.deviceFlowCutover.set(room, "acmecli", "legacy", "rollback@example.com");
-  const rollback = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:rollback" },
-    text: "!run cat ~/.acmecli/session.json",
-  });
+  const rollback = await built.app.turn(
+    turnRequest(
+      "!run cat ~/.acmecli/session.json",
+      alice,
+      { ...conversation, threadRef: "ch:C-owner-auth:rollback" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(
     rollback.reply,
     "legacy_room_acmecli",
@@ -394,12 +407,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   );
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
-  const requarantined = await built.app.turn({
-    surface: "slack",
-    actor: alice,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:requarantine" },
-    text: "!run test -e ~/.acmecli/session.json && echo found || echo absent",
-  });
+  const requarantined = await built.app.turn(
+    turnRequest(
+      "!run test -e ~/.acmecli/session.json && echo found || echo absent",
+      alice,
+      { ...conversation, threadRef: "ch:C-owner-auth:requarantine" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(
     requarantined.reply,
     "absent",
@@ -421,14 +436,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     throw new Error("owner file materialization failed");
   };
   await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor: bob,
-      conversation: { ...conversation, threadRef: "ch:C-owner-auth:init-failure" },
-      text: "!owner true",
-      triggered: true,
-      ownerKeychainUnion: true,
-    }),
+    built.app.turn(
+      turnRequest(
+        "!owner true",
+        bob,
+        { ...conversation, threadRef: "ch:C-owner-auth:init-failure" },
+        { surface: "cron", triggered: true, ownerKeychainUnion: true },
+      ),
+    ),
     /owner file materialization failed/,
   );
   built.keychain!.materializeOwnFiles = realMaterializeOwnFiles;
@@ -445,14 +460,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
       throw new Error("transient owner destroy failure");
     return realTeardown(handle, opts);
   };
-  const retriedDestroy = await built.app.turn({
-    surface: "cron",
-    actor: bob,
-    conversation: { ...conversation, threadRef: "ch:C-owner-auth:destroy-retry" },
-    text: "!owner true",
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
+  const retriedDestroy = await built.app.turn(
+    turnRequest(
+      "!owner true",
+      bob,
+      { ...conversation, threadRef: "ch:C-owner-auth:destroy-retry" },
+      { surface: "cron", triggered: true, ownerKeychainUnion: true },
+    ),
+  );
   built.sandbox.teardown = realTeardown;
   assert.equal(retriedDestroy.status, "ok", retriedDestroy.reason);
   assert.equal(ownerDestroyAttempts, 3, "credential-bearing owner bodies retry destruction before losing the handle");
@@ -470,14 +485,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     return realTeardown(handle, opts);
   };
   await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor: bob,
-      conversation: { ...conversation, threadRef: "ch:C-owner-auth:destroy-failure-containment" },
-      text: "!owner printf changed > ~/.config/acmecorp/auth.json",
-      triggered: true,
-      ownerKeychainUnion: true,
-    }),
+    built.app.turn(
+      turnRequest(
+        "!owner printf changed > ~/.config/acmecorp/auth.json",
+        bob,
+        { ...conversation, threadRef: "ch:C-owner-auth:destroy-failure-containment" },
+        { surface: "cron", triggered: true, ownerKeychainUnion: true },
+      ),
+    ),
     /persistent control-plane deletion failure/,
   );
   built.sandbox.teardown = realTeardown;
@@ -500,14 +515,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     return realRun(handle, command, opts);
   };
   await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor: bob,
-      conversation: { ...conversation, threadRef: "ch:C-owner-auth:throw" },
-      text: "!owner explode-owner",
-      triggered: true,
-      ownerKeychainUnion: true,
-    }),
+    built.app.turn(
+      turnRequest(
+        "!owner explode-owner",
+        bob,
+        { ...conversation, threadRef: "ch:C-owner-auth:throw" },
+        { surface: "cron", triggered: true, ownerKeychainUnion: true },
+      ),
+    ),
     /owner command exploded/,
   );
   built.sandbox.run = realRun;
@@ -559,51 +574,59 @@ test("prefer-isolated keeps legacy ACMECLI when STS vending fails; isolated-only
   };
 
   await built.deviceFlowCutover.set(room, "acmecli", "prefer_ephemeral", "security@example.com");
-  const fallback = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:prefer" },
-    text: "!run cat ~/.acmecli/session.json",
-  });
+  const fallback = await built.app.turn(
+    turnRequest(
+      "!run cat ~/.acmecli/session.json",
+      actor,
+      { ...conversation, threadRef: "ch:C-acmecli-fallback:prefer" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(fallback.reply, "legacy_ok");
   await assert.rejects(
-    built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:prefer-broker" },
-      text: "!credential acmecli []",
-    }),
+    built.app.turn(
+      turnRequest(
+        "!credential acmecli []",
+        actor,
+        { ...conversation, threadRef: "ch:C-acmecli-fallback:prefer-broker" },
+        { surface: "slack" },
+      ),
+    ),
     /could not vend credentials/,
   );
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
-  const closed = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:only" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
-  });
+  const closed = await built.app.turn(
+    turnRequest(
+      '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
+      actor,
+      { ...conversation, threadRef: "ch:C-acmecli-fallback:only" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(closed.reply, "unset|absent");
-  const ownerClosed = await built.app.turn({
-    surface: "cron",
-    actor,
-    conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:owner-only" },
-    text: "!owner test -e ~/.acmecli && echo found || echo absent",
-    triggered: true,
-    ownerKeychainUnion: true,
-  });
+  const ownerClosed = await built.app.turn(
+    turnRequest(
+      "!owner test -e ~/.acmecli && echo found || echo absent",
+      actor,
+      { ...conversation, threadRef: "ch:C-acmecli-fallback:owner-only" },
+      { surface: "cron", triggered: true, ownerKeychainUnion: true },
+    ),
+  );
   assert.equal(
     ownerClosed.reply,
     "absent",
     "isolated-only never restores an owner's ambient ACMECLI after broker failure",
   );
   await assert.rejects(
-    built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:only-broker" },
-      text: "!credential acmecli []",
-    }),
+    built.app.turn(
+      turnRequest(
+        "!credential acmecli []",
+        actor,
+        { ...conversation, threadRef: "ch:C-acmecli-fallback:only-broker" },
+        { surface: "slack" },
+      ),
+    ),
     /could not vend credentials/,
   );
   const usage = await built.credentialUsage.list({ slug: "acmecli" });
@@ -651,20 +674,24 @@ test("a nonlegacy policy never places brokered STS on a shared room when isolati
   };
 
   await built.deviceFlowCutover.set(room, "acmecli", "prefer_ephemeral", "security@example.com");
-  const prefer = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "ch:C-acmecli-flag-off:prefer" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(cat ~/.acmecli/session.json)"',
-  });
+  const prefer = await built.app.turn(
+    turnRequest(
+      '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(cat ~/.acmecli/session.json)"',
+      actor,
+      { ...conversation, threadRef: "ch:C-acmecli-flag-off:prefer" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(prefer.reply, "unset|legacy_ok");
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
-  const only = await built.app.turn({
-    surface: "slack",
-    actor,
-    conversation: { ...conversation, threadRef: "ch:C-acmecli-flag-off:only" },
-    text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
-  });
+  const only = await built.app.turn(
+    turnRequest(
+      '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
+      actor,
+      { ...conversation, threadRef: "ch:C-acmecli-flag-off:only" },
+      { surface: "slack" },
+    ),
+  );
   assert.equal(only.reply, "unset|absent");
 });

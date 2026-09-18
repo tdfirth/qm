@@ -4,6 +4,7 @@ import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-sig
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { turnRequest } from "./support/turns.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
@@ -344,12 +345,12 @@ test("pg store: pending retains steers until acknowledged and leaves aborts for 
 
 test("memory store: a signal round-trips ts and request intact", async () => {
   const store = createMemoryRunSignalStore();
-  const request = {
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
-    text: "why did you do it wrong?",
-  };
+  const request = turnRequest(
+    "why did you do it wrong?",
+    { externalId: "U1" },
+    { kind: "channel" as const, threadRef: "ch:C1:1.1" },
+    { surface: "slack" },
+  );
   await store.send("r1", { kind: "steer", text: "why did you do it wrong?", ts: "1.2", request });
   const [taken] = await store.takePending("r1");
   assert.equal(taken!.ts, "1.2");
@@ -359,12 +360,12 @@ test("memory store: a signal round-trips ts and request intact", async () => {
 test("pg store: a signal round-trips ts and request intact", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const request = {
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
-    text: "why did you do it wrong?",
-  };
+  const request = turnRequest(
+    "why did you do it wrong?",
+    { externalId: "U1" },
+    { kind: "channel" as const, threadRef: "ch:C1:1.1" },
+    { surface: "slack" },
+  );
   try {
     await store.send(runId, { kind: "steer", text: "why did you do it wrong?", ts: "1784151699.674169", request });
     const [taken] = await store.takePending(runId);
@@ -466,13 +467,12 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 test("startSignalPoll delivers the request and files even when a steer has no caption", async () => {
   const signals = createMemoryRunSignalStore();
-  const request = {
-    surface: "web",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "files" },
-    text: "",
-    attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "b1" }],
-  };
+  const request = turnRequest(
+    "",
+    { externalId: "U1" },
+    { kind: "dm" as const, threadRef: "files" },
+    { surface: "web", attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "b1" }] },
+  );
   let received: unknown;
   const stop = startSignalPoll(signals, "files", {
     onAbort: async () => {},

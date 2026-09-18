@@ -10,6 +10,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 async function closedPort(): Promise<number> {
   const server = createServer();
@@ -45,12 +46,7 @@ test("wiring: an unreachable fail-open MCP memory provider still serves turns vi
   );
   try {
     const actor = { externalId: "U1" };
-    const dm = (text: string, thread: string): TurnRequest => ({
-      surface: "test",
-      actor,
-      conversation: { kind: "dm", threadRef: thread },
-      text,
-    });
+    const dm = (text: string, thread: string): TurnRequest => dmTurn(text, actor, thread);
     assert.equal((await app.turn(dm("remember my X handle is be17832773", "dm:U1:tA"))).status, "ok");
     let reply = "";
     for (let i = 0; i < 100; i++) {

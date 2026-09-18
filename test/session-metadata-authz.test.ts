@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import { projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
@@ -16,7 +17,7 @@ function freshApp() {
 }
 
 function dm(text: string, thread: string, externalId: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, { externalId }, thread);
 }
 
 test("getSessionForViewer withholds metadata from a non-participant (no session-metadata IDOR)", async () => {
@@ -45,12 +46,14 @@ test("the single-session read applies the managed-project check the session list
   const groupRef = projectGroupRef(project.id);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
-  const outcome = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "member" },
-    conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:project" },
-    text: "!run git push --force origin main",
-  });
+  const outcome = await built.app.turn(
+    turnRequest(
+      "!run git push --force origin main",
+      { externalId: "member" },
+      { kind: "group", channelRef: groupRef, threadRef: "web:member:project" },
+      { surface: "web" },
+    ),
+  );
   assert.equal(outcome.status, "pending_approval", "the member's own turn parks on an approval only they can read");
   const sessionId = outcome.sessionId!;
   assert.ok(sessionId);

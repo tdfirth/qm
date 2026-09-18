@@ -10,6 +10,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { channelTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-pollsilence-"));
@@ -17,22 +18,24 @@ function freshApp() {
 }
 
 function monitorFire(text: string, channel: string, root: string, fireKey: string): TurnRequest {
-  return {
-    surface: "monitor",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel },
+  return turnRequest(
     text,
-    triggered: true,
-    surfaceTools: true,
-    addressed: true,
-    triggerDestination: {
-      type: "slack",
-      target: `slack:${channel}:${root}`,
-      audienceScopeId: scopeId("channel", channel),
+    { externalId: "U1" },
+    { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel },
+    {
+      surface: "monitor",
+      triggered: true,
+      surfaceTools: true,
+      addressed: true,
+      triggerDestination: {
+        type: "slack",
+        target: `slack:${channel}:${root}`,
+        audienceScopeId: scopeId("channel", channel),
+      },
+      idempotencyKey: fireKey,
+      async: false,
     },
-    idempotencyKey: fireKey,
-    async: false,
-  };
+  );
 }
 
 async function slackDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }): Promise<any[]> {
@@ -99,20 +102,13 @@ test("interactive mention: the first-block ack still posts immediately (unchange
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C-live:900.1",
-        channelRef: "C-live",
-        audience: [{ externalId: "U1" }],
-      },
-      deliveryTarget: "slack:C-live:900.1",
-      text: "!preamble On it — checking.",
-      liveActor: true,
-      async: true,
-    });
+    await built.app.turn(
+      channelTurn("!preamble On it — checking.", { externalId: "U1" }, "C-live", "900.1", {
+        deliveryTarget: "slack:C-live:900.1",
+        liveActor: true,
+        async: true,
+      }),
+    );
     await waitFor(
       async () => (await slackDeliveries(built.deliveries)).find((d) => d.text === "On it — checking."),
       Boolean,

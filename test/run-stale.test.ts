@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { STALE_LEASE_GRACE_MS } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const built = buildApp(
@@ -16,13 +17,7 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
       backgroundWorkEnabled: false,
     }),
   );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t1" },
-    text: "x",
-    async: true,
-  });
+  const ack = await built.app.turn(dmTurn("x", { externalId: "U1" }, "t1", { async: true }));
   const runId = ack.runId!;
 
   assert.equal((await built.app.getRun(runId))?.stale, undefined, "a fresh pending run was never claimed — not stale");

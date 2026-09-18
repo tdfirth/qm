@@ -16,6 +16,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
@@ -449,20 +450,8 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
       reaperIntervalMs: 60_000,
     }),
   );
-  const a = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t1" },
-    text: "first",
-    async: true,
-  });
-  const b = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t2" },
-    text: "second",
-    async: true,
-  });
+  const a = await built.app.turn(dmTurn("first", { externalId: "U1" }, "t1", { async: true }));
+  const b = await built.app.turn(dmTurn("second", { externalId: "U1" }, "t2", { async: true }));
   assert.equal(a.status, "queued");
   assert.equal(b.status, "queued");
 
@@ -487,13 +476,7 @@ test("a worker pool drains a queued run end-to-end", async () => {
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "t1", { async: true }));
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
 
@@ -517,13 +500,7 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "t1", { async: true }));
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
     await sleep(50);
@@ -636,13 +613,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
     return complete(...args);
   };
   const enqueue = (threadRef: string) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async: true,
-    });
+    built.app.turn(dmTurn("hello", { externalId: "U1" }, threadRef, { async: true }));
   try {
     const a = await enqueue("pause-first");
     built.runtime.start();
@@ -696,13 +667,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     return complete(...args);
   };
   const turn = (threadRef: string, async = false) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async,
-    });
+    built.app.turn(dmTurn("hello", { externalId: "U1" }, threadRef, { async }));
   const running = turn("inline-before-pause");
   try {
     await completing.promise;
@@ -748,13 +713,7 @@ test("final shutdown bounds tracked worker drain without claiming ownership is d
     await release.promise;
     return complete(...args);
   };
-  const queued = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "bounded-worker" },
-    text: "hello",
-    async: true,
-  });
+  const queued = await built.app.turn(dmTurn("hello", { externalId: "U1" }, "bounded-worker", { async: true }));
   built.runtime.start();
   try {
     await completing.promise;

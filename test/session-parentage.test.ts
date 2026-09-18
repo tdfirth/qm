@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { ScopeId } from "../src/types.ts";
+import { turnRequest } from "./support/turns.ts";
 
 test("session parentage requires current membership and rejects cycles and scope changes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
@@ -147,12 +148,12 @@ test("late human child messages retain their sender and revalidate access", asyn
     await built.signals.send(run.id, {
       kind: "steer",
       text,
-      request: {
-        surface: "web",
-        actor: { externalId: "U2" },
-        conversation: { ...conversation, audience: [{ externalId: "U1" }, { externalId: "U2" }] },
+      request: turnRequest(
         text,
-      },
+        { externalId: "U2" },
+        { ...conversation, audience: [{ externalId: "U1" }, { externalId: "U2" }] },
+        { surface: "web" },
+      ),
     });
     await built.app.replayOrphanedRunSignals(run.id);
   };

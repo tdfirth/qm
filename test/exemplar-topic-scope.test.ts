@@ -10,6 +10,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { channelTurn } from "./support/turns.ts";
 
 const QUESTION = "can you summarize the time constraints discussed here for the customer workshop next month";
 
@@ -44,15 +45,11 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
 
     const root = "20.1";
     const alice = { externalId: "U_ALICE", displayName: "alice" };
-    const req: TurnRequest = {
-      surface: "slack",
-      actor: alice,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [alice] },
+    const req: TurnRequest = channelTurn(QUESTION, alice, channel, root, {
       deliveryTarget: `slack:${channel}:${root}`,
-      text: QUESTION,
       liveActor: true,
       async: true,
-    };
+    });
     await built.app.turn(req);
 
     const entries: any[] = await waitFor(
@@ -97,15 +94,13 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
       }
     })();
     const root2 = "21.1";
-    await built.app.turn({
-      surface: "slack",
-      actor: alice,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root2}`, channelRef: channel, audience: [alice] },
-      deliveryTarget: `slack:${channel}:${root2}`,
-      text: "!whats_new",
-      liveActor: true,
-      async: true,
-    });
+    await built.app.turn(
+      channelTurn("!whats_new", alice, channel, root2, {
+        deliveryTarget: `slack:${channel}:${root2}`,
+        liveActor: true,
+        async: true,
+      }),
+    );
     try {
       await waitFor(
         async () => {

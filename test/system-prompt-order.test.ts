@@ -19,6 +19,7 @@ import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -184,19 +185,19 @@ test("Open carries only the live actor's personal reads into a shared turn and a
     data: Buffer.from("ACTOR_PRIVATE_ARTIFACT"),
     direction: "in",
   });
-  const channel = (thread: string, text: string, origin: OrchestratorInput["origin"]): OrchestratorInput => ({
-    surface: "test",
-    actor,
-    conversation: {
-      kind: "channel",
-      threadRef: thread,
-      channelRef: "C1",
-      audience: [actor, teammate],
-      publishMembers: [actor, teammate],
-    },
-    text,
-    origin,
-  });
+  const channel = (thread: string, text: string, origin: OrchestratorInput["origin"]): OrchestratorInput =>
+    orchestratorTurn(
+      text,
+      actor,
+      {
+        kind: "channel",
+        threadRef: thread,
+        channelRef: "C1",
+        audience: [actor, teammate],
+        publishMembers: [actor, teammate],
+      },
+      { origin: origin },
+    );
 
   const isolated = await orchestrator.handleTurn(channel("C1:isolated", "!sysprompt", { kind: "human" }));
   assert.doesNotMatch(isolated.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
@@ -243,18 +244,19 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   });
   assert.doesNotMatch(incompleteRoster.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
   await config.setExternalSlackParticipants(scopeId("org", ORG), true);
-  const external = await orchestrator.handleTurn({
-    surface: "slack",
-    actor,
-    conversation: {
-      kind: "channel",
-      threadRef: "C1:external",
-      channelRef: "C1",
-      audience: [actor, { id: "guest@example.com", type: "guest" }],
-    },
-    text: "!sysprompt",
-    origin: { kind: "human" },
-  });
+  const external = await orchestrator.handleTurn(
+    orchestratorTurn(
+      "!sysprompt",
+      actor,
+      {
+        kind: "channel",
+        threadRef: "C1:external",
+        channelRef: "C1",
+        audience: [actor, { id: "guest@example.com", type: "guest" }],
+      },
+      { surface: "slack", origin: { kind: "human" } },
+    ),
+  );
   assert.equal(external.status, "ok");
   assert.doesNotMatch(external.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
   assert.equal((await workspace.list(channelScope)).includes("private.txt"), false);
@@ -287,19 +289,20 @@ test("Open labels and audits a carried personal skill without granting it to the
     isCurrentSharedScopeMember: async () => true,
   });
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  const result = await orchestrator.handleTurn({
-    surface: "test",
-    actor,
-    conversation: {
-      kind: "channel",
-      threadRef: "C1:skill",
-      channelRef: "C1",
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: "!sysprompt",
-    origin: { kind: "human" },
-  });
+  const result = await orchestrator.handleTurn(
+    orchestratorTurn(
+      "!sysprompt",
+      actor,
+      {
+        kind: "channel",
+        threadRef: "C1:skill",
+        channelRef: "C1",
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      { origin: { kind: "human" } },
+    ),
+  );
   assert.match(result.reply ?? "", /\*\*private-method\*\* \[from personal:U1\]/);
   const event = (await auditLog.events()).find(
     (candidate) => candidate.action === "sharing.cross_context_read" && candidate.resource === `skill:${skill.id}`,
@@ -330,24 +333,21 @@ test("Open loads included memories in both directions with provenance and captur
     audience: [actor],
     publishMembers: [actor],
   };
-  const prompt = await orchestrator.handleTurn({
-    surface: "test",
-    actor,
-    conversation: channelConversation,
-    text: "!sysprompt",
-    origin: { kind: "human" },
-  });
+  const prompt = await orchestrator.handleTurn(
+    orchestratorTurn("!sysprompt", actor, channelConversation, { origin: { kind: "human" } }),
+  );
   assert.match(prompt.reply ?? "", /Sharing posture: Open/);
   assert.match(prompt.reply ?? "", /can reveal private information in a shared reply/);
   assert.match(prompt.reply ?? "", /### personal:U1[\s\S]*PERSONAL_OPEN_MEMORY/);
 
-  await orchestrator.handleTurn({
-    surface: "test",
-    actor,
-    conversation: { ...channelConversation, threadRef: "C1:capture" },
-    text: "!memoryremember ROOM_ONLY_MEMORY",
-    origin: { kind: "human" },
-  });
+  await orchestrator.handleTurn(
+    orchestratorTurn(
+      "!memoryremember ROOM_ONLY_MEMORY",
+      actor,
+      { ...channelConversation, threadRef: "C1:capture" },
+      { origin: { kind: "human" } },
+    ),
+  );
   assert.match(await memory.read(channelScope), /ROOM_ONLY_MEMORY/);
   assert.doesNotMatch(await memory.read(personal), /ROOM_ONLY_MEMORY/);
 

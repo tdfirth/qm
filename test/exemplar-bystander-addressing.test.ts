@@ -10,6 +10,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { turnRequest } from "./support/turns.ts";
 
 const REQUEST = "<@U_CAROL> can you review these drafts and flag anything I missed?";
 
@@ -45,20 +46,17 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
       { name: "agent", mentionId: "U_BOT" },
     );
 
-    const req: TurnRequest = {
-      surface: "slack",
-      actor: { externalId: "U_ALICE", displayName: "Alice" },
-      conversation: {
+    const req: TurnRequest = turnRequest(
+      REQUEST,
+      { externalId: "U_ALICE", displayName: "Alice" },
+      {
         kind: "channel",
         threadRef: `ch:${channel}:${root}`,
         channelRef: channel,
         audience: [{ externalId: "U_ALICE" }],
       },
-      deliveryTarget: `slack:${channel}:${root}`,
-      text: REQUEST,
-      unprompted: true,
-      async: true,
-    };
+      { surface: "slack", deliveryTarget: `slack:${channel}:${root}`, unprompted: true, async: true },
+    );
     await built.app.turn(req);
 
     const trigger = (await waitFor(

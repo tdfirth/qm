@@ -17,6 +17,7 @@ import { createMemoryConfigStore, type PersistedAutoFlaggerConfig } from "../src
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const org = scopeId("org", "acme");
 
@@ -130,14 +131,13 @@ test("screenings from real turns become the replay corpus, verbatim", async () =
   ];
   const outcomes: string[] = [];
   for (const [i, securityScreenData] of screened.entries()) {
-    const result = await built.app.turn({
-      surface: "webhook",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `dm:U1:x${i}` },
-      text: "summarize this",
-      triggered: true,
-      securityScreenData,
-    });
+    const result = await built.app.turn(
+      dmTurn("summarize this", { externalId: "U1" }, `dm:U1:x${i}`, {
+        surface: "webhook",
+        triggered: true,
+        securityScreenData,
+      }),
+    );
     outcomes.push(result.status);
   }
   assert.deepEqual(outcomes, ["ok", "pending_approval", "ok"], "the live screen flags the injected instruction");

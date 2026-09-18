@@ -7,6 +7,7 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { seedChannels } from "./support/fakes.ts";
+import { turnRequest } from "./support/turns.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
@@ -27,22 +28,22 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   await roster();
   await built.config.setSharingPosture("org:default-org", "open");
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
-    const result = await built.app.turn({
-      surface: "test",
-      actor: { externalId: actor },
-      origin: { kind: "human" },
-      conversation: room
-        ? {
-            kind: "channel",
-            channelRef: "C1",
-            threadRef: "C1:shared-test",
-            audience: members.map((externalId) => ({ externalId })),
-            publishMembers: members.map((externalId) => ({ externalId })),
-          }
-        : { kind: "dm", threadRef: `dm:${actor}:shared-test` },
-      text,
-      ...extra,
-    });
+    const result = await built.app.turn(
+      turnRequest(
+        text,
+        { externalId: actor },
+        room
+          ? {
+              kind: "channel",
+              channelRef: "C1",
+              threadRef: "C1:shared-test",
+              audience: members.map((externalId) => ({ externalId })),
+              publishMembers: members.map((externalId) => ({ externalId })),
+            }
+          : { kind: "dm", threadRef: `dm:${actor}:shared-test` },
+        { origin: { kind: "human" }, ...extra },
+      ),
+    );
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.reply ?? "";
   };

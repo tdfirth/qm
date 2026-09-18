@@ -20,6 +20,7 @@ import {
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { channelTurn, dmTurn } from "./support/turns.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -429,16 +430,11 @@ function freshApp() {
 const actor = { externalId: "U1" };
 
 function dm(text: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1:t1" }, text };
+  return dmTurn(text, actor, "dm:U1:t1");
 }
 
 function channel(text: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [actor] },
-    text,
-  };
+  return channelTurn(text, actor, "C1", "t1");
 }
 
 test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh machine gets it back", async () => {

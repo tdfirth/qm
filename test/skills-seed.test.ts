@@ -14,6 +14,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn, turnRequest } from "./support/turns.ts";
 
 test("seed skill parser reads the repo frontmatter subset", () => {
   const manifest = parseSeedSkill(`---
@@ -174,43 +175,34 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   });
   const { app } = built;
   const actor = { externalId: "U1" };
-  const sys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills" },
-    text: "!sysprompt",
-  } as TurnRequest);
+  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:seeded-skills") as TurnRequest);
   assert.match(sys.reply ?? "", /google-workspace/);
   assert.match(sys.reply ?? "", /google-drive-sheets/);
   assert.match(sys.reply ?? "", /github-gitlab/);
   assert.doesNotMatch(sys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*/);
 
-  const channelSys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:seeded-skills", audience: [actor] },
-    text: "!sysprompt",
-  } as TurnRequest);
+  const channelSys = await app.turn(
+    turnRequest("!sysprompt", actor, {
+      kind: "channel",
+      channelRef: "C1",
+      threadRef: "channel:C1:seeded-skills",
+      audience: [actor],
+    }) as TurnRequest,
+  );
   assert.match(channelSys.reply ?? "", /google-workspace/);
   assert.match(channelSys.reply ?? "", /google-drive-sheets/);
   assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*/);
 
-  const read = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
-    text: "!read skills/google-workspace/SKILL.md",
-  } as TurnRequest);
+  const read = await app.turn(
+    dmTurn("!read skills/google-workspace/SKILL.md", actor, "dm:U1:seeded-skills-read") as TurnRequest,
+  );
   assert.match(read.reply ?? "", /Google Workspace/);
   assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
   assert.match(read.reply ?? "", /Authorization: Bearer/);
 
-  const drive = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },
-    text: "!read skills/google-drive-sheets/SKILL.md",
-  } as TurnRequest);
+  const drive = await app.turn(
+    dmTurn("!read skills/google-drive-sheets/SKILL.md", actor, "dm:U1:seeded-drive-read") as TurnRequest,
+  );
   assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
 });

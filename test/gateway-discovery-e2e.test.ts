@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const metadata = {
   model_group: "acme/future",
@@ -259,12 +260,9 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       "Discovered model replied",
     );
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
-    const result = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
-      text: "Use the execute tool, then reply.",
-    });
+    const result = await built.app.turn(
+      dmTurn("Use the execute tool, then reply.", { externalId: "U1" }, "discovery-tool-loop"),
+    );
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /Discovered model replied/);
     assert.ok(

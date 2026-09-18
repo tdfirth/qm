@@ -9,6 +9,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { channelTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
@@ -16,23 +17,19 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 
-function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: "ch:C9:t1", channelRef: "C9", audience: [actor] },
+function mention(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
+  return channelTurn(text, actor, "C9", "t1", {
     deliveryTarget: "slack:C9:t1",
     surfaceTools: true,
     addressed: true,
     liveActor: true,
-    text,
     ...extra,
-  };
+  });
 }
 
 test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
   const built = freshApp();
-  const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
+  const req = mention("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
   await assert.rejects(built.app.turn(req), /boom/);
   const afterFirst = await built.deliveries.pending("slack");
@@ -53,7 +50,7 @@ test("a retried turn does not re-post: the same position dedups against the deli
 
 test("a resumed turn's NEW post after a completed one is delivered, not swallowed by the dedup", async () => {
   const built = freshApp();
-  const req = channelTurn("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
+  const req = mention("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
 
   await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
@@ -70,16 +67,18 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
 
 test("a retried automation fire (surface 'monitor') still seeds past its recorded post — the NEW post delivers", async () => {
   const built = freshApp();
-  const req: TurnRequest = {
-    surface: "monitor",
+  const req: TurnRequest = turnRequest(
+    "!post-then-boom monitor first|monitor second",
     actor,
-    conversation: { kind: "channel", threadRef: "monitor:M1:t1", channelRef: "C9", audience: [actor] },
-    surfaceTools: true,
-    triggered: true,
-    triggerDestination: { type: "slack", target: "slack:C9:t1" },
-    text: "!post-then-boom monitor first|monitor second",
-    idempotencyKey: "dedup-monitor-1",
-  };
+    { kind: "channel", threadRef: "monitor:M1:t1", channelRef: "C9", audience: [actor] },
+    {
+      surface: "monitor",
+      surfaceTools: true,
+      triggered: true,
+      triggerDestination: { type: "slack", target: "slack:C9:t1" },
+      idempotencyKey: "dedup-monitor-1",
+    },
+  );
 
   await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
@@ -95,7 +94,7 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
 
 test("distinct posts in one turn each get their own key and all deliver", async () => {
   const built = freshApp();
-  const res = await built.app.turn(channelTurn("!post2 alpha|beta", { idempotencyKey: "dedup-two-1" }));
+  const res = await built.app.turn(mention("!post2 alpha|beta", { idempotencyKey: "dedup-two-1" }));
   assert.equal(res.status, "silent", res.reason);
 
   const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));

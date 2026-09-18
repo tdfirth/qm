@@ -8,19 +8,17 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { turnRequest } from "./support/turns.ts";
 
 const actor = { externalId: "U1" };
 
 function slackTurn(text: string, ts: string, threadRef = "ch:C1:t1"): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef, channelRef: "C1", audience: [actor] },
+  return turnRequest(
     text,
-    async: true,
-    origin: { kind: "human", messageTs: ts },
-    redeliveryKey: `slack:B1:C1:${ts}`,
-  };
+    actor,
+    { kind: "channel", threadRef, channelRef: "C1", audience: [actor] },
+    { surface: "slack", origin: { kind: "human", messageTs: ts }, async: true, redeliveryKey: `slack:B1:C1:${ts}` },
+  );
 }
 
 function fresh() {

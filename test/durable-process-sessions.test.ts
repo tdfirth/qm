@@ -10,6 +10,7 @@ import { writableMemoryScope } from "../src/memory/policy.ts";
 import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { testOrchestrator } from "./support/fakes.ts";
+import { orchestratorTurn } from "./support/turns.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -104,13 +105,7 @@ async function memoryScope(): Promise<string> {
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));
 }
 
-const turn = (text: string): OrchestratorInput => ({
-  surface: "test",
-  actor,
-  conversation: conv,
-  origin: { kind: "direct" },
-  text,
-});
+const turn = (text: string): OrchestratorInput => orchestratorTurn(text, actor, conv);
 
 test("a live durable process keeps the computer warm; none lets it suspend", async () => {
   const reg = createMemoryProcessRegistry();

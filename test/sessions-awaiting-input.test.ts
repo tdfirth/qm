@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-awaiting-"));
@@ -16,7 +17,7 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return dmTurn(text, actor, thread);
 }
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
@@ -50,13 +51,7 @@ test("the awaitingInput flag clears once the pending approval is resolved", asyn
 
   assert.equal((await app.listSessions("U1")).find((s) => s.id === sid)?.awaitingInput, true);
 
-  await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:resolve" },
-    text: "",
-    approval: { requestId: requestId!, approved: false },
-  });
+  await app.turn(dmTurn("", actor, "dm:U1:resolve", { approval: { requestId: requestId!, approved: false } }));
 
   assert.ok(
     !(await app.listSessions("U1")).find((s) => s.id === sid)?.awaitingInput,

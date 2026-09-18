@@ -5,14 +5,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { dmTurn } from "./support/turns.ts";
 
-const request: TurnRequest = {
-  surface: "test",
-  actor: { externalId: "U1" },
-  conversation: { kind: "dm", threadRef: "inline-retry" },
-  text: "hello",
-  idempotencyKey: "inline-retry",
-};
+const request: TurnRequest = dmTurn("hello", { externalId: "U1" }, "inline-retry", { idempotencyKey: "inline-retry" });
 
 for (const laterMessage of [false, true]) {
   test(

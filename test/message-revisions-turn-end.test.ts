@@ -10,17 +10,17 @@ import { testConfig } from "./support/test-config.ts";
 import { messageRevision } from "../src/core/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { turnRequest } from "./support/turns.ts";
 
 const actor = { externalId: "U1", displayName: "Ada" };
 
 function channelTurn(text: string, messageTs: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [actor] },
+  return turnRequest(
     text,
-    origin: { kind: "human", messageTs },
-  };
+    actor,
+    { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [actor] },
+    { surface: "slack", origin: { kind: "human", messageTs } },
+  );
 }
 
 test("an edit the ingest path could not record is caught up at the end of the next turn", async () => {

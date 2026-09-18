@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 test("budget tracker accumulates per-principal and trips at the limit", async () => {
   const b = createBudgetTracker({ limitUsd: 1, windowMs: 60_000 });
@@ -46,12 +47,7 @@ test("a principal over budget is refused by the app", async () => {
     budgetUsdPerWindow: 0.00001,
   });
   const { app } = buildApp(config);
-  const dm = (text: string): TurnRequest => ({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-    text,
-  });
+  const dm = (text: string): TurnRequest => dmTurn(text, { externalId: "U1" }, "dm:U1:t1");
 
   const first = await app.turn(dm("hello"));
   assert.equal(first.status, "ok");

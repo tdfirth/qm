@@ -5,6 +5,7 @@ import * as mockHarness from "../src/harness/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { dmTurn } from "./support/turns.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
 mock.module("../src/harness/mock-harness.ts", {
@@ -97,17 +98,16 @@ for (const action of ["read", "react", "post"] as const) {
     };
     built.runtime.start();
     try {
-      const queued = await built.app.turn({
-        surface: "slack",
-        liveActor: true,
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `surface-${action}` },
-        text: "Build a website",
-        surfaceTools: true,
-        addressed: true,
-        deliveryTarget: "D1",
-        async: true,
-      });
+      const queued = await built.app.turn(
+        dmTurn("Build a website", { externalId: "U1" }, `surface-${action}`, {
+          surface: "slack",
+          liveActor: true,
+          surfaceTools: true,
+          addressed: true,
+          deliveryTarget: "D1",
+          async: true,
+        }),
+      );
       await ready;
       const deliveries = await built.deliveries.pending("slack");
       assert.deepEqual(

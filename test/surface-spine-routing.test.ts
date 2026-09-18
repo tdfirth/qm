@@ -10,6 +10,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { channelTurn, turnRequest } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-"));
@@ -18,15 +19,11 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function mention(text: string, channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+  return channelTurn(text, actor, channel, root, {
     deliveryTarget: `slack:${channel}:${root}`,
-    text,
     liveActor: true,
     async: true,
-  };
+  });
 }
 
 function pollDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }, deadlineMs = 5_000): Promise<any[]> {
@@ -172,17 +169,16 @@ test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) post
   built.runtime.start();
   try {
     const target = "slack:C7:700.7";
-    const res = await built.app.turn({
-      surface: "monitor",
-      actor,
-      conversation: { kind: "channel", threadRef: "ch:C7:700.7", channelRef: "C7", audience: [actor] },
-      text: "!post the build passed",
-      triggered: true,
-      surfaceTools: true,
-      addressed: true,
-      triggerDestination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") },
-      async: true,
-    });
+    const res = await built.app.turn(
+      channelTurn("!post the build passed", actor, "C7", "700.7", {
+        surface: "monitor",
+        triggered: true,
+        surfaceTools: true,
+        addressed: true,
+        triggerDestination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") },
+        async: true,
+      }),
+    );
     assert.equal(res.status, "queued");
     const d = await pollFor(built.deliveries, (x) => x.text === "the build passed");
     assert.ok(d, "the reply reached the surface via post");
@@ -198,17 +194,16 @@ test("a monitor (addressed poll fire) that finishes silently is NOT nudged into 
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.turn({
-      surface: "monitor",
-      actor,
-      conversation: { kind: "channel", threadRef: "ch:C8:800.8", channelRef: "C8", audience: [actor] },
-      text: "!finish-silent",
-      triggered: true,
-      surfaceTools: true,
-      addressed: true,
-      triggerDestination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
-      async: false,
-    });
+    await built.app.turn(
+      channelTurn("!finish-silent", actor, "C8", "800.8", {
+        surface: "monitor",
+        triggered: true,
+        surfaceTools: true,
+        addressed: true,
+        triggerDestination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
+        async: false,
+      }),
+    );
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
     assert.deepEqual(
@@ -226,15 +221,14 @@ test("surfaceTools with NO resolvable destination falls back to the normal auto-
   built.runtime.start();
   try {
     const principal = { externalId: "U9" };
-    const res = await built.app.turn({
-      surface: "slack",
-      actor: principal,
-      conversation: { kind: "dm", threadRef: "dm:U9:x", audience: [principal] },
-      text: "hello",
-      liveActor: true,
-      surfaceTools: true,
-      async: false,
-    });
+    const res = await built.app.turn(
+      turnRequest(
+        "hello",
+        principal,
+        { kind: "dm", threadRef: "dm:U9:x", audience: [principal] },
+        { surface: "slack", liveActor: true, surfaceTools: true, async: false },
+      ),
+    );
     assert.equal(res.status, "ok");
     assert.match(res.reply ?? "", /You said/);
   } finally {
@@ -248,15 +242,13 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
   try {
     const channel = "C-follow";
     const root = "700.1";
-    await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-      deliveryTarget: `slack:${channel}:${root}`,
-      text: "!post following up",
-      unprompted: true,
-      async: true,
-    });
+    await built.app.turn(
+      channelTurn("!post following up", actor, channel, root, {
+        deliveryTarget: `slack:${channel}:${root}`,
+        unprompted: true,
+        async: true,
+      }),
+    );
     const posted = await pollFor(
       built.deliveries,
       (d) => d.destination.target === `slack:${channel}:${root}` && d.text === "following up",
@@ -465,15 +457,14 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { kind: "channel", threadRef: `ch:C-amb:700.3`, channelRef: "C-amb", audience: [actor] },
-      deliveryTarget: `C-amb:700.3`,
-      text: "!silent",
-      unprompted: true,
-      async: false,
-    });
+    const res = await built.app.turn(
+      turnRequest(
+        "!silent",
+        actor,
+        { kind: "channel", threadRef: `ch:C-amb:700.3`, channelRef: "C-amb", audience: [actor] },
+        { surface: "slack", deliveryTarget: `C-amb:700.3`, unprompted: true, async: false },
+      ),
+    );
     assert.equal(res.status, "silent", "an unaddressed silent turn stays silent, no nudge");
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
@@ -489,15 +480,13 @@ test("post broadcast:true posts at the channel top level, not in the current thr
   try {
     const channel = "C-top";
     const root = "800.1";
-    await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-      deliveryTarget: `slack:${channel}:${root}`,
-      text: `!broadcast ahoy channel`,
-      liveActor: true,
-      async: true,
-    });
+    await built.app.turn(
+      channelTurn(`!broadcast ahoy channel`, actor, channel, root, {
+        deliveryTarget: `slack:${channel}:${root}`,
+        liveActor: true,
+        async: true,
+      }),
+    );
     const posted = await pollFor(built.deliveries, (d) => d.text === "ahoy channel");
     assert.ok(posted, "the top-level post landed");
     assert.equal(posted.destination.target, channel, "broadcast posts to the bare channel, not the thread");
@@ -513,15 +502,13 @@ test("post with an explicit ts to the current channel targets exactly <channel>:
     const channel = "C-top";
     const root = "800.1";
     const ts = "800.5";
-    await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-      deliveryTarget: `${channel}:${root}`,
-      text: `!postthread ${ts} threaded reply`,
-      liveActor: true,
-      async: true,
-    });
+    await built.app.turn(
+      channelTurn(`!postthread ${ts} threaded reply`, actor, channel, root, {
+        deliveryTarget: `${channel}:${root}`,
+        liveActor: true,
+        async: true,
+      }),
+    );
     const posted = await pollFor(built.deliveries, (d) => d.text === "threaded reply");
     assert.ok(posted, "the threaded post landed");
     assert.equal(posted.destination.target, `${channel}:${ts}`, "explicit ts replaces only the thread segment");
@@ -536,21 +523,20 @@ test("reach to a named channel resolves it, posts at that channel's top level, a
   try {
     const channel = "C-top";
     const root = "800.1";
-    const res = await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: {
-        kind: "channel",
-        threadRef: `ch:${channel}:${root}`,
-        channelRef: channel,
-        channelName: "top",
-        audience: [actor],
-      },
-      deliveryTarget: `${channel}:${root}`,
-      text: `!reachchan ${channel} elsewhere`,
-      liveActor: true,
-      async: true,
-    });
+    const res = await built.app.turn(
+      turnRequest(
+        `!reachchan ${channel} elsewhere`,
+        actor,
+        {
+          kind: "channel",
+          threadRef: `ch:${channel}:${root}`,
+          channelRef: channel,
+          channelName: "top",
+          audience: [actor],
+        },
+        { surface: "slack", deliveryTarget: `${channel}:${root}`, liveActor: true, async: true },
+      ),
+    );
     assert.equal(res.status, "queued");
     const posted = await pollFor(built.deliveries, (d) => d.text === "elsewhere");
     assert.ok(posted, "the reach post landed");
@@ -592,15 +578,13 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
   try {
     const channel = "C-follow2";
     const root = "810.1";
-    const res = await built.app.turn({
-      surface: "slack",
-      actor,
-      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-      deliveryTarget: `slack:${channel}:${root}`,
-      text: "!post following up",
-      unprompted: true,
-      async: true,
-    });
+    const res = await built.app.turn(
+      channelTurn("!post following up", actor, channel, root, {
+        deliveryTarget: `slack:${channel}:${root}`,
+        unprompted: true,
+        async: true,
+      }),
+    );
     assert.equal(res.status, "queued");
     const posted = await pollFor(
       built.deliveries,

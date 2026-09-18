@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { turnRequest } from "./support/turns.ts";
 
 function reply(): Response {
   const events = [
@@ -41,19 +42,17 @@ for (const warm of [false, true]) {
       requests.push(String(init?.body));
       return reply();
     }) as typeof fetch;
-    const base: TurnRequest = {
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: {
+    const base: TurnRequest = turnRequest(
+      "go",
+      { externalId: "U1" },
+      {
         kind: "channel",
         threadRef: `ch:C1:${warm ? "existing" : "fresh"}`,
         channelRef: "C1",
         audience: [{ externalId: "U1" }],
       },
-      origin: { kind: "human" },
-      text: "go",
-      envelopeWrapped: true,
-    };
+      { surface: "slack", origin: { kind: "human" }, envelopeWrapped: true },
+    );
     try {
       if (warm) {
         assert.equal((await built.app.turn({ ...base, text: "Can you check the worker?" })).status, "ok");

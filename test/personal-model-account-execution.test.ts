@@ -6,6 +6,7 @@ import * as mockHarness from "../src/harness/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const turns: HarnessTurnInput[] = [];
 function observedHarness() {
@@ -33,14 +34,13 @@ for (const provider of ["anthropic", "openai"] as const) {
     await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
     await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
     await built.config.setPersonalModelAuth("U1", true, provider);
-    const submitted = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
-      text: "hello",
-      liveActor: true,
-      async: true,
-    });
+    const submitted = await built.app.turn(
+      dmTurn("hello", { externalId: "U1" }, `execute-personal-${provider}`, {
+        surface: "slack",
+        liveActor: true,
+        async: true,
+      }),
+    );
     await built.config.setPersonalModelAuth("U1", false);
     built.runtime.start();
     try {
@@ -62,14 +62,13 @@ test("disconnecting a queued personal account fails without invoking any main ha
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
-  const submitted = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "execute-disconnected-personal" },
-    text: "hello",
-    liveActor: true,
-    async: true,
-  });
+  const submitted = await built.app.turn(
+    dmTurn("hello", { externalId: "U1" }, "execute-disconnected-personal", {
+      surface: "slack",
+      liveActor: true,
+      async: true,
+    }),
+  );
   await built.userModelCredentials.delete("U1", "openai");
   await built.config.setPersonalModelAuth("U1", false);
   built.runtime.start();

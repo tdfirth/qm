@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmTurn } from "./support/turns.ts";
 
 const oxAlphaCatalog: typeof fetch = async () =>
   Response.json({
@@ -36,13 +37,12 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
     modelId: "stealth/ox-alpha",
   });
 
-  const turn = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "alice" },
-    conversation: { kind: "dm", threadRef: "web:alice:dynamic-openrouter-model" },
-    text: "hello",
-    model: "stealth/ox-alpha",
-    async: true,
-  });
+  const turn = await built.app.turn(
+    dmTurn("hello", { externalId: "alice" }, "web:alice:dynamic-openrouter-model", {
+      surface: "web",
+      model: "stealth/ox-alpha",
+      async: true,
+    }),
+  );
   assert.equal(turn.status, "queued");
 });
