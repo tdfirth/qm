@@ -41,7 +41,17 @@ test("conversation colors use the refined spectrum palette on every list surface
   assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
   assert.doesNotMatch(tsSource, /#d2664d|#b98a52|#7d884f|#5f8b83|#527d99|#8b5d52/);
   assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
-  assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\(/);
+  const coloredRules = [
+    /\.session-row\.colored \.session \{[^}]+\}/,
+    /\.session-row\.colored \.session:hover,[^{]+\{[^}]+\}/,
+    /\.session-row\.colored\.active \.session \{[^}]+\}/,
+    /\.list-row\.chat-row\.colored \{[^}]+\}/,
+    /\.list-row\.chat-row\.colored:hover \{[^}]+\}/,
+  ].map((pattern) => shellCss.match(pattern)?.[0] ?? "");
+  for (const rule of coloredRules) {
+    assert.match(rule, /background:\s*color-mix\(in srgb, var\(--session-color\)/);
+    assert.doesNotMatch(rule, /gradient/);
+  }
   assert.doesNotMatch(shellCss, /\.session-row\.colored \.session::before/);
 });
 
