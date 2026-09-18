@@ -131,6 +131,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
+  if (msg.method === "thread/delete") return send({ id: msg.id, result: {} });
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
   if (msg.method === "turn/start") {
     send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
@@ -139,10 +140,51 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (msg.id === "child-tool") {
     if (msg.error) return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "failed", error: { message: msg.error.message }, items: [] } } });
+    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-progress", text: "working", phase: "commentary" } } });
     send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-answer", text: "CHILD-OK", phase: "final_answer" } } });
+    send({ method: "turn/completed", params: { threadId: "child", turn: { id: "child-turn", status: "completed", items: [] } } });
     return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [{ type: "agentMessage", text: "CHILD-OK", phase: "final_answer" }] } } });
   }
   if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function delayedLegacyChildRoutingCodexBinary(dir: string): string {
+  const path = delayedChildRoutingCodexBinary(dir);
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(
+      '{ type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" }',
+      '{ type: "collabAgentToolCall", id: "spawn", tool: "spawnAgent", receiverThreadIds: ["child"], prompt: "run child tool" }',
+    ),
+  );
+  return path;
+}
+
+function terminalNativeChildCodexBinary(dir: string, terminal: "failed" | "interrupted"): string {
+  const path = join(dir, `terminal-native-child-${terminal}`);
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/delete") return send({ id: msg.id, result: {} });
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
+  if (msg.method === "turn/start") {
+    send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
+    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "progress", text: "working", phase: "commentary" } } });
+    ${terminal === "interrupted" ? 'send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "stop", kind: "interrupted", agentThreadId: "child", agentPath: "/root/child" } } });' : 'send({ method: "turn/completed", params: { threadId: "child", turn: { id: "child-turn", status: "failed", error: { message: "child failed" }, items: [] } } });'}
+    send({ id: msg.id, result: { turn: { id: "parent-turn", status: "inProgress", items: [] } } });
+    return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [] } } });
+  }
 });
 `,
   );
@@ -497,6 +539,7 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
   });
+
   const entries: SessionEntry[] = [];
   const deltas: string[] = [];
   const modelCalls: number[] = [];
@@ -532,7 +575,41 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   );
 });
 
-test("Codex child tool routing waits for durable task registration", { timeout: 3000 }, async (t) => {
+for (const terminal of ["failed", "interrupted"] as const)
+  test(`Codex current child ${terminal} stays failed after commentary`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-terminal-"));
+    const tasks = createMemoryTaskStore();
+    const entries: SessionEntry[] = [];
+    const harness = createCodexHarness({ binaryPath: terminalNativeChildCodexBinary(dir, terminal), env: testHarnessEnv(dir), tasks });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+    await harness.turns.runTurn({
+      session: { id: `child-${terminal}` } as Session,
+      input: "route child",
+      systemPrompt: "test",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => {
+        const saved = { ...entry, sessionId: `child-${terminal}`, seq: entries.length + 1, createdAt: Date.now() } as SessionEntry;
+        entries.push(saved);
+        return saved;
+      },
+      recordModelCall: () => {},
+    });
+    assert.deepEqual((await tasks.list()).map(({ status }) => status), ["failed"]);
+    assert.deepEqual(entries.filter((entry) => entry.type === "tool_result").map((entry) => entry.payload.isError), [true]);
+  });
+
+for (const [protocol, binary] of [
+  ["current", delayedChildRoutingCodexBinary],
+  ["legacy", delayedLegacyChildRoutingCodexBinary],
+] as const)
+  test(`Codex ${protocol} child tool routing waits for durable task registration`, { timeout: 5000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-routing-"));
   const storedTasks = createMemoryTaskStore();
   const registrationStarted = Promise.withResolvers<void>();
@@ -546,7 +623,7 @@ test("Codex child tool routing waits for durable task registration", { timeout: 
     },
   };
   const harness = createCodexHarness({
-    binaryPath: delayedChildRoutingCodexBinary(dir),
+    binaryPath: binary(dir),
     env: testHarnessEnv(dir),
     tasks,
     turnWallClockMs: 2_000,
@@ -577,9 +654,9 @@ test("Codex child tool routing waits for durable task registration", { timeout: 
   assert.equal(result.reply, "CHILD-OK");
   assert.deepEqual(
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
-    [{ title: "Subagent /root/child", status: "completed" }],
+    [{ title: protocol === "current" ? "Subagent /root/child" : "run child tool", status: "completed" }],
   );
-});
+  });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {
   assert.equal(
