@@ -15,7 +15,7 @@ import { scopeId, type Principal, type TurnRequest } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
-import { toolContext } from "./support/fakes.ts";
+import { seedChannels, toolContext } from "./support/fakes.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createDirectoryStore();
@@ -35,10 +35,7 @@ test("resolveReachableChannel: a private channel is ok for a member, denied for 
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
-  await d.replaceChannels(
-    [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-    [{ channelId: "C-sec", principalId: "U1" }],
-  );
+  await seedChannels(d, [{ channelId: "C-sec", name: "secret", isPrivate: true }], { "C-sec": ["U1"] });
   assert.equal((await resolveReachableChannel("secret", { directory: d, actorId: "U1" })).kind, "ok");
   const denied = await resolveReachableChannel("secret", { directory: d, actorId: "U2" });
   assert.equal(denied.kind, "error");
@@ -68,16 +65,14 @@ test("resolveReachableChannel: ambiguity lists candidate names; unknown says not
 
 test("listChannelsFor: public channels ∪ private channels the principal is a member of", async () => {
   const d = createDirectoryStore();
-  await d.replaceChannels(
+  await seedChannels(
+    d,
     [
       { channelId: "C-pub", name: "general" },
       { channelId: "C-mine", name: "mine", isPrivate: true },
       { channelId: "C-theirs", name: "theirs", isPrivate: true },
     ],
-    [
-      { channelId: "C-mine", principalId: "U1" },
-      { channelId: "C-theirs", principalId: "U2" },
-    ],
+    { "C-mine": ["U1"], "C-theirs": ["U2"] },
   );
   assert.deepEqual((await d.listChannelsFor("U1")).map((c) => c.name).sort(), ["general", "mine"]);
   assert.deepEqual((await d.listChannelsFor("U2")).map((c) => c.name).sort(), ["general", "theirs"]);
@@ -382,10 +377,7 @@ test("DM reach to a private channel the human isn't in is denied", async () => {
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
-  await built.directory.replaceChannels(
-    [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-    [{ channelId: "C-sec", principalId: "U2" }],
-  );
+  await seedChannels(built.directory, [{ channelId: "C-sec", name: "secret", isPrivate: true }], { "C-sec": ["U2"] });
   const res = await built.app.turn(dm("!reach #secret cat x"));
   assert.match(res.reply!, /private and I can't confirm you're a member/);
 });

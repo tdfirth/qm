@@ -6,6 +6,7 @@ import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
@@ -21,10 +22,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   });
   let members = ["U1", "U2", "U3"];
   const roster = async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "engineering", isPrivate: true }],
-      members.map((principalId) => ({ channelId: "C1", principalId })),
-    );
+    await seedChannels(built.directory, [{ channelId: "C1", name: "engineering", isPrivate: true }], { C1: members });
   };
   await roster();
   await built.config.setSharingPosture("org:default-org", "open");

@@ -11,6 +11,7 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Cron } from "../src/types.ts";
 
@@ -182,13 +183,9 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
     { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
     { principalId: "U5", displayName: "Dana", type: "internal" },
   ]);
-  await directory.replaceChannels(
-    [{ channelId: "C1", name: "general", isPrivate: false }],
-    [
-      { channelId: "C1", principalId: "eve@acme.com" },
-      { channelId: "C1", principalId: "U5" },
-    ],
-  );
+  await seedChannels(directory, [{ channelId: "C1", name: "general", isPrivate: false }], {
+    C1: ["eve@acme.com", "U5"],
+  });
   const { crons, calls, scheduler } = harness("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },

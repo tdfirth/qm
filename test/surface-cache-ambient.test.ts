@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { sleep } from "../src/util/async.ts";
 import { waitFor } from "./support/settle.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 async function listFull(store: any, opts?: any): Promise<any[]> {
   const rows = await store.list(opts);
@@ -764,10 +765,9 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
     await built.directory.replace([
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
-    await built.directory.replaceChannels(
-      [{ channelId: container, name: "solicited-chan", isPrivate: false }],
-      [{ channelId: container, principalId: "alice@acme.com" }],
-    );
+    await seedChannels(built.directory, [{ channelId: container, name: "solicited-chan", isPrivate: false }], {
+      [container]: ["alice@acme.com"],
+    });
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "300.1", authorId: "U1", authorName: "Alice", text: "!post solicited reply", createdAt: 1 },
@@ -797,13 +797,9 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
       { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
     ]);
-    await built.directory.replaceChannels(
-      [{ channelId: container, name: "solicited-roster", isPrivate: false }],
-      [
-        { channelId: container, principalId: "alice@acme.com" },
-        { channelId: container, principalId: "bob@acme.com" },
-      ],
-    );
+    await seedChannels(built.directory, [{ channelId: container, name: "solicited-roster", isPrivate: false }], {
+      [container]: ["alice@acme.com", "bob@acme.com"],
+    });
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "350.1", authorId: "U1", authorName: "Alice", text: "!sysprompt", createdAt: 1 },
@@ -953,10 +949,9 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
     await built.directory.replace([
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
-    await built.directory.replaceChannels(
-      [{ channelId: container, name: "private-chan", isPrivate: true }],
-      [{ channelId: container, principalId: "alice@acme.com" }],
-    );
+    await seedChannels(built.directory, [{ channelId: container, name: "private-chan", isPrivate: true }], {
+      [container]: ["alice@acme.com"],
+    });
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container, ts: "600.1", authorId: "U1", authorName: "Alice", text: "!post private reply", createdAt: 1 },

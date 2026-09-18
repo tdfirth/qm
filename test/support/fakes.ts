@@ -18,6 +18,7 @@ import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
 import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
+import type { DirectoryChannel, DirectoryStore } from "../../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 import { createToolContext, type ToolContextDeps } from "../../src/tools/primitives.ts";
 import { scopeId } from "../../src/types.ts";
@@ -100,4 +101,18 @@ export function toolContext(extra: Partial<ToolContextDeps> = {}) {
     createdBy: "U1",
     ...extra,
   });
+}
+
+export function seedChannels(
+  directory: Pick<DirectoryStore, "replaceChannels">,
+  channels: DirectoryChannel[],
+  members?: Record<string, readonly string[]>,
+): Promise<boolean> {
+  return directory.replaceChannels(
+    channels,
+    members &&
+      Object.entries(members).flatMap(([channelId, principalIds]) =>
+        principalIds.map((principalId) => ({ channelId, principalId })),
+      ),
+  );
 }

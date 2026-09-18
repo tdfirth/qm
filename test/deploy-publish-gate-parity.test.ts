@@ -10,7 +10,7 @@ import { createDirectoryStore, type DirectoryStore } from "../src/directory/dire
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId } from "../src/types.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, seedChannels } from "./support/fakes.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -20,17 +20,13 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   const acl: AclStore = createAclStore();
   const directory: DirectoryStore = createDirectoryStore();
   const identity = createIdentityService();
-  await directory.replaceChannels(
+  await seedChannels(
+    directory,
     [
       { channelId: CH, name: "built" },
       { channelId: CH_OTHER, name: "shared" },
     ],
-    [
-      { channelId: CH, principalId: "U1" },
-      { channelId: CH, principalId: "U2" },
-      { channelId: CH_OTHER, principalId: "U2" },
-      { channelId: CH_OTHER, principalId: "U3" },
-    ],
+    { [CH]: ["U1", "U2"], [CH_OTHER]: ["U2", "U3"] },
   );
   const deploy = createDeployService({
     deployStore,
