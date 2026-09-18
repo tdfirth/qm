@@ -5332,6 +5332,38 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   }
 });
 
+test("AWS layer deadline includes signing-secret acquisition", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-secret-timeout-"));
+  const bin = join(dir, "aws-hang");
+  writeFileSync(bin, `#!/opt/homebrew/bin/node\nsetTimeout(() => {}, 20_000);\n`);
+  chmodSync(bin, 0o755);
+  const priorBin = process.env.AWS_BIN;
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  process.env.AWS_BIN = bin;
+  delete process.env.CORE_SIGNING_SECRET;
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      () =>
+        awsDeploymentLayerTransport({
+          config,
+          configDir: dir,
+          method: "PUT",
+          body: "{}",
+          timeoutMs: 50,
+        }),
+      /abort/i,
+    );
+    assert.ok(Date.now() - started < 1_000);
+  } finally {
+    if (priorBin === undefined) delete process.env.AWS_BIN;
+    else process.env.AWS_BIN = priorBin;
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS secrets push defers activation against pre-consolidation images", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
   const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);

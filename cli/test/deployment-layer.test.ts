@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
+import { createServer } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -146,7 +147,7 @@ interface StubServer {
 }
 
 function startCoreStub(
-  response: () => { status?: number; body: string },
+  response: () => { status?: number; body: string } | Promise<{ status?: number; body: string }>,
   captured: CapturedRequest[],
 ): Promise<{ server: StubServer; port: number }> {
   const previous = globalThis.fetch;
@@ -160,7 +161,7 @@ function startCoreStub(
       signature: headers.get("x-signature") ?? "",
       body: typeof init?.body === "string" ? init.body : "",
     });
-    const result = response();
+    const result = await response();
     return new Response(result.body, { status: result.status ?? 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   return Promise.resolve({
@@ -619,6 +620,7 @@ test("sync retries transient core readiness failures until the layer lands", asy
       },
       configDir: dir,
       sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
       retryDelayMs: 1,
     });
     assert.equal(attempts, 3);
@@ -629,7 +631,7 @@ test("sync retries transient core readiness failures until the layer lands", asy
   }
 });
 
-test("allowUnavailable exhausts a bounded readiness window before truthfully deferring", async (t) => {
+test("allowUnavailable exhausts a bounded readiness window with an unconfirmed outcome", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-"));
   const lines: string[] = [];
   t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
@@ -648,9 +650,63 @@ test("allowUnavailable exhausts a bounded readiness window before truthfully def
       retryDelayMs: 1,
     });
     assert.equal(attempts, 5);
-    assert.ok(lines.some((line) => /sync did not land and remains deferred/.test(line)));
+    assert.ok(lines.some((line) => /sync outcome is unconfirmed and remains deferred/.test(line)));
     assert.ok(!lines.some((line) => /deferred until the next up/.test(line)));
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("lost acknowledgments remain unconfirmed and identical signed retries create one version", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-lost-ack-"));
+  const lines: string[] = [];
+  let attempts = 0;
+  let version = 0;
+  let contentHash: string | undefined;
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      attempts += 1;
+      const body = Buffer.concat(chunks).toString("utf8");
+      const timestamp = request.headers["x-timestamp"];
+      const signature = request.headers["x-signature"];
+      assert.equal(typeof timestamp, "string");
+      assert.equal(
+        signature,
+        `v0=${createHmac("sha256", SECRET).update(`v0:${timestamp}:PUT\n/v1/deployment-layer\n${body}`).digest("hex")}`,
+      );
+      const nextHash = createHash("sha256").update(body).digest("hex");
+      if (nextHash !== contentHash) {
+        contentHash = nextHash;
+        version += 1;
+      }
+      response.destroy();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    writeLayer(dir);
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(address.port) }, () =>
+      syncDeploymentLayer({
+        config: makeConfig("http://example.invalid"),
+        transport: dockerDeploymentLayerTransport,
+        configDir: dir,
+        sandboxDir: join(dir, "sandbox"),
+        allowUnavailable: true,
+        retryDelayMs: 1,
+      }),
+    );
+    assert.equal(attempts, 5);
+    assert.equal(version, 1);
+    assert.ok(lines.some((line) => /sync outcome is unconfirmed/.test(line)));
+    assert.ok(lines.every((line) => !/did not land/.test(line)));
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -755,6 +811,7 @@ test("fly sync cancels an in-flight SSH request", async () => {
   const controller = new AbortController();
   try {
     writeLayer(dir);
+    writeFileSync(join(dir, "sandbox", "skills", "a", "large.txt"), "x".repeat(800_000));
     const bin = fakeFly(dir, `process.on("SIGTERM", () => {}); setTimeout(() => {}, 20_000);`);
     const started = Date.now();
     const pending = withEnv({ FLY_BIN: bin }, () =>
@@ -763,6 +820,93 @@ test("fly sync cancels an in-flight SSH request", async () => {
     setTimeout(() => controller.abort(), 20);
     await assert.rejects(pending, /deployment layer sync was cancelled/);
     assert.ok(Date.now() - started < 1_000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fly sync handles a large stdin when SSH exits before reading it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
+  try {
+    writeLayer(dir);
+    writeFileSync(join(dir, "sandbox", "skills", "a", "large.txt"), "x".repeat(800_000));
+    const bin = fakeFly(dir, `process.exit(1);`);
+    await withEnv({ FLY_BIN: bin }, () =>
+      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not reach the Fly core/),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fly sync bounds a large stdin when SSH never reads it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
+  try {
+    writeLayer(dir);
+    writeFileSync(join(dir, "sandbox", "skills", "a", "large.txt"), "x".repeat(800_000));
+    const bin = fakeFly(dir, `setTimeout(() => {}, 20_000);`);
+    const started = Date.now();
+    await withEnv({ FLY_BIN: bin }, () =>
+      assert.rejects(
+        () =>
+          flyDeploymentLayerTransport({
+            ...flySyncOpts(dir),
+            method: "PUT",
+            body: JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))),
+            timeoutMs: 50,
+          }),
+        /could not reach the Fly core/,
+      ),
+    );
+    assert.ok(Date.now() - started < 1_000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("explicit HTTP and Fly syncs allow healthy responses after five seconds", async () => {
+  const httpDir = mkdtempSync(join(tmpdir(), "qm-layer-http-slow-"));
+  const flyDir = mkdtempSync(join(tmpdir(), "qm-layer-fly-slow-"));
+  const { server, port } = await startCoreStub(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    return { body: JSON.stringify({ version: 9, contentHash: "slow-http", durable: true }) };
+  }, []);
+  try {
+    writeLayer(httpDir);
+    writeLayer(flyDir);
+    const bin = fakeFly(
+      flyDir,
+      `fs.readFileSync(0); setTimeout(() => console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 200, body: JSON.stringify({ version: 10, contentHash: "slow-fly", durable: true }) })), 5100);`,
+    );
+    await Promise.all([
+      withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+        syncDeploymentLayer({
+          config: makeConfig("http://example.invalid"),
+          transport: dockerDeploymentLayerTransport,
+          configDir: httpDir,
+          sandboxDir: join(httpDir, "sandbox"),
+        }),
+      ),
+      withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(flyDir))),
+    ]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(resolve));
+    rmSync(httpDir, { recursive: true, force: true });
+    rmSync(flyDir, { recursive: true, force: true });
+  }
+});
+
+test("fly missing executable and authorization failures are terminal", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-terminal-"));
+  try {
+    writeLayer(dir);
+    await withEnv({ FLY_BIN: join(dir, "missing-fly") }, () =>
+      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /Fly SSH failed/),
+    );
+    const bin = fakeFly(dir, `process.stderr.write("Error: not authorized to access this app"); process.exit(1);`);
+    await withEnv({ FLY_BIN: bin }, () =>
+      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /Fly SSH failed:.*not authorized/),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -199,32 +199,32 @@ export type DeploymentLayerTransport = (
 export function httpDeploymentLayerTransport(
   o: {
     urlOf?: (config: QmConfig) => URL;
-    secretFallback?: (config: QmConfig) => string | undefined;
+    secretFallback?: (config: QmConfig, signal?: AbortSignal) => string | undefined | Promise<string | undefined>;
     timeoutMs?: number;
     request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
   } = {},
 ): DeploymentLayerTransport {
   return async (opts) => {
+    const signal =
+      opts.signal || opts.timeoutMs || o.timeoutMs
+        ? AbortSignal.any([
+            ...(opts.signal ? [opts.signal] : []),
+            ...(opts.timeoutMs || o.timeoutMs
+              ? [AbortSignal.timeout(Math.min(opts.timeoutMs ?? Infinity, o.timeoutMs ?? Infinity))]
+              : []),
+          ])
+        : undefined;
     const envPath = opts.envFile ?? join(opts.configDir, ".env");
     const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
     let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
-    if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
+    if (!secret && o.secretFallback) secret = await o.secretFallback(opts.config, signal);
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
     const init: RequestInit = {
       method: opts.method,
       headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
-      ...(opts.signal || opts.timeoutMs || o.timeoutMs
-        ? {
-            signal: AbortSignal.any([
-              ...(opts.signal ? [opts.signal] : []),
-              ...(opts.timeoutMs || o.timeoutMs
-                ? [AbortSignal.timeout(Math.min(opts.timeoutMs ?? Infinity, o.timeoutMs ?? Infinity))]
-                : []),
-            ]),
-          }
-        : {}),
+      ...(signal ? { signal } : {}),
       redirect: "error",
     };
     if (o.request) return o.request(opts.config, url, init);
@@ -326,14 +326,14 @@ export async function syncDeploymentLayerBody(
   body: string,
 ): Promise<DeploymentLayerSyncResult | undefined> {
   const retryStatuses = new Set([502, 503, 504]);
-  const attempts = 5;
-  const deadline = Date.now() + 30_000;
+  const attempts = opts.allowUnavailable ? 5 : 1;
+  const deadline = opts.allowUnavailable ? Date.now() + 30_000 : undefined;
   let response: { status: number; body: string } | undefined;
   let unavailableError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (opts.signal?.aborted) throw new CliError("deployment layer sync was cancelled");
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
+    const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) break;
     try {
       response = await deploymentLayerRequest({
         config: opts.config,
@@ -341,7 +341,7 @@ export async function syncDeploymentLayerBody(
         method: "PUT",
         body,
         transport: opts.transport,
-        timeoutMs: Math.min(5_000, remainingMs),
+        ...(remainingMs !== undefined ? { timeoutMs: remainingMs } : {}),
         ...(opts.envFile ? { envFile: opts.envFile } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       });
@@ -353,7 +353,7 @@ export async function syncDeploymentLayerBody(
     }
     if (response && !retryStatuses.has(response.status)) break;
     if (attempt === attempts) break;
-    const delayMs = Math.min(opts.retryDelayMs ?? 3_000, deadline - Date.now());
+    const delayMs = Math.min(opts.retryDelayMs ?? 3_000, (deadline ?? Date.now()) - Date.now());
     if (delayMs <= 0) break;
     try {
       await sleep(delayMs, undefined, { signal: opts.signal });
@@ -363,7 +363,9 @@ export async function syncDeploymentLayerBody(
   }
   if (!response || (opts.allowUnavailable && retryStatuses.has(response.status))) {
     if (opts.allowUnavailable) {
-      step(`deployment layer: core remained unavailable; deployment succeeded, sync did not land and remains deferred`);
+      step(
+        `deployment layer: core remained unavailable; deployment succeeded, sync outcome is unconfirmed and remains deferred`,
+      );
       return;
     }
     throw new CliError(

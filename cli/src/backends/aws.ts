@@ -1,7 +1,7 @@
 import { awsCoreHostnames, awsPortalAppsDomain, validAlbHostname } from "../aws-routing.ts";
 import https from "node:https";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
 import {
   accessSync,
@@ -176,21 +176,42 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     return url;
   },
   request: awsCoreRequest,
-  secretFallback: (config) =>
-    config.aws
-      ? capture(process.env.AWS_BIN ?? "aws", [
-          "secretsmanager",
-          "get-secret-value",
-          "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
-          "--query",
-          "SecretString",
-          "--output",
-          "text",
-          "--region",
-          config.aws.region,
-        ]).trim()
-      : undefined,
+  secretFallback: (config, signal) => {
+    const aws = config.aws;
+    return aws
+      ? new Promise<string>((resolve, reject) => {
+          const command = process.env.AWS_BIN ?? "aws";
+          const args = [
+            "secretsmanager",
+            "get-secret-value",
+            "--secret-id",
+            `${aws.secretsPrefix}CORE_SIGNING_SECRET`,
+            "--query",
+            "SecretString",
+            "--output",
+            "text",
+            "--region",
+            aws.region,
+          ];
+          const child = spawn(command, args, {
+            stdio: ["ignore", "pipe", "pipe"],
+            killSignal: "SIGKILL",
+            ...(signal ? { signal } : {}),
+          });
+          let stdout = "";
+          let stderr = "";
+          child.stdout.setEncoding("utf8");
+          child.stderr.setEncoding("utf8");
+          child.stdout.on("data", (chunk: string) => (stdout += chunk));
+          child.stderr.on("data", (chunk: string) => (stderr += chunk));
+          child.on("error", reject);
+          child.on("close", (code) => {
+            if (code === 0) resolve(stdout.trim());
+            else reject(new CliError(`${command} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`));
+          });
+        })
+      : undefined;
+  },
   timeoutMs: 60_000,
 });
 export interface AwsUpOpts {

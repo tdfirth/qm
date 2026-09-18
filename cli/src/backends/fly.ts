@@ -82,30 +82,43 @@ async function flyRequest(
   const script = `const fs=require("node:fs"),{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=fs.readFileSync(0,"utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
   const encoded = Buffer.from(script).toString("base64");
   const command = `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+  const requestSignal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
   let output = "";
   let stderr = "";
   try {
     await new Promise<void>((resolve, reject) => {
+      let failure: unknown;
       const child = spawn(flyBin(), ["ssh", "console", "-a", app, "-C", command], {
         stdio: ["pipe", "pipe", "pipe"],
-        timeout: timeoutMs,
         killSignal: "SIGKILL",
-        ...(signal ? { signal } : {}),
+        signal: requestSignal,
       });
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => (output += chunk));
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
-      child.on("error", reject);
+      child.on("error", (error) => (failure = error));
+      child.stdin.on("error", (error) => {
+        failure ??= error;
+        child.kill("SIGKILL");
+      });
       child.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(stderr.trim() || output.trim() || `fly ssh exited ${code ?? "without a status"}`));
+        if (code === 0 && !failure) resolve();
+        else
+          reject(
+            failure ?? new Error(stderr.trim() || output.trim() || `fly ssh exited ${code ?? "without a status"}`),
+          );
       });
       child.stdin.end(body);
     });
   } catch (error) {
     const text = `${stderr}${output}`.trim() || errMessage(error);
     if (/could not find app|app not found/i.test(text)) throw new CliError(`Fly app ${app} not found: ${text}`);
+    if (
+      (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") ||
+      /(?:not authorized|authentication required|permission denied|unauthorized|access denied)/i.test(text)
+    )
+      throw new CliError(`Fly SSH failed: ${text}`);
     throw new CoreUnreachableError(`could not reach the Fly core: ${text}`);
   }
   const remoteError = output.split("\n").find((value) => value.startsWith(FLY_REMOTE_ERROR));
