@@ -11228,12 +11228,7 @@ h3.ambient-field-label {
   border-radius: 50%;
   border: 2px solid var(--border);
   border-top-color: var(--foreground);
-  animation: mc-spin 0.7s linear infinite;
-}
-@keyframes mc-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin 0.7s linear infinite;
 }
 .mc-close {
   position: absolute;
@@ -11915,7 +11910,12 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   transform: scale(0.97);
 }
 .menu-popover,
-.session-menu-popover,
+.session-menu-popover {
+  transition: opacity 150ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
 .slash-popover {
   transform-origin: 50% 100%;
   transition:
@@ -11924,13 +11924,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   @starting-style {
     opacity: 0;
     transform: scale(0.96) translateY(4px);
-  }
-}
-.session-menu-popover:not(.drop-up, .user-menu-popover),
-.menu-control[data-drop="down"] .menu-popover:not(.drop-up) {
-  transform-origin: 50% 0;
-  @starting-style {
-    transform: scale(0.96) translateY(-4px);
   }
 }
 .qm-tooltip {
@@ -11944,47 +11937,20 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     transform: translateY(2px);
   }
 }
-dialog.project-dialog {
-  opacity: 0;
-  transform: scale(0.96);
-  transition:
-    opacity 150ms var(--ease-out),
-    transform 150ms var(--ease-out),
-    display 150ms allow-discrete,
-    overlay 150ms allow-discrete;
-}
-dialog.project-dialog[open] {
-  opacity: 1;
-  transform: none;
-  transition-duration: 200ms;
-  @starting-style {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-}
-dialog.project-dialog::backdrop {
-  opacity: 0;
-  transition:
-    opacity 150ms var(--ease-out),
-    display 150ms allow-discrete,
-    overlay 150ms allow-discrete;
-}
+.project-dialog-backdrop,
 dialog.project-dialog[open]::backdrop {
-  opacity: 1;
-  transition-duration: 200ms;
-  @starting-style {
-    opacity: 0;
-  }
-}
-.project-dialog-backdrop {
   transition: opacity 200ms var(--ease-out);
   @starting-style {
     opacity: 0;
   }
 }
-.project-dialog-backdrop > .project-dialog {
-  transition: transform 200ms var(--ease-out);
+.project-dialog-backdrop > .project-dialog,
+dialog.project-dialog[open] {
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
   @starting-style {
+    opacity: 0;
     transform: scale(0.96);
   }
 }
@@ -12001,20 +11967,21 @@ dialog.project-dialog[open]::backdrop {
   }
 }
 .work-fold::details-content,
+.stopped-work::details-content,
 .thinking-row::details-content,
 .tool-expandable::details-content {
   opacity: 0;
   transform: translateY(-4px);
-  transition:
-    opacity 180ms var(--ease-out),
-    transform 180ms var(--ease-out),
-    content-visibility 180ms allow-discrete;
 }
 .work-fold[open]::details-content,
+.stopped-work[open]::details-content,
 .thinking-row[open]::details-content,
 .tool-expandable[open]::details-content {
   opacity: 1;
   transform: none;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
 }
 @keyframes copied-pop {
   from {
@@ -12039,20 +12006,21 @@ dialog.project-dialog[open]::backdrop {
   .stop-btn:active {
     transform: none;
   }
-  .menu-popover,
-  .session-menu-popover,
   .slash-popover,
   .qm-tooltip,
-  dialog.project-dialog,
   .project-dialog-backdrop > .project-dialog,
+  dialog.project-dialog[open],
   .session-row,
   .bg-row-output,
   .recent-project-children,
-  .archived-children,
-  .work-fold::details-content,
-  .thinking-row::details-content,
-  .tool-expandable::details-content {
-    transition-property: opacity, display, overlay, content-visibility;
+  .archived-children {
+    transition-property: opacity;
+  }
+  .work-fold[open]::details-content,
+  .stopped-work[open]::details-content,
+  .thinking-row[open]::details-content,
+  .tool-expandable[open]::details-content {
+    transition-property: opacity;
   }
   .msg-copy.copied > svg,
   .btn.copied::after {
