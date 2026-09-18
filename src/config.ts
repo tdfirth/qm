@@ -15,14 +15,14 @@ import {
   type MemoryCaptureMode,
   type MemoryRecallMode,
 } from "./memory/policy.ts";
+import { SECURITY_POSTURES, type SecurityPosture } from "./security/security-posture.ts";
+import { SHARING_POSTURES, type SharingPosture } from "./resolution/sharing-posture.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
-import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
 import {
   parseSlackContextSource,
   type SlackContextSource,
@@ -40,6 +40,9 @@ import {
 } from "./model/pi-models.ts";
 
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
+
+const HARNESSES = ["mock", "pi", "opencode", "codex", "claude"] as const;
+const SANDBOX_BACKENDS = ["aws", "local", "sprites", "smolmachines", "e2b", "modal", "porter", "agent37"] as const;
 
 export interface Config {
   productAnalytics?: { apiKey: string; host?: string };
@@ -61,13 +64,13 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "mock" | "pi" | "opencode" | "codex" | "claude";
+  harness: (typeof HARNESSES)[number];
   securityPosture: SecurityPosture;
   sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
   sandboxScopeDefaults?: SandboxScopeDefaults;
-  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
+  sandboxBackend: (typeof SANDBOX_BACKENDS)[number];
+  sandboxSecondaryBackend?: (typeof SANDBOX_BACKENDS)[number];
   deployProvider: "docker" | "aws" | "fly" | "porter";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
@@ -281,37 +284,17 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
     ...(egress ? { egressConnectorArns: egress } : {}),
     ...(env.AWS_SANDBOX_S3_BUCKET ? { s3Bucket: env.AWS_SANDBOX_S3_BUCKET } : {}),
     ...(env.AWS_SANDBOX_S3_PREFIX ? { s3Prefix: env.AWS_SANDBOX_S3_PREFIX } : {}),
-    ...(numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) !== undefined
-      ? { agentPort: numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) !== undefined
-      ? { maxIdleDurationSeconds: numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) !== undefined
-      ? { suspendedDurationSeconds: numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) !== undefined
-      ? { maximumDurationInSeconds: numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) !== undefined
-      ? { rotateAfterSeconds: numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) !== undefined
-      ? { snapshotIntervalMs: numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) }
-      : {}),
+    ...optNum(env, "AWS_SANDBOX_AGENT_PORT", "agentPort"),
+    ...optNum(env, "AWS_SANDBOX_MAX_IDLE_SEC", "maxIdleDurationSeconds"),
+    ...optNum(env, "AWS_SANDBOX_SUSPENDED_SEC", "suspendedDurationSeconds"),
+    ...optNum(env, "AWS_SANDBOX_MAX_DURATION_SEC", "maximumDurationInSeconds"),
+    ...optNum(env, "AWS_SANDBOX_ROTATE_AFTER_SEC", "rotateAfterSeconds"),
+    ...optNum(env, "AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", "snapshotIntervalMs"),
     ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) }
-      : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
+    ...optNum(env, "AWS_SANDBOX_CPUS", "cpus"),
+    ...optNum(env, "AWS_SANDBOX_MEMORY_MB", "memoryMb"),
+    ...optNum(env, "AWS_SANDBOX_DISK_GB", "diskGb"),
   };
 }
 
@@ -328,15 +311,9 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
   return {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
-    ...(numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) !== undefined
-      ? { cpus: numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) }
-      : {}),
-    ...(numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "LOCAL_SANDBOX_CPUS", "cpus"),
+    ...optNum(env, "LOCAL_SANDBOX_MEMORY_MB", "memoryMb"),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -354,9 +331,7 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
     ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
     ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -379,18 +354,12 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
     ...(env.E2B_API_KEY ? { apiKey: env.E2B_API_KEY } : {}),
     ...(env.E2B_TEMPLATE_ID ? { templateId: env.E2B_TEMPLATE_ID } : {}),
     ...(env.E2B_NAME_PREFIX ? { namePrefix: env.E2B_NAME_PREFIX } : {}),
-    ...(numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) !== undefined
-      ? { sandboxTtlSec: numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) }
-      : {}),
+    ...optNum(env, "E2B_SANDBOX_TTL_SEC", "sandboxTtlSec"),
     ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
     ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
     ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) !== undefined
-      ? { snapshotIntervalSec: numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "E2B_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -417,24 +386,19 @@ interface ModalSandboxEnv {
 }
 
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
-  const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
     nativeSnapshotsEnabled:
       boolEnvStrict("MODAL_NATIVE_SNAPSHOTS_ENABLED", env.MODAL_NATIVE_SNAPSHOTS_ENABLED) ?? false,
-    ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
-      ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
-      : {}),
-    ...(num("MODAL_SNAPSHOT_RETENTION_SEC") !== undefined
-      ? { snapshotRetentionSec: num("MODAL_SNAPSHOT_RETENTION_SEC") }
-      : {}),
+    ...optNum(env, "MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC", "nativeSnapshotIntervalSec"),
+    ...optNum(env, "MODAL_SNAPSHOT_RETENTION_SEC", "snapshotRetentionSec"),
     ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
     ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
     ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
     ...(env.MODAL_ENVIRONMENT ? { environment: env.MODAL_ENVIRONMENT } : {}),
     ...(env.MODAL_IMAGE ? { image: env.MODAL_IMAGE } : {}),
     ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
-    ...(num("MODAL_CPUS") !== undefined ? { cpus: num("MODAL_CPUS") } : {}),
-    ...(num("MODAL_MEMORY_MB") !== undefined ? { memoryMb: num("MODAL_MEMORY_MB") } : {}),
+    ...optNum(env, "MODAL_CPUS", "cpus"),
+    ...optNum(env, "MODAL_MEMORY_MB", "memoryMb"),
     ...(env.MODAL_REGIONS?.trim()
       ? {
           regions: env.MODAL_REGIONS.split(",")
@@ -442,15 +406,13 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
             .filter(Boolean),
         }
       : {}),
-    ...(num("MODAL_SANDBOX_TIMEOUT_SEC") !== undefined ? { sandboxTimeoutSec: num("MODAL_SANDBOX_TIMEOUT_SEC") } : {}),
-    ...(num("MODAL_ROTATE_AFTER_SEC") !== undefined ? { rotateAfterSec: num("MODAL_ROTATE_AFTER_SEC") } : {}),
-    ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
+    ...optNum(env, "MODAL_SANDBOX_TIMEOUT_SEC", "sandboxTimeoutSec"),
+    ...optNum(env, "MODAL_ROTATE_AFTER_SEC", "rotateAfterSec"),
+    ...optNum(env, "MODAL_REAP_IDLE_SEC", "reapIdleSec"),
     ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
     ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
-    ...(num("MODAL_SNAPSHOT_INTERVAL_SEC") !== undefined
-      ? { snapshotIntervalSec: num("MODAL_SNAPSHOT_INTERVAL_SEC") }
-      : {}),
-    ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
+    ...optNum(env, "MODAL_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -472,19 +434,11 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...(env.SMOLMACHINES_BASE_URL ? { baseUrl: env.SMOLMACHINES_BASE_URL } : {}),
     ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
     ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
-    ...(numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) !== undefined
-      ? { cpus: numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
-      : {}),
+    ...optNum(env, "SMOLMACHINES_CPUS", "cpus"),
+    ...optNum(env, "SMOLMACHINES_MEMORY_MB", "memoryMb"),
+    ...optNum(env, "SMOLMACHINES_DISK_GB", "diskGb"),
     ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -522,20 +476,15 @@ function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
 const porterLocatorPresent = (env: NodeJS.ProcessEnv): boolean =>
   Boolean(porterApiBaseUrl(env) || env.PORTER_CLUSTER_ID || env.KUBERNETES_SERVICE_HOST);
 
-function porterDeployVisibilityStrict(value: string | undefined): PorterDeployEnv["visibility"] {
-  if (value === undefined || value.trim() === "") return undefined;
-  const visibility = value.trim();
-  if (visibility === "public" || visibility === "private") return visibility;
-  throw new Error(
-    `PORTER_DEPLOY_VISIBILITY=${JSON.stringify(value)} is not recognized — use public or private, or unset it.`,
-  );
-}
-
 function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
   const token = env.PORTER_DEPLOY_API_TOKEN;
   const baseUrl = porterApiBaseUrl(env);
-  const visibility = porterDeployVisibilityStrict(env.PORTER_DEPLOY_VISIBILITY);
-  const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
+  const visibility = enumEnvStrict(
+    "PORTER_DEPLOY_VISIBILITY",
+    env.PORTER_DEPLOY_VISIBILITY,
+    ["public", "private"],
+    undefined,
+  );
   const runnerImage = env.PORTER_DEPLOY_RUNNER_IMAGE ?? env.PORTER_SANDBOX_IMAGE;
   return {
     ...(token ? { token } : {}),
@@ -544,25 +493,22 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
     ...(env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: env.PORTER_DEPLOY_APPS_DOMAIN } : {}),
     ...(visibility ? { visibility } : {}),
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
+    ...optNum(env, "PORTER_DEPLOY_TTL_SEC", "ttlSec"),
   };
 }
 
 function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
   const token = env.PORTER_DEPLOY_API_TOKEN;
   const baseUrl = porterApiBaseUrl(env);
-  const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
   return {
     ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
     ...(token ? { token } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
+    ...optNum(env, "PORTER_SANDBOX_TTL_SEC", "ttlSec"),
     ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -584,19 +530,11 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...(env.AGENT37_API_BASE_URL ? { baseUrl: env.AGENT37_API_BASE_URL } : {}),
     ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
     ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
-    ...(numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) }
-      : {}),
-    ...(numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) !== undefined
-      ? { memoryGb: numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) }
-      : {}),
-    ...(numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
-      : {}),
+    ...optNum(env, "AGENT37_CPUS", "cpus"),
+    ...optNum(env, "AGENT37_MEMORY_GB", "memoryGb"),
+    ...optNum(env, "AGENT37_DISK_GB", "diskGb"),
     ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
 
@@ -720,29 +658,15 @@ function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
     ...(env.AWS_DEPLOY_EXEC_ROLE_ARN ? { executionRoleArn: env.AWS_DEPLOY_EXEC_ROLE_ARN } : {}),
     ...(ingress ? { ingressConnectorArns: ingress } : {}),
     ...(egress ? { egressConnectorArns: egress } : {}),
-    ...(numEnvStrict("AWS_DEPLOY_AGENT_PORT", env.AWS_DEPLOY_AGENT_PORT) !== undefined
-      ? { agentPort: numEnvStrict("AWS_DEPLOY_AGENT_PORT", env.AWS_DEPLOY_AGENT_PORT) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_APP_PORT", env.AWS_DEPLOY_APP_PORT) !== undefined
-      ? { appPort: numEnvStrict("AWS_DEPLOY_APP_PORT", env.AWS_DEPLOY_APP_PORT) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_MAX_DURATION_SEC", env.AWS_DEPLOY_MAX_DURATION_SEC) !== undefined
-      ? { maximumDurationInSeconds: numEnvStrict("AWS_DEPLOY_MAX_DURATION_SEC", env.AWS_DEPLOY_MAX_DURATION_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_ROTATE_AFTER_SEC", env.AWS_DEPLOY_ROTATE_AFTER_SEC) !== undefined
-      ? { rotateAfterSeconds: numEnvStrict("AWS_DEPLOY_ROTATE_AFTER_SEC", env.AWS_DEPLOY_ROTATE_AFTER_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_MAX_IDLE_SEC", env.AWS_DEPLOY_MAX_IDLE_SEC) !== undefined
-      ? { maxIdleDurationSeconds: numEnvStrict("AWS_DEPLOY_MAX_IDLE_SEC", env.AWS_DEPLOY_MAX_IDLE_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_SUSPENDED_SEC", env.AWS_DEPLOY_SUSPENDED_SEC) !== undefined
-      ? { suspendedDurationSeconds: numEnvStrict("AWS_DEPLOY_SUSPENDED_SEC", env.AWS_DEPLOY_SUSPENDED_SEC) }
-      : {}),
+    ...optNum(env, "AWS_DEPLOY_AGENT_PORT", "agentPort"),
+    ...optNum(env, "AWS_DEPLOY_APP_PORT", "appPort"),
+    ...optNum(env, "AWS_DEPLOY_MAX_DURATION_SEC", "maximumDurationInSeconds"),
+    ...optNum(env, "AWS_DEPLOY_ROTATE_AFTER_SEC", "rotateAfterSeconds"),
+    ...optNum(env, "AWS_DEPLOY_MAX_IDLE_SEC", "maxIdleDurationSeconds"),
+    ...optNum(env, "AWS_DEPLOY_SUSPENDED_SEC", "suspendedDurationSeconds"),
     ...(env.AWS_DEPLOY_APPS_DOMAIN ? { appsDomain: env.AWS_DEPLOY_APPS_DOMAIN } : {}),
     ...(env.AWS_DEPLOY_GATE_SECRET ? { gateSecret: env.AWS_DEPLOY_GATE_SECRET } : {}),
-    ...(numEnvStrict("AWS_DEPLOY_TOKEN_TTL_MIN", env.AWS_DEPLOY_TOKEN_TTL_MIN) !== undefined
-      ? { tokenTtlMinutes: numEnvStrict("AWS_DEPLOY_TOKEN_TTL_MIN", env.AWS_DEPLOY_TOKEN_TTL_MIN) }
-      : {}),
+    ...optNum(env, "AWS_DEPLOY_TOKEN_TTL_MIN", "tokenTtlMinutes"),
     ...(env.AWS_DEPLOY_DATA_BUCKET ? { dataBucket: env.AWS_DEPLOY_DATA_BUCKET } : {}),
     ...(env.AWS_DEPLOY_DATA_PREFIX ? { dataPrefix: env.AWS_DEPLOY_DATA_PREFIX } : {}),
     ...(env.AWS_DEPLOY_DATA_ROLE_ARN ? { dataRoleArn: env.AWS_DEPLOY_DATA_ROLE_ARN } : {}),
@@ -863,6 +787,29 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
   return parsed;
 }
 
+function optNum<K extends string>(env: NodeJS.ProcessEnv, name: string, key: K): Partial<Record<K, number>> {
+  const parsed = numEnvStrict(name, env[name]);
+  return parsed === undefined ? {} : ({ [key]: parsed } as Record<K, number>);
+}
+
+const lowercased = (value: string): string => value.trim().toLowerCase();
+
+const orList = (items: readonly string[]): string =>
+  items.length === 2 ? items.join(" or ") : `${items.slice(0, -1).join(", ")}, or ${items.at(-1)}`;
+
+function enumEnvStrict<T extends string, F extends T | undefined>(
+  name: string,
+  value: string | undefined,
+  allowed: readonly T[],
+  fallback: F,
+  normalize: (value: string) => string = (v) => v.trim(),
+): T | F {
+  if (value === undefined || value.trim() === "") return fallback;
+  const normalized = normalize(value);
+  if ((allowed as readonly string[]).includes(normalized)) return normalized as T;
+  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use ${orList(allowed)}, or unset it.`);
+}
+
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   return sanitizeBranding({
     accent: env.ORG_BRAND_ACCENT,
@@ -870,16 +817,6 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
     selfLabel: env.ORG_BRAND_SELF_LABEL,
     orgName: env.ORG_BRAND_ORG_NAME,
   });
-}
-
-function harnessEnvStrict(value: string | undefined): Config["harness"] {
-  if (value === undefined || value.trim() === "") return "mock";
-  const harness = value.trim();
-  if (harness === "mock" || harness === "pi" || harness === "opencode" || harness === "codex" || harness === "claude")
-    return harness;
-  throw new Error(
-    `HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, opencode, codex, or claude, or unset it.`,
-  );
 }
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
@@ -900,64 +837,13 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
   return [...enabled];
 }
 
-function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
-  if (value === undefined || value.trim() === "") return "local";
-  const backend = value.trim();
-  if (
-    backend === "aws" ||
-    backend === "local" ||
-    backend === "sprites" ||
-    backend === "smolmachines" ||
-    backend === "e2b" ||
-    backend === "modal" ||
-    backend === "agent37" ||
-    backend === "porter"
-  )
-    return backend;
-  throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, or agent37, or unset it.`,
-  );
-}
-
 function secretsBackendEnvStrict(value: string | undefined, prefix: string): Config["secretsBackend"] {
-  if (value === undefined || value.trim() === "") return "env";
-  const backend = value.trim();
-  if (backend === "env") return backend;
-  if (backend === "aws") {
-    if (!prefix)
-      throw new Error(
-        "SECRETS_BACKEND=aws requires a non-empty SECRETS_PREFIX (e.g. qm-prod-) so lookups can't collide across stacks sharing an account.",
-      );
-    return backend;
-  }
-  throw new Error(`SECRETS_BACKEND=${JSON.stringify(value)} is not recognized — use env or aws, or unset it.`);
-}
-
-function securityPostureEnvStrict(value: string | undefined): SecurityPosture {
-  if (value === undefined || value.trim() === "") return "auto";
-  const posture = parseSecurityPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SECURITY_POSTURE=${JSON.stringify(value)} is not recognized — use dangerous, auto, or strict, or unset it.`,
-  );
-}
-
-function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
-  if (value === undefined || value.trim() === "") return "isolated";
-  const posture = parseSharingPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SHARING_POSTURE=${JSON.stringify(value)} is not recognized — use isolated or open, or unset it.`,
-  );
-}
-
-function securityScreenBackendEnvStrict(value: string | undefined): Config["securityScreenBackend"] {
-  if (value === undefined || value.trim() === "") return "off";
-  const backend = value.trim().toLowerCase();
-  if (backend === "off" || backend === "model" || backend === "proxy") return backend;
-  throw new Error(
-    `SECURITY_SCREEN_BACKEND=${JSON.stringify(value)} is not recognized — use off, model, or proxy, or unset it.`,
-  );
+  const backend = enumEnvStrict("SECRETS_BACKEND", value, ["env", "aws"], "env");
+  if (backend === "aws" && !prefix)
+    throw new Error(
+      "SECRETS_BACKEND=aws requires a non-empty SECRETS_PREFIX (e.g. qm-prod-) so lookups can't collide across stacks sharing an account.",
+    );
+  return backend;
 }
 
 function csvPaths(value: string | undefined): string[] | undefined {
@@ -1009,7 +895,7 @@ function defaultPluginSkillDirs(): string[] {
   }
 }
 
-function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefined {
+function modelProviderEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"]): ModelProvider | undefined {
   const declared = env.MODEL_PROVIDER?.trim();
   if (!declared) return undefined;
   if (!isModelProvider(declared)) {
@@ -1017,7 +903,6 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
       `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
     );
   }
-  const harness = harnessEnvStrict(env.HARNESS);
   const base = defaultModelForProvider(harness, declared);
   if (!base) {
     throw new Error(
@@ -1044,7 +929,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const swarmDefaults = resolveSwarmSettings(
     env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
   );
-  const harness = harnessEnvStrict(env.HARNESS);
+  const harness = enumEnvStrict("HARNESS", env.HARNESS, HARNESSES, "mock");
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
   const codexAuthCandidate = harness === "codex" && !codexAuthCredential ? codexAuthFileForEnv(env, true) : undefined;
@@ -1068,7 +953,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "CODEX_AUTH_FILE is supported for local Codex harnesses only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
     );
   }
-  const modelProvider = modelProviderEnvStrict(env);
+  const modelProvider = modelProviderEnvStrict(env, harness);
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
       throw new Error(
@@ -1088,7 +973,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
     );
   }
-  if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
+  if (env.NODE_ENV === "production" && harness === "mock") {
     console.warn(
       `[config] HARNESS is ${env.HARNESS?.trim() ? '"mock"' : "unset, which means mock"} in production — this deployment answers every message with canned text and calls no model provider. Set HARNESS=pi to run real agent turns.`,
     );
@@ -1125,7 +1010,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, aws, or local.",
     );
   }
-  const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
+  const sandboxBackend = enumEnvStrict("SANDBOX_BACKEND", env.SANDBOX_BACKEND, SANDBOX_BACKENDS, "local");
   const sandboxScopeDefaults: SandboxScopeDefaults = {};
   if (env.SANDBOX_SCOPE_BACKENDS) {
     const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
@@ -1135,7 +1020,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       const parsed = parseScopeId(kind + ":scope").kind;
       if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
         throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      sandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
+      sandboxScopeDefaults[parsed] = enumEnvStrict("SANDBOX_SCOPE_BACKENDS." + kind, value, SANDBOX_BACKENDS, "local");
     }
   }
 
@@ -1152,7 +1037,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `[config] ${retiredBrainEnv.join(", ")} ${retiredBrainEnv.length === 1 ? "is" : "are"} retired and ignored — the brain integration was removed; point an external knowledge server at MEMORY_PROVIDER_CONFIG (docs/memory-providers.md). Remove the variables.`,
     );
   }
-  const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
+  const securityScreenBackend = enumEnvStrict(
+    "SECURITY_SCREEN_BACKEND",
+    env.SECURITY_SCREEN_BACKEND,
+    ["off", "model", "proxy"],
+    "off",
+    lowercased,
+  );
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
@@ -1295,8 +1186,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness,
-    securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
-    sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
+    securityPosture: enumEnvStrict(
+      "HARNESS_SECURITY_POSTURE",
+      env.HARNESS_SECURITY_POSTURE,
+      SECURITY_POSTURES,
+      "auto",
+      lowercased,
+    ),
+    sharingPosture: enumEnvStrict(
+      "HARNESS_SHARING_POSTURE",
+      env.HARNESS_SHARING_POSTURE,
+      SHARING_POSTURES,
+      "isolated",
+      lowercased,
+    ),
     securityScreenBackend,
     ...(securityScreenBackend === "proxy"
       ? {
@@ -1365,16 +1268,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       numEnvStrict("RATE_LIMIT_PER_WINDOW", env.RATE_LIMIT_PER_WINDOW) ?? CONFIG_DEFAULTS.rateLimitPerWindow,
     rateLimitWindowMs:
       numEnvStrict("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS) ?? CONFIG_DEFAULTS.rateLimitWindowMs,
-    ...(numEnvStrict("BUDGET_USD_PER_WINDOW", env.BUDGET_USD_PER_WINDOW) !== undefined
-      ? { budgetUsdPerWindow: numEnvStrict("BUDGET_USD_PER_WINDOW", env.BUDGET_USD_PER_WINDOW) }
-      : {}),
-    ...(numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) !== undefined
-      ? { orgBudgetUsdPerWindow: numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) }
-      : {}),
+    ...optNum(env, "BUDGET_USD_PER_WINDOW", "budgetUsdPerWindow"),
+    ...optNum(env, "ORG_BUDGET_USD_PER_WINDOW", "orgBudgetUsdPerWindow"),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
-    ...(numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) !== undefined
-      ? { maxContextTokens: numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) }
-      : {}),
+    ...optNum(env, "MAX_CONTEXT_TOKENS", "maxContextTokens"),
     execTimeoutDefaultMs:
       (numEnvStrict("EXEC_TIMEOUT_DEFAULT_SEC", env.EXEC_TIMEOUT_DEFAULT_SEC) ??
         CONFIG_DEFAULTS.execTimeoutDefaultSec) * 1000,
@@ -1432,23 +1329,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
-    ...(numEnvStrict("MEMORY_CONSOLIDATE_AFTER", env.MEMORY_CONSOLIDATE_AFTER) !== undefined
-      ? { memoryConsolidateAfter: numEnvStrict("MEMORY_CONSOLIDATE_AFTER", env.MEMORY_CONSOLIDATE_AFTER) }
-      : {}),
+    ...optNum(env, "MEMORY_CONSOLIDATE_AFTER", "memoryConsolidateAfter"),
     memoryCaptureQuietMs:
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
-    ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
-      ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
-      : {}),
+    ...optNum(env, "MEMORY_CAPTURE_MAX_TURNS", "memoryCaptureMaxTurns"),
     filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
-    ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
-      ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
-      : {}),
+    ...optNum(env, "DEPLOY_IDLE_TTL_MS", "deployIdleTtlMs"),
     deployGitDir: env.DEPLOY_GIT_DIR ? resolve(env.DEPLOY_GIT_DIR) : join(dataDir, "deploy-git"),
     deployDialTimeoutMs:
       numEnvStrict("DEPLOY_DIAL_TIMEOUT_MS", env.DEPLOY_DIAL_TIMEOUT_MS) ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
