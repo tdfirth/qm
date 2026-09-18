@@ -28,7 +28,7 @@ import {
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxIo } from "./exec-sandbox-base.ts";
 import type {
   AgentComputerProfile,
@@ -318,7 +318,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
-          throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
+          throw new Error(`porter provision prep failed: ${execFailureDetail(prep, 60).slice(0, 200)}`);
 
         await materializeRoLayers(
           workspace,

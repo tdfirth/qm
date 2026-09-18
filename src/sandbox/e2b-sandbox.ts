@@ -22,7 +22,7 @@ import {
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxIo, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { E2bSandboxGoneError, type E2bClient, type E2bSession } from "./e2b-client.ts";
 import {
@@ -357,8 +357,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       try {
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
+        if (prep.code !== 0) throw new Error(`e2b provision prep failed: ${execFailureDetail(prep, 60).slice(0, 200)}`);
 
         await materializeRoLayers(
           workspace,
