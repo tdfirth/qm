@@ -9337,7 +9337,7 @@ h3.ambient-field-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: 11px;
   color: var(--muted-foreground);
   text-decoration: none;
 }
@@ -9345,9 +9345,6 @@ h3.ambient-field-label {
 .inbox-external-link:hover {
   color: var(--foreground);
   text-decoration: underline;
-}
-.inbox-session-link {
-  font-size: 11px;
 }
 .inbox-draft-headers-fields {
   display: flex;
