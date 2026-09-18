@@ -243,6 +243,31 @@ process.on("SIGTERM", () => {
   return path;
 }
 
+function pendingThreadStartCodexBinary(dir: string): string {
+  const path = join(dir, "pending-thread-start-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") fs.writeFileSync(${JSON.stringify(join(dir, "thread-started"))}, String(msg.id));
+});
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
+  process.exit(0);
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function refreshThenNonresponsiveCodexBinary(dir: string): string {
   const path = join(dir, "refresh-then-nonresponsive-codex");
   const accessToken = oauthAccessToken("startup-account", "startup-after");
@@ -1150,6 +1175,145 @@ test("cancelling a pending Codex turn/start stops and closes the runtime", async
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test("a pending Codex thread/start rejects with its deadline error and closes the runtime", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-timeout-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 1_000,
+    threadStartTimeoutMs: 75,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  await assert.rejects(
+    harness.turns.runTurn({
+      session: { id: "thread-start-timeout" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) =>
+        ({ ...entry, sessionId: "thread-start-timeout", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof NonRetryableTurnError);
+      assert.equal(error.message, "Codex thread/start request timed out");
+      assert.match(error.cause instanceof Error ? error.cause.message : "", /request cancelled/);
+      return true;
+    },
+  );
+  assert.equal(existsSync(join(dir, "thread-started")), true);
+  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test("the turn wall-clock boundary preserves a pending Codex thread/start deadline", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-wall-clock-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 1_000,
+    threadStartTimeoutMs: 1_000,
+    turnWallClockMs: 500,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  await assert.rejects(
+    harness.turns.runTurn({
+      session: { id: "thread-start-wall-clock" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) =>
+        ({ ...entry, sessionId: "thread-start-wall-clock", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof NonRetryableTurnError);
+      assert.equal(error.message, "Codex thread/start request timed out");
+      return true;
+    },
+  );
+  assert.equal(existsSync(join(dir, "thread-started")), true);
+  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test("cancelling a pending Codex thread/start remains a clean stop", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-cancel-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 1_000,
+    threadStartTimeoutMs: 5_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const cancel = new AbortController();
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "thread-start-cancel" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    cancel: cancel.signal,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "thread-start-cancel", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  while (!existsSync(join(dir, "thread-started"))) await new Promise((resolve) => setTimeout(resolve, 5));
+  cancel.abort();
+  assert.deepEqual(await turn, { reply: "", stopped: true });
+  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test("closing a harness during Codex thread/start is not relabeled as a deadline", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-close-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 1_000,
+    threadStartTimeoutMs: 5_000,
+  });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "thread-start-close" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "thread-start-close", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  while (!existsSync(join(dir, "thread-started"))) await new Promise((resolve) => setTimeout(resolve, 5));
+  const closed = harness.turns.close?.();
+  await assert.rejects(turn, (error: unknown) => {
+    assert.ok(!(error instanceof NonRetryableTurnError));
+    assert.notEqual(error instanceof Error ? error.message : String(error), "Codex thread/start request timed out");
+    return true;
+  });
+  await closed;
 });
 
 test("per-user Codex turns run on their own app-server with derived auth, never the shared jail", async (t) => {

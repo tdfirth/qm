@@ -12,6 +12,41 @@ const cases = [
   { name: "an unterminated final frame at EOF", text: "before\u2028after", ending: "", fragmented: true },
 ];
 
+test("aborting a Codex RPC removes it and ignores its late response", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-request-abort-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "pending") return setTimeout(() => send({ id: message.id, result: "late" }), 30);
+  if (message.method === "ping") send({ id: message.id, result: "pong" });
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const server = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: () => {},
+    onRequest: async () => ({}),
+  });
+  t.after(async () => {
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const abort = new AbortController();
+  const pending = server.request("pending", {}, abort.signal);
+  setTimeout(() => abort.abort(), 5);
+  await assert.rejects(pending, /request cancelled/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await server.request("ping"), "pong");
+  assert.equal(server.error(), null);
+});
+
 test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 3000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-tool-concurrency-"));
   const binary = join(dir, "codex");

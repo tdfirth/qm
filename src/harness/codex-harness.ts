@@ -44,6 +44,7 @@ export interface CodexHarnessOptions extends HarnessToolPlumbing {
   env?: NodeJS.ProcessEnv;
   turnWallClockMs?: number;
   appServerStartTimeoutMs?: number;
+  threadStartTimeoutMs?: number;
   /** Cap on simultaneous per-user app-server launches (default 8). */
   maxConcurrentUserServers?: number;
   /** Custodian of the ChatGPT-subscription Codex login (keychain-backed in production). */
@@ -774,7 +775,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     const onSetupCancel = () => stopSetup(setupCancelled);
     turn.cancel?.addEventListener("abort", onSetupCancel, { once: true });
-    const setupTimer = wallMs > 0 ? setTimeout(() => stopSetup(setupTimedOut), wallMs) : undefined;
+    let setupTimer = wallMs > 0 ? setTimeout(() => stopSetup(setupTimedOut), wallMs) : undefined;
     const finishSetup = () => {
       setupSettled = true;
       if (setupTimer) clearTimeout(setupTimer);
@@ -953,9 +954,16 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     let started: { thread: { id: string }; model?: string };
     try {
-      const requestTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;
+      if (setupTimer) {
+        clearTimeout(setupTimer);
+        setupTimer = undefined;
+      }
+      const requestTimeoutMs = deadline
+        ? Math.min(opts.threadStartTimeoutMs ?? CODEX_START_TIMEOUT_MS, Math.max(1, deadline - Date.now()))
+        : (opts.threadStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
       let requestTimer: NodeJS.Timeout | undefined;
       const requestAbort = new AbortController();
+      let requestTimedOut = false;
       started = await awaitSetup(
         Promise.race([
           rt.server.request(
@@ -966,14 +974,25 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           ),
           new Promise<never>((_, reject) => {
             requestTimer = setTimeout(() => {
+              requestTimedOut = true;
               requestAbort.abort();
               reject(new NonRetryableTurnError("Codex thread/start request timed out"));
             }, requestTimeoutMs);
           }),
-        ]).finally(() => {
-          if (requestTimer) clearTimeout(requestTimer);
-        }),
+        ])
+          .finally(() => {
+            if (requestTimer) clearTimeout(requestTimer);
+          })
+          .catch((error: unknown) => {
+            if (requestTimedOut) {
+              const timeoutError = new NonRetryableTurnError("Codex thread/start request timed out");
+              timeoutError.cause = error;
+              throw timeoutError;
+            }
+            throw error;
+          }),
       );
+      if (deadline) setupTimer = setTimeout(() => stopSetup(setupTimedOut), Math.max(1, deadline - Date.now()));
     } catch (error) {
       return failSetup(error);
     }
