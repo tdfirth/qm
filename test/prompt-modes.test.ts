@@ -1,56 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore, type OrgBranding } from "../src/resolution/config-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
 
 const ORG = "default-org";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
 function fakeSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("fakeSandbox: a !sysprompt turn must not touch the sandbox");
-  };
+  const sandbox = unreachableSandbox("fakeSandbox: a !sysprompt turn must not touch the sandbox");
   return {
+    ...sandbox,
     profile: {
-      backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
-      processSessions: false,
+      ...sandbox.profile,
       spec: { os: "Debian 12 (bookworm)", tools: ["git", "jq"], workdir: "/workspace", homeDir: "/root" },
     },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
   };
 }
 
@@ -87,38 +59,9 @@ function buildOrchestrator(
   if (opts.orgSoul !== undefined) config.setSoul(scopeId("org", ORG), opts.orgSoul);
   if (opts.branding) config.setBranding(scopeId("org", ORG), opts.branding);
 
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
-  const memory = createMemoryService(workspace);
-  const deploy = createDeployService({
-    deployStore: createDeployStore(),
-    provider: createDockerDeployProvider(),
-    deployDir: join(tmpdir(), "pm-deploy"),
-    auditLog,
-    acl,
-  });
-  const resolution = createResolutionService(ORG, config, acl);
-
-  if (opts.scopeSoulFor) {
-    const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);
-    config.setSoul(scope, opts.scopeSoulFor.soul);
-  }
-
-  return createOrchestrator({
-    identity: createIdentityService(),
-    resolution,
-    sessions: createMemorySessionStore(),
-    workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
-    auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
+  const built = testOrchestrator({
     harness: createMockHarness(),
-    memory,
-    deploy,
-    acl,
+    sandbox: fakeSandbox(),
     config,
     ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
@@ -128,6 +71,10 @@ function buildOrchestrator(
     signingSecret: "test-signing-secret",
     apiBaseUrl: "https://api.test",
   });
+  if (opts.scopeSoulFor) {
+    config.setSoul(built.resolution.scopeFor(opts.scopeSoulFor.conversation, actor), opts.scopeSoulFor.soul);
+  }
+  return built.orchestrator;
 }
 
 const dmConversation: Conversation = { kind: "dm", threadRef: "dm:U1:pm1", audience: [actor] };

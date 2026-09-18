@@ -1,29 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createResolutionService } from "../src/resolution/resolution-service.ts";
+import { type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { defineHarness } from "../src/harness/harness.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -31,26 +13,8 @@ import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
+import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
 
-function fakeSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("the retry-replay tests must not provision a sandbox");
-  };
-  return {
-    profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
-  };
-}
-
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audience: [actor] };
 
@@ -97,30 +61,11 @@ async function scenario() {
       },
     },
   );
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
-  const orchestrator = createOrchestrator({
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+  const { orchestrator } = testOrchestrator({
+    harness,
+    sandbox: unreachableSandbox("the retry-replay tests must not provision a sandbox"),
     sessions,
     runs,
-    workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
-    auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
-    deploy: createDeployService({
-      deployStore: createDeployStore(),
-      provider: createDockerDeployProvider(),
-      deployDir: join(tmpdir(), "session-mail-deploy"),
-      auditLog,
-      acl,
-    }),
-    acl,
     deliveries: createDeliveryStore(),
     featureFlags,
     sessionSyscalls,

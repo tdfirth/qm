@@ -1,26 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
+import { type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
@@ -37,10 +19,9 @@ import { waitFor } from "./support/settle.ts";
 import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
 
-const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
@@ -78,57 +59,15 @@ function spyHarness(opts: { withSummarizer?: boolean } = {}) {
   return { harness, compactCalls, resetCalls };
 }
 
-function fakeSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("fakeSandbox: a conversational compaction turn must not touch the sandbox");
-  };
-  return {
-    profile: {
-      backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
-      processSessions: false,
-    },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
-  };
-}
-
 function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultTurnWallClockMs?: number) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const errors = createErrorLog();
-  const sessions = createMemorySessionStore();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
-  const deploy = createDeployService({
-    deployStore: createDeployStore(),
-    provider: createDockerDeployProvider(),
-    deployDir: join(tmpdir(), "cc-deploy"),
-    auditLog,
-    acl,
-  });
-  const orch = createOrchestrator({
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+  const {
+    orchestrator: orch,
     sessions,
-    workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
-    auditLog,
     errors,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
+  } = testOrchestrator({
     harness,
-    memory: createMemoryService(workspace),
-    deploy,
-    acl,
+    sandbox: unreachableSandbox("fakeSandbox: a conversational compaction turn must not touch the sandbox"),
+    errors: createErrorLog(),
     maxContextTokens,
     defaultTurnWallClockMs,
   });

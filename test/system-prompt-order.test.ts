@@ -5,27 +5,11 @@ import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/ski
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { readFileSync } from "node:fs";
+import { type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { LivenessCache } from "../src/credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
@@ -34,30 +18,19 @@ import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts"
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
+import { testOrchestrator, unreachableSandbox } from "./support/fakes.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 
 function fakeSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("fakeSandbox: a conversational !sysprompt turn must not touch the sandbox");
-  };
+  const sandbox = unreachableSandbox("fakeSandbox: a conversational !sysprompt turn must not touch the sandbox");
   return {
+    ...sandbox,
     profile: {
-      backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
-      processSessions: false,
+      ...sandbox.profile,
       spec: { os: "Debian 12 (bookworm)", tools: ["git", "jq"], workdir: "/workspace", homeDir: "/root" },
     },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
   };
 }
 
@@ -104,35 +77,10 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
-  const memory = createMemoryService(workspace);
-  const deploy = createDeployService({
-    deployStore: createDeployStore(),
-    provider: createDockerDeployProvider(),
-    deployDir: join(tmpdir(), "spo-deploy"),
-    auditLog,
-    acl,
-  });
-  const sessions = createMemorySessionStore();
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const orchestrator = createOrchestrator({
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
-    sessions,
-    workspace,
-    files,
-    sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
-    auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
+  return testOrchestrator({
     harness: createMockHarness(),
-    memory,
-    deploy,
-    acl,
-    config,
+    sandbox: fakeSandbox(),
+    config: createMemoryConfigStore(ORG),
     skills,
     livenessCache,
     connectorTokens,
@@ -145,7 +93,6 @@ function buildOrchestrator(
     apiBaseUrl: "https://api.test",
     ...extra,
   });
-  return { orchestrator, memory, config, workspace, sessions, files, auditLog, acl };
 }
 
 const dm = (thread: string, text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({

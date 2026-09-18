@@ -1,31 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
+import { type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { testOrchestrator } from "./support/fakes.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> => ({
   surface: "test",
@@ -105,32 +87,9 @@ function buildOrchestrator(
   eagerProvision = false,
   surfaceCache?: SurfaceCache,
 ) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
-  const sessions = createMemorySessionStore();
-  const deploy = createDeployService({
-    deployStore: createDeployStore(),
-    provider: createDockerDeployProvider(),
-    deployDir: join(tmpdir(), "frr-deploy"),
-    auditLog,
-    acl,
-  });
-  const orch = createOrchestrator({
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
-    sessions,
-    workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox,
-    modelGateway: createModelGateway(),
-    auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
+  const { orchestrator: orch, sessions } = testOrchestrator({
     harness,
-    memory: createMemoryService(workspace),
-    deploy,
-    acl,
+    sandbox,
     eagerProvision,
     ...(errors ? { errors } : {}),
     ...(surfaceCache ? { surfaceCache } : {}),
