@@ -415,6 +415,28 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
   };
 
   const processCollabItem = async (state: ActiveTurn, item: CodexItem): Promise<void> => {
+    if (item.type === "subAgentActivity" && item.kind === "started" && typeof item.agentThreadId === "string") {
+      const receiver = item.agentThreadId;
+      if (state.taskIds.has(receiver)) return;
+      const taskId = `${String(item.id)}:${receiver}`;
+      if (opts.tasks)
+        await opts.tasks.create({
+          id: taskId,
+          sessionId: state.turn.session.id,
+          originRunId: state.turn.runId ?? state.turn.session.id,
+          title: typeof item.agentPath === "string" ? `Subagent ${item.agentPath}` : "Subagent",
+          status: "in_progress",
+        });
+      state.taskIds.set(receiver, taskId);
+      state.taskStatuses.set(taskId, "in_progress");
+      active.set(receiver, state);
+      await state.turn.emit({
+        type: "tool_call",
+        payload: { tool: "spawnAgent", callId: taskId, receiverThreadId: receiver },
+        scopeLabel: state.turn.scopeLabel,
+      });
+      return;
+    }
     if (item.type !== "collabAgentToolCall") return;
     const tool = String(item.tool ?? "");
     const receivers = Array.isArray(item.receiverThreadIds)
@@ -552,6 +574,27 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             }
           }
           await processCollabItem(state, item);
+          if (method === "item/completed" && threadId !== state.threadId && item.type === "agentMessage") {
+            const taskId = state.taskIds.get(threadId);
+            const prior = taskId ? state.taskStatuses.get(taskId) : undefined;
+            if (taskId && prior === "in_progress") {
+              await transitionTask(opts.tasks, taskId, prior, "completed", state.turn.runId ?? state.turn.session.id);
+              state.taskStatuses.set(taskId, "completed");
+              if (!state.taskResults.has(taskId)) {
+                state.taskResults.add(taskId);
+                await state.turn.emit({
+                  type: "tool_result",
+                  payload: {
+                    tool: "spawnAgent",
+                    callId: taskId,
+                    result: typeof item.text === "string" ? item.text : "completed",
+                    isError: false,
+                  },
+                  scopeLabel: state.turn.scopeLabel,
+                });
+              }
+            }
+          }
         }
         if (method === "turn/completed" && threadId === state.threadId) {
           const completed = p.turn as CodexTurn | undefined;
@@ -920,7 +963,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         cwd: rt.jail,
         approvalPolicy: "never",
         sandbox: "read-only",
-        ephemeral: true,
+        ephemeral: false,
         baseInstructions: turn.systemPrompt,
         developerInstructions:
           "Use the supplied dynamic tools for all workspace, execution, memory, history, and surface operations. The built-in working directory is an empty read-only control jail, not the user's workspace.",

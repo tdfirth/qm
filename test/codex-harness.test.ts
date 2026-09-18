@@ -82,7 +82,7 @@ rl.on("line", (line) => {
   if (msg.method === "initialize") return send({ id: msg.id, result: { userAgent: "fake" } });
   if (msg.method === "initialized") return;
   if (msg.method === "thread/start") {
-    if (msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
+    if (msg.params.ephemeral !== false || msg.params.sandbox !== "read-only" || msg.params.approvalPolicy !== "never" || !Array.isArray(msg.params.dynamicTools) ||
         !Array.isArray(msg.params.environments) || msg.params.environments.length !== 0 ||
         msg.params.config?.features?.shell_tool !== false || msg.params.config?.features?.unified_exec !== false ||
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
@@ -133,12 +133,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (msg.method === "initialized") return;
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
   if (msg.method === "turn/start") {
-    send({ method: "item/started", params: { threadId: "parent", item: { type: "collabAgentToolCall", id: "spawn", tool: "spawnAgent", receiverThreadIds: ["child"], prompt: "run child tool" } } });
+    send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
     send({ id: "child-tool", method: "item/tool/call", params: { threadId: "child", turnId: "child-turn", callId: "child-call", tool: "execute", arguments: { command: "true" } } });
     return send({ id: msg.id, result: { turn: { id: "parent-turn", status: "inProgress", items: [] } } });
   }
   if (msg.id === "child-tool") {
     if (msg.error) return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "failed", error: { message: msg.error.message }, items: [] } } });
+    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-answer", text: "CHILD-OK", phase: "final_answer" } } });
     return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [{ type: "agentMessage", text: "CHILD-OK", phase: "final_answer" }] } } });
   }
   if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
@@ -576,7 +577,7 @@ test("Codex child tool routing waits for durable task registration", { timeout: 
   assert.equal(result.reply, "CHILD-OK");
   assert.deepEqual(
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
-    [{ title: "run child tool", status: "failed" }],
+    [{ title: "Subagent /root/child", status: "completed" }],
   );
 });
 
@@ -1774,7 +1775,7 @@ test(
         cwd: jail,
         approvalPolicy: "never",
         sandbox: "read-only",
-        ephemeral: true,
+        ephemeral: false,
         baseInstructions: "be concise",
         developerInstructions: "use the supplied dynamic tools",
         dynamicTools: [
