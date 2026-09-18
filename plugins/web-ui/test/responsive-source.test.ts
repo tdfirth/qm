@@ -104,12 +104,11 @@ test("shared dialogs keep their scrollable edge inside device safe areas", () =>
 
 test("touch layouts expose row actions and preserve readable composer choices", () => {
   assert.match(compactCss, /@media \(hover: none\)\s*\{\s*\.chat-row-actions\s*\{\s*opacity:\s*1;\s*\}/);
-  assert.match(compactCss, /@media \(max-width: 360px\)[\s\S]*content: attr\(data-mobile-label\)/);
   assert.match(
     compactCss,
-    /\.composer-toolbar \.runtime-default-btn,[\s\S]*\.composer-toolbar \.send-btn \{\s*min-height: 44px;/,
+    /\.composer-toolbar \.icon-btn,\s*\.composer-toolbar \.menu-button,\s*\.composer-toolbar \.send-btn \{\s*min-height: 44px;/,
   );
-  assert.match(compactCss, /\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
+  assert.match(compactCss, /@media \(max-width: 360px\)[\s\S]*\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
   assert.match(compactCss, /\.project-create-button \{\s*width: 44px;\s*height: 44px;/);
   assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label="New project"/);
   assert.match(
