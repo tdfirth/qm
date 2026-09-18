@@ -5335,7 +5335,7 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
 test("AWS layer deadline includes signing-secret acquisition", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-secret-timeout-"));
   const bin = join(dir, "aws-hang");
-  writeFileSync(bin, `#!/opt/homebrew/bin/node\nsetTimeout(() => {}, 20_000);\n`);
+  writeFileSync(bin, `#!${process.execPath}\nsetTimeout(() => {}, 20_000);\n`);
   chmodSync(bin, 0o755);
   const priorBin = process.env.AWS_BIN;
   const priorSecret = process.env.CORE_SIGNING_SECRET;
