@@ -133,6 +133,7 @@ type ActiveTurn = {
   taskIds: Map<string, string>;
   taskStatuses: Map<string, TaskStatus>;
   taskResults: Set<string>;
+  taskReplies: Map<string, string>;
   model: string;
   modelCalls: number;
   usageInputTotals: Map<string, number>;
@@ -599,18 +600,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             }
           }
           await processCollabItem(state, item);
-          if (
-            method === "item/completed" &&
-            threadId !== state.threadId &&
-            item.type === "agentMessage" &&
-            item.phase === "final_answer"
-          )
-            await finishNativeChild(
-              state,
-              threadId,
-              "completed",
-              typeof item.text === "string" ? item.text : "completed",
-            );
+          if (method === "item/completed" && threadId !== state.threadId && item.type === "agentMessage")
+            if (typeof item.text === "string" && item.text) state.taskReplies.set(threadId, item.text);
         }
         if (method === "turn/completed" && threadId !== state.threadId) {
           const child = p.turn as CodexTurn | undefined;
@@ -618,8 +609,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             state.reject(new CodexRpcError("Codex app-server sent an invalid child turn/completed payload"));
             return;
           }
-          if (child.status !== "completed")
-            await finishNativeChild(state, threadId, "failed", child.error?.message ?? child.status);
+          await finishNativeChild(
+            state,
+            threadId,
+            child.status === "completed" ? "completed" : "failed",
+            child.status === "completed"
+              ? (state.taskReplies.get(threadId) ?? "completed")
+              : (child.error?.message ?? child.status),
+          );
         }
         if (method === "turn/completed" && threadId === state.threadId) {
           const completed = p.turn as CodexTurn | undefined;
@@ -1126,6 +1123,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         taskIds: new Map(),
         taskStatuses: new Map(),
         taskResults: new Set(),
+        taskReplies: new Map(),
         model: selectedModel,
         modelCalls: 0,
         usageInputTotals: new Map(),
@@ -1419,9 +1417,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (activeState === state) active.delete(activeThreadId);
       }
       if (!ephemeral && state.server.process.exitCode === null)
-        await state.server
-          .request("thread/delete", { threadId: state.threadId }, AbortSignal.timeout(1_000))
-          .catch((error) => swallow("codex: thread delete", error));
+        for (const threadId of [state.threadId, ...state.taskIds.keys()])
+          await state.server
+            .request("thread/delete", { threadId }, AbortSignal.timeout(1_000))
+            .catch((error) => swallow("codex: thread delete", error));
       try {
         await closeEphemeral();
       } catch (error) {

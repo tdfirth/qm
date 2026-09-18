@@ -126,12 +126,16 @@ function delayedChildRoutingCodexBinary(dir: string): string {
     path,
     `#!${process.execPath}
 const readline = require("node:readline");
+const fs = require("node:fs");
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
-  if (msg.method === "thread/delete") return send({ id: msg.id, result: {} });
+  if (msg.method === "thread/delete") {
+    fs.appendFileSync(${JSON.stringify(join(dir, "deleted"))}, msg.params.threadId + "\\n");
+    return send({ id: msg.id, result: {} });
+  }
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
   if (msg.method === "turn/start") {
     send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
@@ -141,7 +145,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (msg.id === "child-tool") {
     if (msg.error) return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "failed", error: { message: msg.error.message }, items: [] } } });
     send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-progress", text: "working", phase: "commentary" } } });
-    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-answer", text: "CHILD-OK", phase: "final_answer" } } });
+    send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "child-answer", text: "CHILD-OK" } } });
     send({ method: "turn/completed", params: { threadId: "child", turn: { id: "child-turn", status: "completed", items: [] } } });
     return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [{ type: "agentMessage", text: "CHILD-OK", phase: "final_answer" }] } } });
   }
@@ -181,7 +185,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (msg.method === "turn/start") {
     send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "spawn", kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
     send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "progress", text: "working", phase: "commentary" } } });
-    ${terminal === "interrupted" ? 'send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "stop", kind: "interrupted", agentThreadId: "child", agentPath: "/root/child" } } });' : 'send({ method: "turn/completed", params: { threadId: "child", turn: { id: "child-turn", status: "failed", error: { message: "child failed" }, items: [] } } });'}
+    ${terminal === "interrupted" ? 'send({ method: "item/completed", params: { threadId: "parent", item: { type: "subAgentActivity", id: "stop", kind: "interrupted", agentThreadId: "child", agentPath: "/root/child" } } });' : 'send({ method: "item/completed", params: { threadId: "child", item: { type: "agentMessage", id: "premature-final", text: "not successful", phase: "final_answer" } } }); send({ method: "turn/completed", params: { threadId: "child", turn: { id: "child-turn", status: "failed", error: { message: "child failed" }, items: [] } } });'}
     send({ id: msg.id, result: { turn: { id: "parent-turn", status: "inProgress", items: [] } } });
     return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [] } } });
   }
@@ -713,6 +717,7 @@ for (const [protocol, binary] of [
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: protocol === "current" ? "Subagent /root/child" : "run child tool", status: "completed" }],
   );
+  assert.deepEqual(readFileSync(join(dir, "deleted"), "utf8").trim().split("\n").sort(), ["child", "parent"]);
   });
 
 test("Codex task titles stay concise when the provider includes the parent request", () => {
