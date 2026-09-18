@@ -14,6 +14,7 @@ import { verifyCapabilityToken, SECRET_DROP_AUD } from "../src/auth/capability-t
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { orchestratorTurn } from "./support/turns.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -220,13 +221,9 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   const linkToken = (formPath: string) => new URL(formPath, "http://x").searchParams.get("t");
 
   before(() =>
-    built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: false }],
-      [
-        { channelId: "C1", principalId: "U_A" },
-        { channelId: "C1", principalId: "U_SPEAKER" },
-      ],
-    ),
+    seedChannels(built.directory, [{ channelId: "C1", name: "drops", isPrivate: false }], {
+      C1: ["U_A", "U_SPEAKER"],
+    }),
   );
   after(api.close);
 
@@ -536,10 +533,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: true }],
-      [{ channelId: "C1", principalId: "U_A" }],
-    );
+    await seedChannels(built.directory, [{ channelId: "C1", name: "drops", isPrivate: true }], { C1: ["U_A"] });
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const minted = await post(
       "/v1/keychain/drops",
@@ -563,10 +557,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 describe("/v1/keychain/drops — sibling-aware resume", () => {
   it("first redeem reports its pending sibling; the last redeem fires clean", async () => {
     const built = buildApp(testConfig({ dataDir: tmpDir("secret-drop-sib-"), signingSecret: SECRET }));
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: false }],
-      [{ channelId: "C1", principalId: "U_A" }],
-    );
+    await seedChannels(built.directory, [{ channelId: "C1", name: "drops", isPrivate: false }], { C1: ["U_A"] });
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
     const server = serveApp(built.app, {

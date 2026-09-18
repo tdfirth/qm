@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { dmTurn } from "./support/turns.ts";
 
 const SECRET = "route-test-secret".repeat(3);
@@ -54,10 +55,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
 
   before(() =>
-    built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
-    ),
+    seedChannels(built.directory, [{ channelId: "C", name: "eng", isPrivate: false }], {
+      C: ["admin-alice", "U1", "U2", "U8"],
+    }),
   );
 
   after(close);
@@ -882,18 +882,16 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("a public channel remains available to an active internal principal outside its current roster", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
+    await seedChannels(built.directory, [{ channelId: "C", name: "eng", isPrivate: false }], {
+      C: ["admin-alice", "U1", "U2"],
+    });
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
   it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: true }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
+    await seedChannels(built.directory, [{ channelId: "C", name: "eng", isPrivate: true }], {
+      C: ["admin-alice", "U1", "U2"],
+    });
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
       botActor: true,

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, seedChannels } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -104,10 +104,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceChannels(
-    [{ channelId: "C1", name: "eng", isPrivate: true }],
-    [{ channelId: "C1", principalId: "U2" }],
-  );
+  await seedChannels(directory, [{ channelId: "C1", name: "eng", isPrivate: true }], { C1: ["U2"] });
 
   assert.equal((await app.reachDeployment(personal.id, "U2")).status, "ok");
   assert.equal((await app.reachDeployment(personal.id, "U3")).status, "denied");
@@ -173,10 +170,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceChannels(
-    [{ channelId: "C1", name: "eng", isPrivate: true }],
-    [{ channelId: "C1", principalId: "U2" }],
-  );
+  await seedChannels(directory, [{ channelId: "C1", name: "eng", isPrivate: true }], { C1: ["U2"] });
 
   const rows = await app.listDeploymentsForViewer("U2");
   assert.deepEqual(rows.map((d) => d.id).sort(), [own.id, shared.id].sort());
@@ -220,10 +214,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceChannels(
-    [{ channelId: "C1", name: "eng", isPrivate: true }],
-    [{ channelId: "C1", principalId: "U2" }],
-  );
+  await seedChannels(directory, [{ channelId: "C1", name: "eng", isPrivate: true }], { C1: ["U2"] });
   const server = serveApp(app);
   try {
     const r = await server.get("/v1/deployments?principalId=U2");
@@ -254,10 +245,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceChannels(
-    [{ channelId: "C1", name: "eng", isPrivate: true }],
-    [{ channelId: "C1", principalId: "U2" }],
-  );
+  await seedChannels(directory, [{ channelId: "C1", name: "eng", isPrivate: true }], { C1: ["U2"] });
   const secret = "deployments-list-secret".repeat(3);
   const server = serveApp(app, {
     signingSecret: secret,

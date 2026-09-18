@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -247,12 +248,13 @@ describe("agent memory: cross-conversation writes are refused", () => {
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-sam", displayName: "Sam", type: "internal" },
     ]);
-    await built.directory.replaceChannels(
+    await seedChannels(
+      built.directory,
       [
         { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
         { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
       ],
-      [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+      { [CH_PRIVATE]: ["U-carol"] },
     );
     await built.directory.replaceGroups([
       { groupId: GROUP, principalId: "U-carol" },
@@ -301,14 +303,15 @@ describe("agent memory: cross-conversation writes are refused", () => {
   });
 
   it("refuses even ambiguous named targets before resolution", async () => {
-    await built.directory.replaceChannels(
+    await seedChannels(
+      built.directory,
       [
         { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
         { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
         { channelId: "C-dup1", name: "dup", isPrivate: false },
         { channelId: "C-dup2", name: "dup", isPrivate: false },
       ],
-      [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+      { [CH_PRIVATE]: ["U-carol"] },
     );
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const res = await post({ channel: "dup", facts: ["x"] }, cap);

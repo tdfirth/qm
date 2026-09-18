@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import type { BuiltApp } from "../src/wiring.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { type Api, capMinter, startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 
 const start = () => startApi({ dataDir: tmpDir("skills-http-"), orgId: "acme", seedSkills: false });
@@ -61,13 +62,9 @@ test("GET /v1/skills returns metadata only; authorized detail fetch returns the 
 test("GET /v1/skills marks a private-channel skill editable for a member and not for a non-member", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [
-        { channelId: "C9", principalId: "avery" },
-        { channelId: "C9", principalId: "jordan" },
-      ],
-    );
+    await seedChannels(srv.built.directory, [{ channelId: "C9", name: "avery-jordan", isPrivate: true }], {
+      C9: ["avery", "jordan"],
+    });
     await publish(srv.built.skills, scopeId("channel", "C9"), "team-thing", "shared in the channel");
 
     const forJordan = (await (await fetch(`${srv.base}/v1/skills?principalId=jordan`)).json()) as {
@@ -430,13 +427,9 @@ test("POST /v1/skills via a capability token authors as the token's own principa
 test("POST /v1/skills via a capability token from a private-channel scope homes the skill there, authored by the actor", async () => {
   const srv = startSecure();
   try {
-    await srv.built.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [
-        { channelId: "C9", principalId: "avery" },
-        { channelId: "C9", principalId: "jordan" },
-      ],
-    );
+    await seedChannels(srv.built.directory, [{ channelId: "C9", name: "avery-jordan", isPrivate: true }], {
+      C9: ["avery", "jordan"],
+    });
     const res = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: {
@@ -519,13 +512,9 @@ test("PUT /v1/skills/:id via a capability token cannot edit another scope's skil
 });
 
 async function seedChannelSkill(srv: Api) {
-  await srv.built.directory.replaceChannels(
-    [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-    [
-      { channelId: "C9", principalId: "avery" },
-      { channelId: "C9", principalId: "jordan" },
-    ],
-  );
+  await seedChannels(srv.built.directory, [{ channelId: "C9", name: "avery-jordan", isPrivate: true }], {
+    C9: ["avery", "jordan"],
+  });
   const res = await fetch(`${srv.base}/v1/skills`, {
     method: "POST",
     headers: {
@@ -617,10 +606,9 @@ test("an author who LEAVES a private channel loses inline CRUD on its skill (mem
   const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    await srv.built.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [{ channelId: "C9", principalId: "jordan" }],
-    );
+    await seedChannels(srv.built.directory, [{ channelId: "C9", name: "avery-jordan", isPrivate: true }], {
+      C9: ["jordan"],
+    });
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-agent-capability": await cap("avery") },
@@ -669,10 +657,9 @@ test("management tracks CURRENT directory membership, not a stale session — a 
 test("a shared-scope skill cannot be created/edited/deleted by an automated trigger (no liveActor)", async () => {
   const srv = startSecure();
   try {
-    await srv.built.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [{ channelId: "C9", principalId: "avery" }],
-    );
+    await seedChannels(srv.built.directory, [{ channelId: "C9", name: "avery-jordan", isPrivate: true }], {
+      C9: ["avery"],
+    });
     const triggerTok = await cap("avery", scopeId("channel", "C9"), false);
     const create = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
@@ -898,10 +885,9 @@ test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (p
 test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member cannot edit it", async () => {
   const srv = startSecure();
   try {
-    await srv.built.directory.replaceChannels(
-      [{ channelId: "CPUB", name: "general", isPrivate: false }],
-      ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
-    );
+    await seedChannels(srv.built.directory, [{ channelId: "CPUB", name: "general", isPrivate: false }], {
+      CPUB: ["owner", "rando"],
+    });
     const created = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: {

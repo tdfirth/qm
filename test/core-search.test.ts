@@ -6,6 +6,7 @@ import { createIntersectionBackend } from "../src/search/backends.ts";
 import { buildApp } from "../src/wiring.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
 const principals = [
@@ -58,15 +59,13 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     "127.0.0.1",
   );
   const { built } = srv;
-  await built.directory.replaceChannels(
+  await seedChannels(
+    built.directory,
     [
       { channelId: "C1", name: "private", isPrivate: true },
       { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
     ],
-    [
-      ...principals.map((p) => ({ channelId: "C1", principalId: p.id })),
-      { channelId: "C-ALICE", principalId: principals[0]!.id },
-    ],
+    { C1: principals.map((p) => p.id), "C-ALICE": [principals[0]!.id] },
   );
   await built.app.ingestSurfaceEvents([
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
@@ -128,16 +127,13 @@ test("file backend applies the principal visibility intersection to real file ro
 
 test("slack backend intersects private-channel visibility across all principals", async () => {
   const built = buildApp(testConfig({ dataDir: tmpDir("search-slack-") }));
-  await built.directory.replaceChannels(
+  await seedChannels(
+    built.directory,
     [
       { channelId: "C-SHARED", name: "shared", isPrivate: true },
       { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
     ],
-    [
-      { channelId: "C-SHARED", principalId: principals[0]!.id },
-      { channelId: "C-SHARED", principalId: principals[1]!.id },
-      { channelId: "C-ALICE", principalId: principals[0]!.id },
-    ],
+    { "C-SHARED": [principals[0]!.id, principals[1]!.id], "C-ALICE": [principals[0]!.id] },
   );
   await built.app.ingestSurfaceEvents([
     { container: "C-SHARED", ts: "1", text: "pelican launch shared", kind: "channel" },

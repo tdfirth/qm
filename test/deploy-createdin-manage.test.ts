@@ -11,7 +11,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { capMinter, serveApp, tmpDir } from "./support/api.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, seedChannels } from "./support/fakes.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -76,17 +76,13 @@ async function pushStatus(url: string): Promise<number> {
 
 async function setup() {
   const f = await fixture();
-  await f.directory.replaceChannels(
+  await seedChannels(
+    f.directory,
     [
       { channelId: CH, name: "built", isPrivate: true },
       { channelId: CH_OTHER, name: "shared", isPrivate: true },
     ],
-    [
-      { channelId: CH, principalId: "U1" },
-      { channelId: CH, principalId: "U2" },
-      { channelId: CH_OTHER, principalId: "U2" },
-      { channelId: CH_OTHER, principalId: "U3" },
-    ],
+    { [CH]: ["U1", "U2"], [CH_OTHER]: ["U2", "U3"] },
   );
   const d = await f.app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -257,15 +253,13 @@ test("removed channel members keep stale-session read reach but lose write and m
     const session = await f.sessions.getOrCreateByThread("stale-channel-session", "channel", scopeId("channel", CH));
     await f.sessions.addParticipant(session.id, "U2");
     const beforeRemovalUrl = await gitUrl(f.base, d.id, "U2");
-    await f.directory.replaceChannels(
+    await seedChannels(
+      f.directory,
       [
         { channelId: CH, name: "built", isPrivate: true },
         { channelId: CH_OTHER, name: "shared", isPrivate: true },
       ],
-      [
-        { channelId: CH, principalId: "U1" },
-        { channelId: CH_OTHER, principalId: "U3" },
-      ],
+      { [CH]: ["U1"], [CH_OTHER]: ["U3"] },
     );
 
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);

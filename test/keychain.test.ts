@@ -18,6 +18,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { seedChannels } from "./support/fakes.ts";
 import { dmTurn, orchestratorTurn, turnRequest } from "./support/turns.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
@@ -1039,7 +1040,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
   const capFor = capMinter(SECRET);
 
   before(async () => {
-    await built.directory.replaceChannels(
+    await seedChannels(
+      built.directory,
       [
         { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
         { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
@@ -1049,17 +1051,15 @@ describe("/v1/keychain routes (capability-authed)", () => {
         { channelId: "C_MYSTERY", name: "", isPrivate: false },
         { channelId: "C8", name: "file-grants", isPrivate: false },
       ],
-      [
-        { channelId: "C_SECONDS", principalId: "U_SECONDS" },
-        { channelId: "C_BAD_EXP", principalId: "U_BAD_EXP" },
-        { channelId: "C7", principalId: "OWNER" },
-        { channelId: "C7", principalId: "U3" },
-        { channelId: "C_OVERVIEW", principalId: "OVERVIEW_OWNER" },
-        { channelId: "C_NAMED", principalId: "SCOPENAME_OWNER" },
-        { channelId: "C_MYSTERY", principalId: "SCOPENAME_OWNER" },
-        { channelId: "C8", principalId: "OWNER" },
-        { channelId: "C8", principalId: "U3" },
-      ],
+      {
+        C_SECONDS: ["U_SECONDS"],
+        C_BAD_EXP: ["U_BAD_EXP"],
+        C7: ["OWNER", "U3"],
+        C_OVERVIEW: ["OVERVIEW_OWNER"],
+        C_NAMED: ["SCOPENAME_OWNER"],
+        C_MYSTERY: ["SCOPENAME_OWNER"],
+        C8: ["OWNER", "U3"],
+      },
     );
     await built.directory.replaceGroups([
       { groupId: "G_CONN", principalId: "alex@conn" },

@@ -2,6 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 const SECRET = "env-route-test-secret".repeat(3);
 
@@ -14,10 +15,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
   const cap = capMinter(SECRET);
 
   before(() =>
-    built.directory.replaceChannels(
-      [{ channelId: "C-eng", name: "eng", isPrivate: false }],
-      [{ channelId: "C-eng", principalId: "U-owner" }],
-    ),
+    seedChannels(built.directory, [{ channelId: "C-eng", name: "eng", isPrivate: false }], { "C-eng": ["U-owner"] }),
   );
   after(close);
 

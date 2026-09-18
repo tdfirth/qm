@@ -12,7 +12,7 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, seedChannels } from "./support/fakes.ts";
 
 const auditLog = nullAuditLog();
 const GATE_SECRET = "gate-secret";
@@ -315,10 +315,7 @@ test("app shell: manage grants are checked on every navigation and version reque
 test("app shell: a manager from the creation scope can load the app and its assets without a read grant", async () => {
   const f = await widgetFixture();
   try {
-    await f.directory.replaceChannels(
-      [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
-      [{ channelId: "CBUILT", principalId: "U2" }],
-    );
+    await seedChannels(f.directory, [{ channelId: "CBUILT", name: "builders", isPrivate: true }], { CBUILT: ["U2"] });
     assert.equal(await f.app.canManageDeployment("mysite", "U2"), true);
     assert.equal((await f.app.reachDeployment("mysite", "U2")).status, "denied");
     const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U2")}` };

@@ -6,6 +6,7 @@ import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oau
 import { signRequest } from "../src/auth/source-auth.ts";
 import { OAUTH_CONSENT_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { capMinter, type Served, startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
@@ -23,15 +24,13 @@ function start(fetchImpl: FetchLike, opts: { portalUrl?: string } = { portalUrl:
     publicUrl: "http://callback.test",
     ...(opts.portalUrl ? { portalUrl: opts.portalUrl } : {}),
   }));
-  void api.built.directory.replaceChannels(
+  void seedChannels(
+    api.built.directory,
     [
       { channelId: "C1", name: "consent", isPrivate: false },
       { channelId: "C9", name: "connectors", isPrivate: false },
     ],
-    [
-      { channelId: "C1", principalId: "U1" },
-      { channelId: "C9", principalId: "U1" },
-    ],
+    { C1: ["U1"], C9: ["U1"] },
   );
   return api;
 }

@@ -13,6 +13,7 @@ import {
   EGRESS_PROXY_AUD,
 } from "../src/auth/capability-token.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { seedChannels } from "./support/fakes.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -44,13 +45,9 @@ function start(withConfig = true) {
       signingSecret: SECRET,
     }),
   );
-  void api.built.directory.replaceChannels(
-    [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
-    [
-      { channelId: "C1", principalId: "admin-alice" },
-      { channelId: "C1", principalId: "U1" },
-    ],
-  );
+  void seedChannels(api.built.directory, [{ channelId: "C1", name: "agent-admin", isPrivate: false }], {
+    C1: ["admin-alice", "U1"],
+  });
   return api;
 }
 
