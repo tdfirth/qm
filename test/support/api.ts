@@ -33,7 +33,7 @@ export interface Api extends Served {
 export const tmpDir = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix));
 
 export function serve<S extends NetServer>(server: S, host = "localhost"): Served<S> {
-  server.listen(0);
+  server.listen(0).unref();
   const port = (server.address() as AddressInfo).port;
   const base = `http://${host}:${port}`;
   const bare =
