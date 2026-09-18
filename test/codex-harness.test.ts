@@ -243,7 +243,7 @@ process.on("SIGTERM", () => {
   return path;
 }
 
-function pendingThreadStartCodexBinary(dir: string): string {
+function pendingThreadStartCodexBinary(dir: string, warmup = false): string {
   const path = join(dir, "pending-thread-start-codex");
   writeFileSync(
     path,
@@ -252,11 +252,20 @@ const fs = require("node:fs");
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+let warmed = ${!warmup};
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
+  if (msg.method === "thread/start" && !warmed) {
+    warmed = true;
+    return send({ id: msg.id, result: { thread: { id: "warmup-thread" } } });
+  }
   if (msg.method === "thread/start") fs.writeFileSync(${JSON.stringify(join(dir, "thread-started"))}, String(msg.id));
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "warmup-turn", status: "inProgress" } } });
+    return setImmediate(() => send({ method: "turn/completed", params: { threadId: "warmup-thread", turn: { id: "warmup-turn", status: "completed", items: [] } } }));
+  }
 });
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
@@ -1205,7 +1214,7 @@ test("a pending Codex thread/start rejects with its deadline error and closes th
   const harness = createCodexHarness({
     binaryPath: pendingThreadStartCodexBinary(dir),
     env: testHarnessEnv(dir),
-    appServerStartTimeoutMs: 1_000,
+    appServerStartTimeoutMs: 10_000,
     threadStartTimeoutMs: 75,
   });
   t.after(async () => {
@@ -1240,29 +1249,41 @@ test("a pending Codex thread/start rejects with its deadline error and closes th
 test("the turn wall-clock boundary preserves a pending Codex thread/start deadline", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-wall-clock-test-"));
   const harness = createCodexHarness({
-    binaryPath: pendingThreadStartCodexBinary(dir),
+    binaryPath: pendingThreadStartCodexBinary(dir, true),
     env: testHarnessEnv(dir),
-    appServerStartTimeoutMs: 1_000,
+    appServerStartTimeoutMs: 10_000,
     threadStartTimeoutMs: 1_000,
-    turnWallClockMs: 500,
+    turnWallClockMs: 10_000,
   });
   t.after(async () => {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
   });
   const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const input = {
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry: Omit<SessionEntry, "sessionId" | "seq" | "createdAt">) =>
+      ({ ...entry, sessionId: "thread-start-wall-clock", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  };
+  assert.deepEqual(
+    await harness.turns.runTurn({
+      ...input,
+      session: { id: "thread-start-wall-clock-warmup" } as Session,
+    }),
+    { reply: "", modelCalls: 1 },
+  );
+  const startedAt = Date.now();
   await assert.rejects(
     harness.turns.runTurn({
+      ...input,
       session: { id: "thread-start-wall-clock" } as Session,
-      input: "hi",
-      systemPrompt: "be concise",
-      history: [],
-      tools: {} as HarnessTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      emit: async (entry) =>
-        ({ ...entry, sessionId: "thread-start-wall-clock", seq: 1, createdAt: Date.now() }) as SessionEntry,
-      recordModelCall: () => {},
+      turnWallClockMs: 500,
     }),
     (error: unknown) => {
       assert.ok(error instanceof NonRetryableTurnError);
@@ -1270,6 +1291,9 @@ test("the turn wall-clock boundary preserves a pending Codex thread/start deadli
       return true;
     },
   );
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed >= 400, `wall boundary fired too early after ${elapsed}ms`);
+  assert.ok(elapsed < 1_000, `wall boundary did not remain phase-specific after ${elapsed}ms`);
   assert.equal(existsSync(join(dir, "thread-started")), true);
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
 });
@@ -1282,7 +1306,7 @@ test(
     const harness = createCodexHarness({
       binaryPath: delayedThreadStartCodexBinary(dir, 30_100),
       env: testHarnessEnv(dir),
-      appServerStartTimeoutMs: 1_000,
+      appServerStartTimeoutMs: 10_000,
       turnWallClockMs: 35_000,
     });
     t.after(async () => {
@@ -1313,7 +1337,7 @@ test("the absolute wall timer is rearmed after Codex thread/start succeeds", asy
   const harness = createCodexHarness({
     binaryPath: delayedThreadStartCodexBinary(dir, 300),
     env: testHarnessEnv(dir),
-    appServerStartTimeoutMs: 1_000,
+    appServerStartTimeoutMs: 10_000,
     turnWallClockMs: 1_000,
   });
   t.after(async () => {
@@ -1350,7 +1374,7 @@ test("cancelling a pending Codex thread/start remains a clean stop", async (t) =
   const harness = createCodexHarness({
     binaryPath: pendingThreadStartCodexBinary(dir),
     env: testHarnessEnv(dir),
-    appServerStartTimeoutMs: 1_000,
+    appServerStartTimeoutMs: 10_000,
     threadStartTimeoutMs: 5_000,
   });
   t.after(async () => {
@@ -1383,7 +1407,7 @@ test("closing a harness during Codex thread/start is not relabeled as a deadline
   const harness = createCodexHarness({
     binaryPath: pendingThreadStartCodexBinary(dir),
     env: testHarnessEnv(dir),
-    appServerStartTimeoutMs: 1_000,
+    appServerStartTimeoutMs: 10_000,
     threadStartTimeoutMs: 5_000,
   });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
