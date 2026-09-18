@@ -211,10 +211,27 @@ test("naming a base model provider makes that provider's key a required deployme
 });
 
 test("the providers a deployment did not select stay optional", () => {
-  const anthropic = makeConfig({ modelProvider: "anthropic" });
-  assert.equal(secretByName(anthropic, "OPENROUTER_API_KEY").required, false);
-  // OPENAI_API_KEY keeps its own Codex rule, so it is absent rather than optional here.
-  assert.ok(!computedSecrets(anthropic).some((secret) => secret.name === "OPENAI_API_KEY"));
+  for (const [provider, harness, requiredKeys] of [
+    ["anthropic", "pi", ["ANTHROPIC_API_KEY"]],
+    ["openai", "pi", ["OPENAI_API_KEY"]],
+    ["openrouter", "opencode", ["OPENROUTER_API_KEY"]],
+    ["anthropic", "codex", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]],
+    ["openrouter", "codex", ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]],
+    [undefined, "mock", []],
+  ] as const) {
+    const config = makeConfig({
+      ...(provider ? { modelProvider: provider } : {}),
+      env: { core: { HARNESS: harness } },
+    });
+    for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"]) {
+      const secret = secretByName(config, key);
+      assert.equal(
+        secret.required,
+        requiredKeys.some((requiredKey) => requiredKey === key),
+        `${key} for ${provider ?? "deferred"}/${harness}`,
+      );
+    }
+  }
 });
 
 test("an OpenAI base model and the Codex harness agree on one required key", () => {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, tmp, rmDir, writeConfig } from "./harness.ts";
 
@@ -19,6 +19,73 @@ test("check passes on a scaffolded deployment and reports what it found", () => 
     assert.match(r.out, /check passed/);
     assert.match(r.out, /example-tool/);
     assert.match(r.out, /greet/);
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("check and secrets push include an operator-supplied OpenAI fallback", () => {
+  const dir = tmp("openai-fallback");
+  const fly = join(dir, "fly-fake");
+  const log = join(dir, "fly.log");
+  const fallback = "sk-synthetic-openai-fallback";
+  const envLines = [
+    `ANTHROPIC_API_KEY=sk-ant-synthetic-required`,
+    `OPENAI_API_KEY=${fallback}`,
+    `CAPABILITY_SECRET=${"capability".repeat(4)}`,
+    `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
+    `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
+    `PORTAL_IDENTITY_SECRET=${"identity".repeat(4)}`,
+    `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+    "PUBLIC_API_URL=https://core.example.test",
+  ];
+  try {
+    writeConfig(dir, {
+      orgId: "acme",
+      target: "fly",
+      region: "sjc",
+      flyOrg: "personal",
+      modelProvider: "anthropic",
+      env: {
+        core: {
+          HARNESS: "pi",
+          SNAPSHOT_STORE: "s3",
+          TRANSFER_STORE: "s3",
+          S3_BUCKET: "synthetic-bucket",
+          S3_REGION: "auto",
+        },
+      },
+    });
+    writeFileSync(join(dir, ".env"), envLines.join("\n"));
+    writeFileSync(log, "");
+    writeFileSync(
+      fly,
+      `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst a = process.argv.slice(2).join(" ");\nconst v = fs.readFileSync(0, "utf8");\nfs.appendFileSync(${JSON.stringify(log)}, a + "\\t" + v + "\\n");\nif (a.startsWith("status ")) process.stdout.write("{}");\n`,
+    );
+    chmodSync(fly, 0o755);
+
+    const checked = runCli(["check"], { cwd: dir, withRepoEnv: false });
+    assert.equal(checked.code, 0, checked.out);
+    assert.match(checked.out, /optional secrets: .*OPENAI_API_KEY/);
+
+    const pushed = runCli(["secrets", "push"], {
+      cwd: dir,
+      withRepoEnv: false,
+      env: { FLY_BIN: fly, OPENAI_API_KEY: undefined },
+    });
+    assert.equal(pushed.code, 0, pushed.out);
+    assert.doesNotMatch(pushed.out, new RegExp(fallback));
+    const calls = readFileSync(log, "utf8");
+    assert.match(calls, /secrets set --stage -a acme-core OPENAI_API_KEY=-\tsk-synthetic-openai-fallback/);
+
+    writeFileSync(join(dir, ".env"), envLines.filter((line) => !line.startsWith("OPENAI_API_KEY=")).join("\n"));
+    const missingFallback = runCli(["secrets", "push"], {
+      cwd: dir,
+      withRepoEnv: false,
+      env: { FLY_BIN: fly, OPENAI_API_KEY: undefined },
+    });
+    assert.equal(missingFallback.code, 0, missingFallback.out);
+    assert.match(missingFallback.out, /OPENAI_API_KEY: optional, not supplied/);
   } finally {
     rmDir(dir);
   }

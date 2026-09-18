@@ -68,9 +68,10 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
           { kind: "model-provider", provider: "openai" },
         ],
       },
+      optionalOtherwise: true,
     },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), it bills the base model when modelProvider is "openai", and is an optional deployment fallback otherwise.',
   },
   {
     name: "PUBLIC_API_URL",
