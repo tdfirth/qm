@@ -1773,7 +1773,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.tape,
           turn.providerKeys,
           Boolean(turn.tools.sessionSyscalls),
-          turn.tools.mcpToolDefs(),
+          turn.tools.mcpToolDefs?.() ?? [],
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

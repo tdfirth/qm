@@ -3371,3 +3371,9 @@ test("bridged harness MCP tools come from the authorized turn, never a global ca
   assert.deepEqual(harnessToolOptions(plumbing, turn).mcpTools?.(), [descriptor]);
   assert.ok(createAgentTools({ current: tc }, harnessToolOptions(plumbing, turn)).some((t) => t.name === "test_read"));
 });
+
+test("one-shot harness utilities expose no MCP tools without a tool context", () => {
+  const turn = { tools: {} } as HarnessTurnInput;
+  assert.deepEqual(harnessToolOptions({}, turn).mcpTools?.(), []);
+  assert.deepEqual(harnessToolOptions({}).mcpTools?.(), []);
+});

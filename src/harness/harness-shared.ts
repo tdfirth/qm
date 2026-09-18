@@ -89,7 +89,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     scratchExec: opts.scratchExec,
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
-    mcpTools: () => turn?.tools.mcpToolDefs() ?? [],
+    mcpTools: () => turn?.tools.mcpToolDefs?.() ?? [],
     controlTools: opts.controlTools,
     sandboxResources: opts.sandboxResources,
     execTimeoutMs: opts.execTimeoutMs,
