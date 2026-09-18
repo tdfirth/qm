@@ -13,7 +13,7 @@ import {
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
-import { tempDir, withEnv } from "./support.ts";
+import { dockerConfig, tempDir, withEnv } from "./support.ts";
 
 const SECRET = "conformance-test-secret";
 
@@ -74,18 +74,7 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
     join(dir, "sandbox", "skills", "big", "SKILL.md"),
     `---\nname: big\ndescription: big\n---\n${"x".repeat(1_100_000)}\n`,
   );
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "http://localhost:8080",
-    target: "docker",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: "acme-sandboxes" },
-  };
+  const config = dockerConfig({ sandbox: { app: "acme-sandboxes" } });
   await withEnv({ CORE_SIGNING_SECRET: SECRET }, () =>
     assert.rejects(
       () =>
@@ -154,20 +143,7 @@ function startCoreStub(
   });
 }
 
-function makeConfig(publicUrl: string): QmConfig {
-  return {
-    contract: 1,
-    orgId: "acme",
-    publicUrl,
-    target: "docker",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: "acme-sandboxes" },
-  };
-}
+const makeConfig = (publicUrl: string): QmConfig => dockerConfig({ publicUrl, sandbox: { app: "acme-sandboxes" } });
 
 async function freeUnboundPort(): Promise<number> {
   const { server, port } = await startCoreStub(() => ({ body: "{}" }), []);

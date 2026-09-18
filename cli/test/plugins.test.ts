@@ -4,22 +4,10 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { discoverPlugins } from "../src/plugins.ts";
 import type { QmConfig } from "../src/config.ts";
-import { tempDir } from "./support.ts";
+import { dockerConfig, tempDir } from "./support.ts";
 
-function makeConfig(plugins: QmConfig["plugins"]): QmConfig {
-  return {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "http://localhost:8080",
-    target: "docker",
-    services: ["core"],
-    plugins,
-    skills: [],
-    env: {},
-    imageOverrides: {},
-    sandbox: { app: "acme-sandboxes" },
-  };
-}
+const makeConfig = (plugins: QmConfig["plugins"]): QmConfig =>
+  dockerConfig({ plugins, sandbox: { app: "acme-sandboxes" } });
 
 function deployment(t: TestContext, setup: (dir: string) => void): string {
   const dir = tempDir(t, "qm-plugins-");

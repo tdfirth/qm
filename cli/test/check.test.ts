@@ -5,20 +5,9 @@ import { join } from "node:path";
 import { runChecks, runCheckCommand } from "../src/commands/check.ts";
 import type { QmConfig } from "../src/config.ts";
 import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
-import { tempDir } from "./support.ts";
+import { dockerConfig, tempDir } from "./support.ts";
 
-const CONFIG: QmConfig = {
-  contract: 1,
-  orgId: "acme",
-  publicUrl: "http://localhost:8080",
-  target: "docker",
-  services: ["core"],
-  plugins: [],
-  skills: [],
-  env: {},
-  imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
-};
+const CONFIG = dockerConfig({ sandbox: { app: "acme-sandboxes" } });
 
 function deployment(
   t: TestContext,

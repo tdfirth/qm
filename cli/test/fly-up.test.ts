@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { QmConfig } from "../src/config.ts";
 import { flyUp, mpgClusterId, mpgDirectUrl } from "../src/backends/fly.ts";
-import { setEnv, tempDir } from "./support.ts";
+import { flyConfig, setEnv, tempDir } from "./support.ts";
 
 test("mpgClusterId matches a whole field regardless of column position or spacing", () => {
   const header = "ID              NAME          REGION  STATUS";
@@ -136,20 +136,12 @@ else console.log("ok");
 
 test('--only "slack" explains the virtual service runs in-process on the core', async (t) => {
   const dir = tempDir(t, "qm-fly-up-");
-  const config: QmConfig = {
-    contract: 1,
+  const config = flyConfig({
     orgId: "acme2",
     publicUrl: "https://acme2-portal.fly.dev",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
     services: ["core", "slack"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
     sandbox: { app: "acme2-sandboxes" },
-  };
+  });
   await assert.rejects(
     flyUp(config, dir, { only: ["slack"] }),
     /--only "slack": slack is a virtual service — it runs in-process on the core, so deploy it with --only core/,

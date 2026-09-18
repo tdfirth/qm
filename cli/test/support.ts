@@ -2,6 +2,39 @@ import type { TestContext } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { QmConfig } from "../src/config.ts";
+
+export function dockerConfig(overrides: Partial<QmConfig> = {}): QmConfig {
+  return {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "http://localhost:8080",
+    target: "docker",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: {},
+    imageOverrides: {},
+    ...overrides,
+  };
+}
+
+export function flyConfig(overrides: Partial<QmConfig> = {}): QmConfig {
+  return {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.example.com",
+    target: "fly",
+    region: "sjc",
+    flyOrg: "personal",
+    services: ["core"],
+    plugins: [],
+    skills: [],
+    env: {},
+    imageOverrides: {},
+    ...overrides,
+  };
+}
 
 export function tempDir(t: TestContext, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));

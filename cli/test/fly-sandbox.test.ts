@@ -16,7 +16,7 @@ import {
   verifyLocalFlyTokens,
 } from "../src/backends/fly.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
-import { setEnv, tempDir } from "./support.ts";
+import { flyConfig, setEnv, tempDir } from "./support.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -80,20 +80,7 @@ test("the fly target routes security screen proxy configuration only to core", (
 });
 
 test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix: "qm",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [{ name: "linear" }],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = flyConfig({ appPrefix: "qm", plugins: [{ name: "linear" }] });
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/x:1", env: { LINEAR_REGION: "us" } };
   const toml = derivedPluginTomlFor(config, plugin);
 
@@ -112,39 +99,13 @@ test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", 
 });
 
 test("a plugin's entry env can override the injected wiring (entry env wins)", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix: "qm",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = flyConfig({ appPrefix: "qm" });
   const plugin: ResolvedPlugin = { name: "custom", kind: "source", env: { CORE_API_URL: "http://elsewhere:9000" } };
   assert.match(derivedPluginTomlFor(config, plugin), /CORE_API_URL = "http:\/\/elsewhere:9000"/);
 });
 
 test("a coreless plugin gets no core endpoint", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix: "qm",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = flyConfig({ appPrefix: "qm" });
   const plugin: ResolvedPlugin = {
     name: "signer",
     kind: "image",
@@ -158,40 +119,14 @@ test("a coreless plugin gets no core endpoint", () => {
 });
 
 test("a plugin env value with quotes/backslashes is escaped into valid TOML", () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix: "qm",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = flyConfig({ appPrefix: "qm" });
   const plugin: ResolvedPlugin = { name: "quoter", kind: "source", env: { JSON_CFG: '{"x":"y"}\\end' } };
   const toml = derivedPluginTomlFor(config, plugin);
   assert.match(toml, /JSON_CFG = "\{\\"x\\":\\"y\\"\}\\\\end"/, "quotes and backslash are escaped");
 });
 
 test("--only rejects a name that is neither a service nor a plugin (before any Fly call)", async () => {
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    appPrefix: "qm",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [{ name: "linear", image: "ghcr.io/x:1" }],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  };
+  const config = flyConfig({ appPrefix: "qm", plugins: [{ name: "linear", image: "ghcr.io/x:1" }] });
   const emptyDir = mkdtempSync(join(tmpdir(), "qm-fly-only-"));
   await assert.rejects(
     () => flyUp(config, emptyDir, { dryRun: true, only: ["nope"] }),
@@ -247,20 +182,12 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", (t) => {
 
 test("fly secrets push stages a dual-role secret under BOTH names on the core app", async (t) => {
   const dir = tempDir(t, "qm-fly-push-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
+  const config = flyConfig({
     services: ["core", "slack"],
     plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
-    skills: [],
     env: { core: { HARNESS: "pi" } },
-    imageOverrides: {},
     sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY", "COMPANY_TOKEN"] },
-  };
+  });
   mkdirSync(join(dir, "plugins", "srcplug"), { recursive: true });
   writeFileSync(join(dir, "plugins", "srcplug", "Dockerfile"), "FROM scratch\n");
   writeFileSync(
@@ -332,20 +259,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
 
 test("fly secrets push warns that staged secrets are not live when machines are running", async (t) => {
   const dir = tempDir(t, "qm-fly-push-staged-warn-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } }, sandbox: { app: "acme-sb" } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -387,20 +301,7 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 
 test("fly secrets push stays quiet about staging when no machines are running", async (t) => {
   const dir = tempDir(t, "qm-fly-push-staged-quiet-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } }, sandbox: { app: "acme-sb" } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -438,20 +339,7 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 
 test("fly secrets push removes the disabled Fly app publisher token", async (t) => {
   const dir = tempDir(t, "qm-fly-push-publisher-off-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } }, sandbox: { app: "acme-sb" } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -482,19 +370,7 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 
 test("fly secrets push falls back to an ambient secret when the scaffold entry is blank", async (t) => {
   const dir = tempDir(t, "qm-fly-push-blank-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -523,19 +399,11 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
 
 test("fly live check requires deployed machines and a healthy public endpoint", async (t) => {
   const dir = tempDir(t, "qm-fly-live-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
     services: ["core", "web-ui", "portal"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const liveEnvs = Object.fromEntries(
     ["core", "web-ui", "portal"].map((service) => [
       service,
@@ -583,19 +451,10 @@ else console.log("ok");`,
 
 test("fly live readiness rejects the wrong organization identity, region, and rendered env", async (t) => {
   const dir = tempDir(t, "qm-fly-live-identity-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const fake = fakeFly(
     t,
     dir,
@@ -625,19 +484,10 @@ else console.log("ok");`,
 
 test("fly live readiness rejects the wrong region after deployment identity matches", async (t) => {
   const dir = tempDir(t, "qm-fly-live-region-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
   fakeFly(
     t,
@@ -658,19 +508,10 @@ else console.log("ok");`,
 
 test("fly live readiness rejects rendered environment drift after identity and region match", async (t) => {
   const dir = tempDir(t, "qm-fly-live-env-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const env = { ...generatedEnv(derivedTomlFor(config, "core", repoRoot)), S3_BUCKET: "wrong-bucket" };
   fakeFly(
     t,
@@ -691,19 +532,11 @@ else console.log("ok");`,
 
 test("fly live readiness requires the generated TCP check for plugins", async (t) => {
   const dir = tempDir(t, "qm-fly-live-plugin-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
     plugins: [{ name: "linear", image: "ghcr.io/example/linear:1" }],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
   const liveEnvs = {
     core: generatedEnv(derivedTomlFor(config, "core", repoRoot)),
@@ -734,19 +567,11 @@ else console.log("ok");`,
 
 test("fly live readiness rejects a plugin whose TCP check is not passing", async (t) => {
   const dir = tempDir(t, "qm-fly-live-plugin-failed-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
     plugins: [{ name: "linear", image: "ghcr.io/example/linear:1" }],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
   const liveEnvs = {
     core: generatedEnv(derivedTomlFor(config, "core", repoRoot)),
@@ -774,19 +599,10 @@ else console.log("ok");`,
 
 test("fly live readiness fails when core cannot round-trip durable object storage", async (t) => {
   const dir = tempDir(t, "qm-fly-live-storage-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
   fakeFly(
     t,
@@ -808,19 +624,11 @@ test("fly live readiness rejects a healthy machine on the wrong configured image
   const dir = tempDir(t, "qm-fly-live-image-");
   const configured = `registry.fly.io/acme-core@sha256:${"a".repeat(64)}`;
   const running = `registry.fly.io/acme-core@sha256:${"b".repeat(64)}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { HARNESS: "mock" } },
     imageOverrides: { core: configured },
-  };
+  });
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
   fakeFly(
     t,
@@ -840,19 +648,11 @@ else console.log("ok");`,
 test("fly live readiness resolves deployment tags to their immutable image digest", async (t) => {
   const dir = tempDir(t, "qm-fly-live-image-tag-");
   const digest = `sha256:${"a".repeat(64)}`;
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { HARNESS: "mock" } },
     imageOverrides: { core: `registry.fly.io/acme-core@${digest}` },
-  };
+  });
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
   fakeFly(
     t,
@@ -871,19 +671,10 @@ else console.log("ok");`,
 
 test("fly live check rejects stopped workloads even when the public endpoint responds", async (t) => {
   const dir = tempDir(t, "qm-fly-live-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   fakeFly(
     t,
     dir,
@@ -897,19 +688,10 @@ test("fly live check rejects stopped workloads even when the public endpoint res
 
 test("fly live check rejects a configured workload with no deployed machine", async (t) => {
   const dir = tempDir(t, "qm-fly-live-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
+  const config = flyConfig({
     publicUrl: "https://qm.example.test",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-    imageOverrides: {},
-  };
+  });
   fakeFly(
     t,
     dir,
@@ -923,19 +705,7 @@ test("fly live check rejects a configured workload with no deployed machine", as
 
 test("fly secrets push rejects weak signing keys before staging anything", async (t) => {
   const dir = tempDir(t, "qm-fly-weak-secret-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } } });
   writeFileSync(
     join(dir, ".env"),
     `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\n`,
@@ -947,20 +717,7 @@ test("fly secrets push rejects weak signing keys before staging anything", async
 
 test("fly secrets push refuses an unmarked pre-existing app", async (t) => {
   const dir = tempDir(t, "qm-fly-owner-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
+  const config = flyConfig({ env: { core: { HARNESS: "mock" } }, sandbox: { app: "acme-sb" } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -989,20 +746,7 @@ else console.log("ok");`,
 
 test("fly secrets push refuses a same-named app outside the configured Fly organization", async (t) => {
   const dir = tempDir(t, "qm-fly-wrong-org-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "operator-org",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb" },
-  };
+  const config = flyConfig({ flyOrg: "operator-org", env: { core: { HARNESS: "mock" } }, sandbox: { app: "acme-sb" } });
   writeFileSync(
     join(dir, ".env"),
     [
@@ -1034,20 +778,11 @@ else console.log("ok");`,
 
 test("fly secrets push stages a secretEnv alias under its declared env name on its service's app", async (t) => {
   const dir = tempDir(t, "qm-fly-alias-");
-  const config: QmConfig = {
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
+  const config = flyConfig({
     services: ["core", "portal"],
-    plugins: [],
-    skills: [],
     env: { core: { HARNESS: "mock" } },
-    imageOverrides: {},
     secretEnv: { core: { DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET", EXTRA_API_KEY: "EXTRA_API_KEY" } },
-  };
+  });
   writeFileSync(
     join(dir, ".env"),
     [

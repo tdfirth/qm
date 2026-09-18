@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
-import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
   emailTransportConfigured,
@@ -11,19 +10,9 @@ import {
   smtpVerify,
   SmtpRejectedError,
 } from "../src/preflight.ts";
+import { dockerConfig } from "./support.ts";
 
-const CONFIG: QmConfig = {
-  contract: 1,
-  orgId: "acme",
-  publicUrl: "http://localhost:8080",
-  target: "docker",
-  services: ["core", "auth"],
-  plugins: [],
-  skills: [],
-  env: {},
-  imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
-};
+const CONFIG = dockerConfig({ services: ["core", "auth"], sandbox: { app: "acme-sandboxes" } });
 
 async function quietAsync(fn: () => Promise<void>): Promise<string[]> {
   const lines: string[] = [];

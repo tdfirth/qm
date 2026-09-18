@@ -10,20 +10,9 @@ import {
 } from "../src/backends/doctor.ts";
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
-import { setEnv, tempDir } from "./support.ts";
+import { dockerConfig, setEnv, tempDir } from "./support.ts";
 
-const config: QmConfig = {
-  contract: 1,
-  orgId: "acme",
-  publicUrl: "http://localhost:8080",
-  target: "docker",
-  services: ["core"],
-  plugins: [],
-  skills: [],
-  env: { core: { HARNESS: "pi" } },
-  imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
-};
+const config = dockerConfig({ env: { core: { HARNESS: "pi" } }, sandbox: { app: "acme-sandboxes" } });
 
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async (t) => {
   setEnv(t, { ANTHROPIC_API_KEY: "" });

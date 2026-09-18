@@ -4,21 +4,12 @@ import { join } from "node:path";
 import test from "node:test";
 import type { QmConfig } from "../src/config.ts";
 import { deploymentOutputs, renderSlackFiles } from "../src/commands/outputs.ts";
-import { tempDir } from "./support.ts";
+import { flyConfig, tempDir } from "./support.ts";
 
-const config: QmConfig = {
-  contract: 1,
-  orgId: "acme",
+const config = flyConfig({
   publicUrl: "https://qm.acme.example/",
-  target: "fly",
-  region: "sjc",
-  flyOrg: "personal",
   services: ["core", "slack", "web-ui", "admin", "portal"],
-  plugins: [],
-  skills: [],
-  env: {},
-  imageOverrides: {},
-};
+});
 
 const slackOidcConfig: QmConfig = {
   ...config,

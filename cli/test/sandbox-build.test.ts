@@ -4,19 +4,9 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSandboxBuild, type SandboxBuildOpts } from "../src/commands/sandbox.ts";
 import type { QmConfig } from "../src/config.ts";
-import { tempDir } from "./support.ts";
+import { dockerConfig, tempDir } from "./support.ts";
 
-const CONFIG: QmConfig = {
-  contract: 1,
-  orgId: "acme",
-  publicUrl: "http://localhost:8080",
-  target: "docker",
-  services: ["core"],
-  plugins: [],
-  skills: [],
-  env: {},
-  imageOverrides: {},
-};
+const CONFIG = dockerConfig();
 
 function sandboxDir(t: TestContext, setup: (sb: string) => void): string {
   const sb = join(tempDir(t, "qm-sbx-build-"), "sandbox");
