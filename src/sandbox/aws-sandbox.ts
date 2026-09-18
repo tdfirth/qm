@@ -15,9 +15,9 @@ import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
-  posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
+import { createExecSandboxIo } from "./exec-sandbox-base.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
 import type {
   AgentComputerProfile,
@@ -173,6 +173,14 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   async function ensureRunning(id: string, observed?: Awaited<ReturnType<AwsMicrovmApi["getMicrovm"]>>): Promise<void> {
     await client.ensureRunning(id, await resolveEndpoint(id), observed);
   }
+
+  const { writeFileBytes, writeFile, readFileBytes, readFile } = createExecSandboxIo({
+    label: "aws",
+    defaultTimeoutSec,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+  });
 
   const homeSnapshots = createHomeSnapshotOps<string>({
     label: "aws",
@@ -448,8 +456,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         layers,
         handle,
         {
-          readFile: (h, rel) => sandbox.readFile(h, rel),
-          writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
+          readFile,
+          writeFileBytes,
           exec: (script, t) => execRaw(id, script, t),
         },
         { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "aws" },
@@ -470,19 +478,10 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       return execRaw(handle.id, script, timeoutSec);
     },
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
+    writeFileBytes,
+    writeFile,
+    readFileBytes,
+    readFile,
 
     exportFiles: execExport.exportFiles,
 
