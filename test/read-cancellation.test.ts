@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setTimeout as sleep } from "node:timers/promises";
+import { sleep } from "../src/util/async.ts";
 import { type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";

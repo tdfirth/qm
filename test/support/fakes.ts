@@ -75,7 +75,7 @@ export function testOrchestrator<O extends Partial<OrchestratorDeps> & Pick<Orch
     deploy: createDeployService({
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
-      deployDir: join(tmpdir(), "qm-orchestrator-deploy"),
+      deployDir: mkdtempSync(join(tmpdir(), "qm-orchestrator-deploy-")),
       auditLog,
       acl,
     }),

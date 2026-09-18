@@ -29,9 +29,7 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
-  const request = orchestratorTurn("!boom", actor, { kind: "channel", threadRef, audience: [actor] } as Conversation, {
-    origin: { kind: "direct" as const },
-  });
+  const request = orchestratorTurn("!boom", actor, { kind: "channel", threadRef, audience: [actor] } as Conversation);
   const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
 
   const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);

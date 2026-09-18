@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import {
   detectOnboardingStatus,
   resolveOnboardingStatus,
@@ -71,7 +71,7 @@ test("a new personal DM gets the high-priority pending onboarding prompt", async
   const { app, skills } = freshApp();
   await waitForOnboardingSkill(skills);
 
-  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-new") as TurnRequest);
+  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-new"));
 
   assert.match(sys.reply ?? "", /## Pending Onboarding/);
   assert.match(sys.reply ?? "", /high-priority setup task/);
@@ -84,11 +84,11 @@ test("completed or dismissed onboarding markers suppress the pending prompt", as
   await waitForOnboardingSkill(skills);
   await memory.replace(scopeId("personal", "U1"), "## Onboarding\n\n- Onboarding: completed v2 on 2026-06-09.\n");
 
-  const completed = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-completed") as TurnRequest);
+  const completed = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-completed"));
   assert.doesNotMatch(completed.reply ?? "", /## Pending Onboarding/);
 
   await memory.replace(scopeId("personal", "U1"), "## Onboarding\n\n- Onboarding: dismissed v2 on 2026-06-09.\n");
-  const dismissed = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-dismissed") as TurnRequest);
+  const dismissed = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:onboarding-dismissed"));
   assert.doesNotMatch(dismissed.reply ?? "", /## Pending Onboarding/);
 });
 
@@ -102,7 +102,7 @@ test("onboarding prompt does not appear in channel sessions", async () => {
       threadRef: "C1:onboarding",
       channelRef: "C1",
       audience: [actor],
-    }) as TurnRequest,
+    }),
   );
 
   assert.doesNotMatch(sys.reply ?? "", /## Pending Onboarding/);
@@ -121,14 +121,14 @@ test("ideas web conversations bypass onboarding on every turn without completing
   await waitForOnboardingSkill(skills);
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
-    const sys = await app.turn(dmTurn("!sysprompt", actor, threadRef, { surface: "web" }) as TurnRequest);
+    const sys = await app.turn(dmTurn("!sysprompt", actor, threadRef, { surface: "web" }));
     assert.doesNotMatch(sys.reply ?? "", /## Pending Onboarding/);
     assert.match(sys.reply ?? "", /Skip the onboarding skill and setup flow for this entire conversation/);
   }
   assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", "U1"))), "not_started");
-  const ordinary = await app.turn(dmTurn("!sysprompt", actor, "web:U1:ordinary", { surface: "web" }) as TurnRequest);
+  const ordinary = await app.turn(dmTurn("!sysprompt", actor, "web:U1:ordinary", { surface: "web" }));
   assert.match(ordinary.reply ?? "", /## Pending Onboarding/);
-  const slack = await app.turn(dmTurn("!sysprompt", actor, threadRef, { surface: "slack" }) as TurnRequest);
+  const slack = await app.turn(dmTurn("!sysprompt", actor, threadRef, { surface: "slack" }));
   assert.match(slack.reply ?? "", /## Pending Onboarding/);
 });
 
@@ -138,8 +138,7 @@ for (const initialStatus of ["not_started", "pending"] as const) {
     await waitForOnboardingSkill(skills);
     const scope = scopeId("personal", "U1");
     await memory.replace(scope, setOnboardingStatus("## Notes\n\nKeep my preferences.\n", initialStatus, "2026-09-17"));
-    const prompt = async () =>
-      (await app.turn(dmTurn("!sysprompt", actor, "dm:U1:current") as TurnRequest)).reply ?? "";
+    const prompt = async () => (await app.turn(dmTurn("!sysprompt", actor, "dm:U1:current"))).reply ?? "";
     for (let i = 0; i < 3; i++) {
       assert.equal(await resolveOnboardingStatus(memory, sessions, scope), initialStatus);
       const session = await sessions.getOrCreateByThread(`web:U1:past-${i}`, "dm", scope);

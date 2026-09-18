@@ -3,7 +3,6 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import type { TurnRequest } from "../src/types.ts";
 import { dmTurn } from "./support/turns.ts";
 
 async function fixture(t: TestContext) {
@@ -21,7 +20,7 @@ async function fixture(t: TestContext) {
     return provision(...args);
   };
   const turn = async (text: string, actor = "U1") => {
-    const result = await built.app.turn(dmTurn(text, { externalId: actor }, `dm:${actor}:skill-source`) as TurnRequest);
+    const result = await built.app.turn(dmTurn(text, { externalId: actor }, `dm:${actor}:skill-source`));
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.reply ?? "";
   };

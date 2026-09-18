@@ -40,11 +40,11 @@ test("a published personal skill is advertised + materialized in the owner's DM"
   const { app, skills } = freshApp();
   await publishPersonalSkill(skills);
 
-  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:t1") as TurnRequest);
+  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:t1"));
   assert.match(sys.reply ?? "", /## Skills/);
   assert.match(sys.reply ?? "", /make-digest/);
 
-  const read = await app.turn(dmTurn("!read skills/make-digest/SKILL.md", actor, "dm:U1:t2") as TurnRequest);
+  const read = await app.turn(dmTurn("!read skills/make-digest/SKILL.md", actor, "dm:U1:t2"));
   assert.match(read.reply ?? "", /Step 1: gather/);
 });
 
@@ -57,7 +57,7 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
       threadRef: "C1:t1",
       channelRef: "C1",
       audience: [actor],
-    }) as TurnRequest,
+    }),
   );
   assert.doesNotMatch(sys.reply ?? "", /make-digest/);
 });
@@ -81,7 +81,7 @@ test("ordinary sandbox work reconciles ownership without copying skill contents"
     if (path.startsWith("skills/")) touched.push(path);
     return remove(handle, path);
   };
-  await app.turn(dmTurn("!read missing.txt", actor, "dm:U1:no-sync") as TurnRequest);
+  await app.turn(dmTurn("!read missing.txt", actor, "dm:U1:no-sync"));
   assert.deepEqual(touched, ["skills/.index", "skills/.index"]);
 });
 

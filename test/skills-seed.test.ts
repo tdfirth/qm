@@ -12,7 +12,7 @@ import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "../src/wiring.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { dmTurn, turnRequest } from "./support/turns.ts";
 
@@ -175,7 +175,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   });
   const { app } = built;
   const actor = { externalId: "U1" };
-  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:seeded-skills") as TurnRequest);
+  const sys = await app.turn(dmTurn("!sysprompt", actor, "dm:U1:seeded-skills"));
   assert.match(sys.reply ?? "", /google-workspace/);
   assert.match(sys.reply ?? "", /google-drive-sheets/);
   assert.match(sys.reply ?? "", /github-gitlab/);
@@ -187,22 +187,18 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
       channelRef: "C1",
       threadRef: "channel:C1:seeded-skills",
       audience: [actor],
-    }) as TurnRequest,
+    }),
   );
   assert.match(channelSys.reply ?? "", /google-workspace/);
   assert.match(channelSys.reply ?? "", /google-drive-sheets/);
   assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*/);
 
-  const read = await app.turn(
-    dmTurn("!read skills/google-workspace/SKILL.md", actor, "dm:U1:seeded-skills-read") as TurnRequest,
-  );
+  const read = await app.turn(dmTurn("!read skills/google-workspace/SKILL.md", actor, "dm:U1:seeded-skills-read"));
   assert.match(read.reply ?? "", /Google Workspace/);
   assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
   assert.match(read.reply ?? "", /Authorization: Bearer/);
 
-  const drive = await app.turn(
-    dmTurn("!read skills/google-drive-sheets/SKILL.md", actor, "dm:U1:seeded-drive-read") as TurnRequest,
-  );
+  const drive = await app.turn(dmTurn("!read skills/google-drive-sheets/SKILL.md", actor, "dm:U1:seeded-drive-read"));
   assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
 });

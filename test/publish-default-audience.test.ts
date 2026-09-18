@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type ConversationKind, type Principal } from "../src/types.ts";
-import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
+import { fakeDeployProvider, nullAuditLog, toolContext } from "./support/fakes.ts";
 
 const ORG = "default-org";
 const orgScope = scopeId("org", ORG);
@@ -58,17 +57,13 @@ function ctxFor(
     members?: Principal[];
   },
 ) {
-  const deps: ToolContextDeps = {
+  return toolContext({
     sandbox: fileSandbox(),
     provision: async () => ({}) as SandboxHandle,
     layers: [
       { scopeId: orgScope, mountPath: "global", mode: "ro" },
       { scopeId: opts.contextScope, mountPath: "", mode: "rw" },
     ],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
     deploy,
     acl,
     createdBy: opts.actor,
@@ -79,8 +74,7 @@ function ctxFor(
       ...(opts.isPrivate !== undefined ? { isPrivate: opts.isPrivate } : {}),
       ...(opts.members ? { publishMembers: opts.members } : {}),
     },
-  };
-  return createToolContext(deps);
+  });
 }
 
 const channel = (

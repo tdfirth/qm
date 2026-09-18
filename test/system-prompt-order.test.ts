@@ -196,7 +196,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
         audience: [actor, teammate],
         publishMembers: [actor, teammate],
       },
-      { origin: origin },
+      { origin },
     );
 
   const isolated = await orchestrator.handleTurn(channel("C1:isolated", "!sysprompt", { kind: "human" }));
