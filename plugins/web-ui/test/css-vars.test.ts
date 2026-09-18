@@ -40,7 +40,8 @@ test("conversation colors use the refined spectrum palette on every list surface
   assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
   assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
   assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
-  assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\([\s\S]*?border-left: 2px solid/);
+  assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\(/);
+  assert.match(shellCss, /\.session-row\.colored \.session::before,[\s\S]*?width: 2px;/);
 });
 
 test("pinned conversations use the same header and child alignment as project conversations", () => {
@@ -54,6 +55,13 @@ test("pinned conversations use the same header and child alignment as project co
   assert.match(shellCss, /\.pinned-head-glyph \{[\s\S]*?flex: 0 0 14px;/);
   assert.match(shellCss, /\.pinned-children \{[\s\S]*?margin-left: 13px;/);
   assert.match(shellCss, /\.pinned-children \.session \{\s*padding-left: 6px;/);
+});
+
+test("sidebar conversations keep space between their backgrounds and the scrollbar", () => {
+  const list = shellCss.match(/\.sidebar \.list \{[^}]+\}/)?.[0] ?? "";
+  assert.match(list, /box-sizing:\s*border-box;/);
+  assert.match(list, /padding-right:\s*8px;/);
+  assert.match(list, /scrollbar-gutter:\s*stable;/);
 });
 
 test("every drop zone the canvas renders has a positioning rule in shell.css", () => {
