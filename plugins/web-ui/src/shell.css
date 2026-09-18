@@ -563,6 +563,7 @@ a.chat-row-open {
   min-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .session .row-context {
@@ -674,12 +675,38 @@ a.chat-row-open {
   display: flex;
   align-items: center;
   gap: 5px;
+  min-height: 30px;
+  margin: 3px 0 5px 4px;
+  padding: 4px 3px 4px 2px;
+  color: var(--foreground);
+  font-size: 12.5px;
 }
-.recents-group.pinned-head svg {
+.pinned-head-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  color: var(--muted-foreground);
+}
+.pinned-head-glyph svg {
   flex: 0 0 auto;
   opacity: 0.8;
 }
+.pinned-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin-left: 13px;
+}
+.pinned-children .session {
+  padding-left: 6px;
+}
 
+.session-row.colored {
+  --session-action-hover: color-mix(in srgb, var(--session-color) 24%, var(--secondary));
+  --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
+}
 .session-row.colored .session {
   background: color-mix(in srgb, var(--session-color) 14%, transparent);
 }
@@ -724,7 +751,7 @@ a.chat-row-open {
   position: relative;
   display: inline-flex;
   overflow: hidden;
-  background: conic-gradient(#ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ec4899, #ef4444);
+  background: conic-gradient(#d2664d, #b98a52, #7d884f, #5f8b83, #527d99, #8b5d52, #d2664d);
 }
 .color-swatch.custom input[type="color"] {
   position: absolute;
@@ -838,6 +865,15 @@ a.chat-row-open {
 .session-row.menu-open .session-menu-btn {
   background: var(--secondary);
   color: var(--foreground);
+}
+.session-row.colored .session-menu-btn {
+  color: var(--session-action-foreground);
+}
+.session-row.colored .session-menu-btn:hover,
+.session-row.colored .session-menu-btn:focus-visible,
+.session-row.colored.menu-open .session-menu-btn {
+  background: var(--session-action-hover);
+  color: var(--session-action-foreground);
 }
 .session-menu-popover {
   position: absolute;

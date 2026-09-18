@@ -24,6 +24,37 @@ test("every no-fallback var() in shell.css names a property something defines", 
   assert.deepEqual([...dead], [], "var() references that nothing defines (add the property or a fallback)");
 });
 
+test("colored session actions keep their row hue at rest and on hover", () => {
+  const variables = shellCss.match(/\.session-row\.colored \{[^}]+\}/)?.[0] ?? "";
+  assert.match(variables, /--session-action-hover:\s*color-mix\([^;]+var\(--session-color\)/);
+  assert.match(variables, /--session-action-foreground:\s*color-mix\([^;]+var\(--session-color\)/);
+  assert.match(shellCss, /\.session-row\.colored \.session-menu-btn \{\s*color: var\(--session-action-foreground\);/);
+  assert.match(
+    shellCss,
+    /\.session-row\.colored \.session-menu-btn:hover,[\s\S]*?\.session-row\.colored\.menu-open \.session-menu-btn \{\s*background: var\(--session-action-hover\);\s*color: var\(--session-action-foreground\);/,
+  );
+});
+
+test("conversation colors use the earth-and-ocean palette on every list surface", () => {
+  assert.match(tsSource, /const SESSION_COLORS = \["#d2664d", "#b98a52", "#7d884f", "#5f8b83", "#527d99", "#8b5d52"\]/);
+  assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
+  assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
+  assert.match(shellCss, /conic-gradient\(#d2664d, #b98a52, #7d884f, #5f8b83, #527d99, #8b5d52, #d2664d\)/);
+});
+
+test("pinned conversations use the same header and child alignment as project conversations", () => {
+  assert.match(tsSource, /class="pinned-head-glyph"/);
+  assert.match(tsSource, /class="pinned-children"/);
+  const header = shellCss.match(/\.recents-group\.pinned-head \{[^}]+\}/)?.[0] ?? "";
+  assert.match(header, /min-height:\s*30px;/);
+  assert.match(header, /margin:\s*3px 0 5px 4px;/);
+  assert.match(header, /padding:\s*4px 3px 4px 2px;/);
+  assert.match(header, /font-size:\s*12\.5px;/);
+  assert.match(shellCss, /\.pinned-head-glyph \{[\s\S]*?flex: 0 0 14px;/);
+  assert.match(shellCss, /\.pinned-children \{[\s\S]*?margin-left: 13px;/);
+  assert.match(shellCss, /\.pinned-children \.session \{\s*padding-left: 6px;/);
+});
+
 test("every drop zone the canvas renders has a positioning rule in shell.css", () => {
   const splitTs = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
   const edges = [...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]);
