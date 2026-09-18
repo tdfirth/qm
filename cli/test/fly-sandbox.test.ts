@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -202,7 +202,7 @@ test("--only rejects a name that is neither a service nor a plugin (before any F
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { flySecretsPush } from "../src/backends/fly.ts";
 
-function fakeFly(dir: string, script: string): { log: string; restore: () => void } {
+function fakeFly(t: TestContext, dir: string, script: string): { log: string } {
   const bin = join(dir, "fly-fake");
   const log = join(dir, "fly.log");
   writeFileSync(log, "");
@@ -211,15 +211,8 @@ function fakeFly(dir: string, script: string): { log: string; restore: () => voi
     `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst a = process.argv.slice(2).join(" ");\nfs.appendFileSync(${JSON.stringify(log)}, a + "\\n");\n${script}\n`,
   );
   chmodSync(bin, 0o755);
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = bin;
-  return {
-    log,
-    restore: () => {
-      if (prior === undefined) delete process.env.FLY_BIN;
-      else process.env.FLY_BIN = prior;
-    },
-  };
+  setEnv(t, { FLY_BIN: bin });
+  return { log };
 }
 
 function generatedEnv(toml: string): Record<string, string> {
@@ -286,6 +279,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
@@ -333,7 +327,6 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     assert.ok(!calls.includes("value:proc-wins"), "ambient credentials do not replace deployment-scoped values");
   } finally {
     console.log = log;
-    fake.restore();
   }
 });
 
@@ -364,7 +357,8 @@ test("fly secrets push warns that staged secrets are not live when machines are 
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
   );
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("status -a acme-core")) console.log(JSON.stringify({ Machines: [{ id: "m1", state: "started" }] }));
@@ -388,7 +382,6 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
   } finally {
     console.log = log;
     console.warn = warnLog;
-    fake.restore();
   }
 });
 
@@ -419,7 +412,8 @@ test("fly secrets push stays quiet about staging when no machines are running", 
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
   );
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("status -a")) console.log(JSON.stringify({ Machines: [] }));
@@ -439,7 +433,6 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
   } finally {
     console.log = log;
     console.warn = warnLog;
-    fake.restore();
   }
 });
 
@@ -470,6 +463,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async (t) 
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a === "secrets list -a acme-core") console.log("FLY_DEPLOY_API_TOKEN digest");
@@ -483,7 +477,6 @@ else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
     assert.match(readFileSync(fake.log, "utf8"), /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
   } finally {
     console.log = log;
-    fake.restore();
   }
 });
 
@@ -513,6 +506,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
@@ -524,7 +518,6 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     assert.match(readFileSync(fake.log, "utf8"), /value:ambient-signing-secret-that-is-long-enough/);
   } finally {
     console.log = log;
-    fake.restore();
   }
 });
 
@@ -550,6 +543,7 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
     ]),
   );
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "web-ui", "portal"].map((service) => ({ Name: "acme-" + service }))));
@@ -584,7 +578,6 @@ else console.log("ok");`,
     );
   } finally {
     console.log = log;
-    fake.restore();
   }
 });
 
@@ -604,6 +597,7 @@ test("fly live readiness rejects the wrong organization identity, region, and re
     imageOverrides: {},
   };
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -614,23 +608,19 @@ else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      (error: unknown) => {
-        assert.match((error as Error).message, /lack deployment identity qm-v2:personal:acme:acme/);
-        assert.equal((error as { clause?: string }).clause, "fly.live-readiness");
-        return true;
-      },
-    );
-    assert.doesNotMatch(
-      readFileSync(fake.log, "utf8"),
-      /ssh console/,
-      "an unowned core never receives the storage probe",
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    (error: unknown) => {
+      assert.match((error as Error).message, /lack deployment identity qm-v2:personal:acme:acme/);
+      assert.equal((error as { clause?: string }).clause, "fly.live-readiness");
+      return true;
+    },
+  );
+  assert.doesNotMatch(
+    readFileSync(fake.log, "utf8"),
+    /ssh console/,
+    "an unowned core never receives the storage probe",
+  );
 });
 
 test("fly live readiness rejects the wrong region after deployment identity matches", async (t) => {
@@ -649,7 +639,8 @@ test("fly live readiness rejects the wrong region after deployment identity matc
     imageOverrides: {},
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -659,14 +650,10 @@ else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
 }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /machine region is ord instead of sjc/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /machine region is ord instead of sjc/,
+  );
 });
 
 test("fly live readiness rejects rendered environment drift after identity and region match", async (t) => {
@@ -685,7 +672,8 @@ test("fly live readiness rejects rendered environment drift after identity and r
     imageOverrides: {},
   };
   const env = { ...generatedEnv(derivedTomlFor(config, "core", repoRoot)), S3_BUCKET: "wrong-bucket" };
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -695,14 +683,10 @@ else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
 }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /rendered config drift \(machine 1 env S3_BUCKET\)/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /rendered config drift \(machine 1 env S3_BUCKET\)/,
+  );
 });
 
 test("fly live readiness requires the generated TCP check for plugins", async (t) => {
@@ -726,6 +710,7 @@ test("fly live readiness requires the generated TCP check for plugins", async (t
     linear: generatedEnv(derivedPluginTomlFor(config, plugin)),
   };
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-linear" }]));
@@ -737,18 +722,14 @@ else if (a.startsWith("status")) {
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.doesNotReject(() =>
-      flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok"), report: false }),
-    );
-    assert.match(
-      readFileSync(fake.log, "utf8"),
-      /checks list -a acme-linear --json/,
-      "plugin readiness is verified through its generated TCP check",
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.doesNotReject(() =>
+    flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok"), report: false }),
+  );
+  assert.match(
+    readFileSync(fake.log, "utf8"),
+    /checks list -a acme-linear --json/,
+    "plugin readiness is verified through its generated TCP check",
+  );
 });
 
 test("fly live readiness rejects a plugin whose TCP check is not passing", async (t) => {
@@ -771,7 +752,8 @@ test("fly live readiness rejects a plugin whose TCP check is not passing", async
     core: generatedEnv(derivedTomlFor(config, "core", repoRoot)),
     linear: generatedEnv(derivedPluginTomlFor(config, plugin)),
   };
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-linear" }]));
@@ -784,14 +766,10 @@ else if (a.startsWith("checks list") && a.includes("acme-linear")) console.log(J
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /acme-linear: 1 health check not passing/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /acme-linear: 1 health check not passing/,
+  );
 });
 
 test("fly live readiness fails when core cannot round-trip durable object storage", async (t) => {
@@ -810,7 +788,8 @@ test("fly live readiness fails when core cannot round-trip durable object storag
     imageOverrides: {},
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -819,14 +798,10 @@ else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ s
 else if (a.startsWith("ssh console")) { console.error("AccessDenied"); process.exit(1); }
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /S3 put\/get\/delete probe failed.*AccessDenied/s,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /S3 put\/get\/delete probe failed.*AccessDenied/s,
+  );
 });
 
 test("fly live readiness rejects a healthy machine on the wrong configured image digest", async (t) => {
@@ -847,7 +822,8 @@ test("fly live readiness rejects a healthy machine on the wrong configured image
     imageOverrides: { core: configured },
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -855,14 +831,10 @@ else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /do not run configured image digest/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /do not run configured image digest/,
+  );
 });
 
 test("fly live readiness resolves deployment tags to their immutable image digest", async (t) => {
@@ -882,7 +854,8 @@ test("fly live readiness resolves deployment tags to their immutable image diges
     imageOverrides: { core: `registry.fly.io/acme-core@${digest}` },
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
@@ -891,13 +864,9 @@ else if (a.startsWith("image show")) console.log(JSON.stringify([{ MachineID: "m
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
-  try {
-    await assert.doesNotReject(() =>
-      flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok"), report: false }),
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.doesNotReject(() =>
+    flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok"), report: false }),
+  );
 });
 
 test("fly live check rejects stopped workloads even when the public endpoint responds", async (t) => {
@@ -915,18 +884,15 @@ test("fly live check rejects stopped workloads even when the public endpoint res
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "stopped", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc" } }] })); else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /machine state is stopped instead of started/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /machine state is stopped instead of started/,
+  );
 });
 
 test("fly live check rejects a configured workload with no deployed machine", async (t) => {
@@ -944,18 +910,15 @@ test("fly live check rejects a configured workload with no deployed machine", as
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const fake = fakeFly(
+  fakeFly(
+    t,
     dir,
     `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [] })); else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
-      /acme-core: no deployed machine/,
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flyCheckLive(config, dir, { fetchImpl: async () => new Response("ok") }),
+    /acme-core: no deployed machine/,
+  );
 });
 
 test("fly secrets push rejects weak signing keys before staging anything", async (t) => {
@@ -977,13 +940,9 @@ test("fly secrets push rejects weak signing keys before staging anything", async
     join(dir, ".env"),
     `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\n`,
   );
-  const fake = fakeFly(dir, "");
-  try {
-    await assert.rejects(() => flySecretsPush(config, dir), /CORE_SIGNING_SECRET.*too short/);
-    assert.equal(readFileSync(fake.log, "utf8"), "");
-  } finally {
-    fake.restore();
-  }
+  const fake = fakeFly(t, dir, "");
+  await assert.rejects(() => flySecretsPush(config, dir), /CORE_SIGNING_SECRET.*too short/);
+  assert.equal(readFileSync(fake.log, "utf8"), "");
 });
 
 test("fly secrets push refuses an unmarked pre-existing app", async (t) => {
@@ -1013,6 +972,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async (t) => {
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps create")) console.log("already been taken");
@@ -1020,15 +980,11 @@ else if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-co
 else if (a.startsWith("secrets list")) console.log("CORE_SIGNING_SECRET");
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flySecretsPush(config, dir),
-      /already exists but is not marked as owned by this deployment/,
-    );
-    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /CAPABILITY_SECRET=-/);
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flySecretsPush(config, dir),
+    /already exists but is not marked as owned by this deployment/,
+  );
+  assert.doesNotMatch(readFileSync(fake.log, "utf8"), /CAPABILITY_SECRET=-/);
 });
 
 test("fly secrets push refuses a same-named app outside the configured Fly organization", async (t) => {
@@ -1058,25 +1014,22 @@ test("fly secrets push refuses a same-named app outside the configured Fly organ
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `
 if (a.startsWith("apps create")) console.log("already been taken");
 else if (a.startsWith("apps list")) console.log("[]");
 else console.log("ok");`,
   );
-  try {
-    await assert.rejects(
-      () => flySecretsPush(config, dir),
-      /app acme-core exists outside configured Fly organization operator-org/,
-    );
-    assert.doesNotMatch(
-      readFileSync(fake.log, "utf8"),
-      /secrets set --stage/,
-      "no credential is delivered across the organization boundary",
-    );
-  } finally {
-    fake.restore();
-  }
+  await assert.rejects(
+    () => flySecretsPush(config, dir),
+    /app acme-core exists outside configured Fly organization operator-org/,
+  );
+  assert.doesNotMatch(
+    readFileSync(fake.log, "utf8"),
+    /secrets set --stage/,
+    "no credential is delivered across the organization boundary",
+  );
 });
 
 test("fly secrets push stages a secretEnv alias under its declared env name on its service's app", async (t) => {
@@ -1112,6 +1065,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     ].join("\n"),
   );
   const fake = fakeFly(
+    t,
     dir,
     `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
@@ -1139,29 +1093,24 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     );
   } finally {
     console.log = log;
-    fake.restore();
   }
 });
 
 test("shared publisher authorization uses app-scoped access without organization listing", (t) => {
   const dir = tempDir(t, "qm-fly-app-token-");
-  const fake = fakeFly(dir, 'if (a !== "machines list -a acme-apps --json") process.exit(1);');
-  try {
-    const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
-    verifyLocalFlyTokens(
-      {
-        ...config,
-        env: {
-          core: {
-            DEPLOY_PROVIDER: "fly",
-            FLY_DEPLOY_SHARED_APP_NAME: "acme-apps",
-          },
+  const fake = fakeFly(t, dir, 'if (a !== "machines list -a acme-apps --json") process.exit(1);');
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  verifyLocalFlyTokens(
+    {
+      ...config,
+      env: {
+        core: {
+          DEPLOY_PROVIDER: "fly",
+          FLY_DEPLOY_SHARED_APP_NAME: "acme-apps",
         },
       },
-      new Map([["FLY_DEPLOY_API_TOKEN", "app-scoped-test-token"]]),
-    );
-    assert.equal(readFileSync(fake.log, "utf8").trim(), "machines list -a acme-apps --json");
-  } finally {
-    fake.restore();
-  }
+    },
+    new Map([["FLY_DEPLOY_API_TOKEN", "app-scoped-test-token"]]),
+  );
+  assert.equal(readFileSync(fake.log, "utf8").trim(), "machines list -a acme-apps --json");
 });
