@@ -72,21 +72,33 @@ test("Codex notification failures propagate after an unrelated response settles"
     binary,
     `#!${process.execPath}
 const readline = require("node:readline");
-readline.createInterface({ input: process.stdin }).on("line", line => {
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+const input = readline.createInterface({ input: process.stdin });
+input.on("line", line => {
   const message = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ method: "progress" }) + "\\n");
-  process.stdout.write(JSON.stringify({ id: message.id, result: "ready" }) + "\\n");
+  send({ method: "progress" });
+  send({ id: message.id, result: "ready" });
 });
+send({ method: "fixture/ready" });
 `,
   );
   chmodSync(binary, 0o755);
   const release = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<void>();
+  const events: string[] = [];
   const server = new CodexAppServer({
     binaryPath: binary,
     cwd: dir,
-    onNotification: async () => {
+    onNotification: async (method) => {
+      if (method === "fixture/ready") {
+        events.push("ready");
+        ready.resolve();
+        return;
+      }
+      events.push("notification started");
       await release.promise;
+      events.push("notification failed");
       throw new Error("notification failed");
     },
     onRequest: async () => ({}),
@@ -97,11 +109,15 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
     await server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  assert.equal(await server.request("probe", {}, AbortSignal.timeout(1000)), "ready");
+  await ready.promise;
+  assert.equal(await server.request("probe", {}, AbortSignal.timeout(250)), "ready");
+  events.push("response settled");
   assert.equal(server.error(), null);
+  assert.deepEqual(events, ["ready", "notification started", "response settled"]);
   release.resolve();
   await closed.promise;
-  assert.match(server.error()?.message ?? "", /Codex app-server exited/);
+  assert.equal(server.error()?.message, "Codex app-server exited (SIGTERM)");
+  assert.deepEqual(events, ["ready", "notification started", "response settled", "notification failed"]);
 });
 
 test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 3000 }, async (t) => {
