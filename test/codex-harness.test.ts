@@ -2145,7 +2145,7 @@ test(
     });
     t.after(async () => {
       await server.close();
-      rmSync(jail, { recursive: true, force: true });
+      rmSync(jail, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     });
 
     await server.initialize();
