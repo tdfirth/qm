@@ -41,7 +41,7 @@ test("conversation colors use the refined spectrum palette on every list surface
   assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
   assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
   assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\(/);
-  assert.match(shellCss, /\.session-row\.colored \.session::before,[\s\S]*?width: 2px;/);
+  assert.doesNotMatch(shellCss, /\.session-row\.colored \.session::before/);
 });
 
 test("pinned conversations use the same header and child alignment as project conversations", () => {

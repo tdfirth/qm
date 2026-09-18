@@ -709,7 +709,6 @@ a.chat-row-open {
   --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
 }
 .session-row.colored .session {
-  position: relative;
   background: linear-gradient(
     110deg,
     color-mix(in srgb, var(--session-color) 22%, transparent),
@@ -732,22 +731,11 @@ a.chat-row-open {
   );
 }
 .list-row.chat-row.colored {
-  position: relative;
   background: linear-gradient(
     110deg,
     color-mix(in srgb, var(--session-color) 20%, transparent),
     color-mix(in srgb, var(--session-color) 8%, transparent)
   );
-}
-.session-row.colored .session::before,
-.list-row.chat-row.colored::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  background: color-mix(in srgb, var(--session-color) 55%, transparent);
-  pointer-events: none;
 }
 .list-row.chat-row.colored:hover {
   background: linear-gradient(
