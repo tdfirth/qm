@@ -88,16 +88,14 @@ const registerPack = orgAdmin(async (ctx, actor) => {
   sendJson(ctx.res, 200, { pack });
 });
 
-const packCatalog = orgAdmin(async (ctx, actor) => {
-  const plan = await ctx.app.skillPackCatalog(ctx.params.id!);
-  audit(ctx.deps, {
-    principalId: actor.id,
-    action: "skill_pack.catalog",
-    resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
+const packAction = (action: string, run: (app: ApiCtx["app"], id: string) => Promise<unknown>) =>
+  orgAdmin(async (ctx, actor) => {
+    const result = await run(ctx.app, ctx.params.id!);
+    audit(ctx.deps, { principalId: actor.id, action, resource: ctx.params.id!, scopeLabel: orgScope(ctx.deps) });
+    sendJson(ctx.res, 200, result);
   });
-  sendJson(ctx.res, 200, plan);
-});
+
+const packCatalog = packAction("skill_pack.catalog", (app, id) => app.skillPackCatalog(id));
 
 const importPack = orgAdmin(async (ctx, actor) => {
   const body = (ctx.body as Record<string, unknown> | null) ?? {};
@@ -115,16 +113,7 @@ const importPack = orgAdmin(async (ctx, actor) => {
   sendJson(ctx.res, 200, result);
 });
 
-const syncPack = orgAdmin(async (ctx, actor) => {
-  const result = await ctx.app.syncSkillPack(ctx.params.id!);
-  audit(ctx.deps, {
-    principalId: actor.id,
-    action: "skill_pack.sync",
-    resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
-  });
-  sendJson(ctx.res, 200, result);
-});
+const syncPack = packAction("skill_pack.sync", (app, id) => app.syncSkillPack(id));
 
 const patchPack = orgAdmin(async (ctx, actor) => {
   const b = (ctx.body ?? {}) as Record<string, unknown>;
@@ -149,16 +138,7 @@ const patchPack = orgAdmin(async (ctx, actor) => {
   sendJson(ctx.res, 200, { pack });
 });
 
-const removePack = orgAdmin(async (ctx, actor) => {
-  const result = await ctx.app.removeSkillPack(ctx.params.id!);
-  audit(ctx.deps, {
-    principalId: actor.id,
-    action: "skill_pack.remove",
-    resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
-  });
-  sendJson(ctx.res, 200, result);
-});
+const removePack = packAction("skill_pack.remove", (app, id) => app.removeSkillPack(id));
 
 export const skillPackRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/admin/skill-packs", auth: "either", handle: registerPack },

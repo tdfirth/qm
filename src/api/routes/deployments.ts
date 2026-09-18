@@ -104,20 +104,22 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   return proxyReach(ctx, reach, subPath, principal, { sandbox: true });
 }
 
-function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
-  const prefix = "/v1/admin/deployments/";
+function deploymentPathParts(pathname: string, prefix: string, marker: string): { id: string; after: string } | null {
   if (!pathname.startsWith(prefix)) return null;
   const rest = pathname.slice(prefix.length);
-  const marker = "/proxy";
   const markerAt = rest.indexOf(marker);
   if (markerAt < 0) return null;
-  const after = rest.slice(markerAt + marker.length);
-  if (after && !after.startsWith("/")) return null;
   try {
-    return { id: decodeURIComponent(rest.slice(0, markerAt)), subPath: after || "/" };
+    return { id: decodeURIComponent(rest.slice(0, markerAt)), after: rest.slice(markerAt + marker.length) };
   } catch {
     return null;
   }
+}
+
+function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
+  const parts = deploymentPathParts(pathname, "/v1/admin/deployments/", "/proxy");
+  if (!parts || (parts.after && !parts.after.startsWith("/"))) return null;
+  return { id: parts.id, subPath: parts.after || "/" };
 }
 
 async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
@@ -961,19 +963,8 @@ const deploymentId = async (app: App, idOrName: string): Promise<string | undefi
   (await app.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName)?.id;
 
 function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
-  const prefix = "/v1/deployments/";
-  if (!pathname.startsWith(prefix)) return null;
-  const rest = pathname.slice(prefix.length);
-  const marker = "/git/";
-  const markerAt = rest.indexOf(marker);
-  if (markerAt < 0) return null;
-  const tail = rest.slice(markerAt + marker.length);
-  if (!tail) return null;
-  try {
-    return { id: decodeURIComponent(rest.slice(0, markerAt)), tail };
-  } catch {
-    return null;
-  }
+  const parts = deploymentPathParts(pathname, "/v1/deployments/", "/git/");
+  return parts?.after ? { id: parts.id, tail: parts.after } : null;
 }
 
 function isDeploymentGitRoute(method: string, pathname: string): boolean {
@@ -1299,36 +1290,30 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
 }
 
 async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id))) return forbidden(res);
-  const b = body as { version?: unknown };
-  if (typeof b.version !== "number") return badRequest(res, "version (number) required");
-  try {
-    await app.rollbackDeployment(id, b.version);
-    return sendJson(res, 200, { ok: true });
-  } catch (e) {
-    return sendJson(res, 400, { error: "rollback_failed", message: errMessage(e) });
-  }
+  const { res, app, body } = ctx;
+  const id = await managedDeploymentId(ctx);
+  if (!id) return;
+  const { version } = body as { version?: unknown };
+  if (typeof version !== "number") return badRequest(res, "version (number) required");
+  return deploymentMutation(res, "rollback_failed", async () => {
+    await app.rollbackDeployment(id, version);
+    return { ok: true };
+  });
 }
 
 async function redeployDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id))) return forbidden(res);
+  const { res, app, body } = ctx;
+  const id = await managedDeploymentId(ctx);
+  if (!id) return;
   if (!isRedeployInput(body)) {
     return badRequest(
       res,
       "entrypoint (string) and files (array) required; env must be a string map, homeFiles an array, alwaysOn a boolean",
     );
   }
-  try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, body)) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
-  }
+  return deploymentMutation(res, "deploy_failed", async () => ({
+    deployment: deploymentView(await app.redeploy(id, body)),
+  }));
 }
 
 async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boolean> {
@@ -1336,82 +1321,79 @@ async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boole
   return !principalId || ctx.app.canManageDeployment(id, principalId, ctx.capability?.scopeId);
 }
 
-export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return forbidden(res, "only someone who manages this app can archive it");
+async function managedDeploymentId(ctx: ApiCtx, denied?: string): Promise<string | null> {
+  const id = await deploymentId(ctx.app, ctx.params.id!);
+  if (!id) {
+    notFound(ctx.res);
+    return null;
+  }
+  if (!(await callerMayManageDeployment(ctx, id))) {
+    forbidden(ctx.res, denied);
+    return null;
+  }
+  return id;
+}
+
+async function deploymentMutation(res: ApiCtx["res"], failure: string, run: () => Promise<unknown>): Promise<void> {
   try {
-    await app.archiveDeployment(id);
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, await run());
   } catch (e) {
-    return sendJson(res, 400, { error: "archive_failed", message: errMessage(e) });
+    return sendJson(res, 400, { error: failure, message: errMessage(e) });
   }
 }
 
+export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
+  const { res, app } = ctx;
+  const id = await managedDeploymentId(ctx, "only someone who manages this app can archive it");
+  if (!id) return;
+  return deploymentMutation(res, "archive_failed", async () => {
+    await app.archiveDeployment(id);
+    return { ok: true };
+  });
+}
+
 export async function restoreDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return forbidden(res, "only someone who manages this app can restore it");
-  try {
+  const { res, app, capability, body } = ctx;
+  const id = await managedDeploymentId(ctx, "only someone who manages this app can restore it");
+  if (!id) return;
+  return deploymentMutation(res, "restore_failed", async () => {
     const principalId =
       capability?.actorId ??
       ctx.actor?.p ??
       (isObj(body) && typeof body.principalId === "string" ? body.principalId : undefined);
-    return sendJson(res, 200, {
-      deployment: { ...deploymentView(await app.restoreDeployment(id, principalId)), permission: "write" },
-    });
-  } catch (e) {
-    return sendJson(res, 400, { error: "restore_failed", message: errMessage(e) });
-  }
+    return { deployment: { ...deploymentView(await app.restoreDeployment(id, principalId)), permission: "write" } };
+  });
 }
 
 export async function renameDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return forbidden(res, "only someone who manages this app can rename it");
-  const b = body as { name?: unknown };
-  if (typeof b.name !== "string") return badRequest(res, "name (string) required");
-  try {
-    return sendJson(res, 200, { deployment: await app.renameDeployment(id, b.name) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
-  }
+  const { res, app, body } = ctx;
+  const id = await managedDeploymentId(ctx, "only someone who manages this app can rename it");
+  if (!id) return;
+  const { name } = body as { name?: unknown };
+  if (typeof name !== "string") return badRequest(res, "name (string) required");
+  return deploymentMutation(res, "rename_failed", async () => ({ deployment: await app.renameDeployment(id, name) }));
 }
 
 export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return forbidden(res, "only someone who manages this app can rename it");
-  const b = body as { displayName?: unknown };
-  if (typeof b.displayName !== "string") return badRequest(res, "displayName (string) required");
-  try {
-    return sendJson(res, 200, { deployment: await app.setDeploymentDisplayName(id, b.displayName) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
-  }
+  const { res, app, body } = ctx;
+  const id = await managedDeploymentId(ctx, "only someone who manages this app can rename it");
+  if (!id) return;
+  const { displayName } = body as { displayName?: unknown };
+  if (typeof displayName !== "string") return badRequest(res, "displayName (string) required");
+  return deploymentMutation(res, "display_name_failed", async () => ({
+    deployment: await app.setDeploymentDisplayName(id, displayName),
+  }));
 }
 
 async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return notFound(res);
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return forbidden(res, "only someone who manages this app can change this");
-  const b = body as { alwaysOn?: unknown };
-  if (typeof b.alwaysOn !== "boolean") return badRequest(res, "alwaysOn (boolean) required");
-  try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentAlwaysOn(id, b.alwaysOn)) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
-  }
+  const { res, app, body } = ctx;
+  const id = await managedDeploymentId(ctx, "only someone who manages this app can change this");
+  if (!id) return;
+  const { alwaysOn } = body as { alwaysOn?: unknown };
+  if (typeof alwaysOn !== "boolean") return badRequest(res, "alwaysOn (boolean) required");
+  return deploymentMutation(res, "always_on_failed", async () => ({
+    deployment: deploymentView(await app.setDeploymentAlwaysOn(id, alwaysOn)),
+  }));
 }
 
 type ShareTarget =

@@ -81,29 +81,23 @@ function conversationWebUrl(publicWebUrl: string | undefined, sessionId: string)
   }
 }
 
-async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
+async function sessionPrincipalAction(
+  ctx: ApiCtx,
+  run: (app: ApiCtx["app"], id: string, principalId: string) => Promise<unknown>,
+): Promise<void> {
   const { res, app, body } = ctx;
-  const id = ctx.params.id!;
   const principalId = (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId) {
-    return badRequest(res, "principalId required");
-  }
-  const out = await app.regenerateTitle(id, principalId);
+  if (typeof principalId !== "string" || !principalId) return badRequest(res, "principalId required");
+  const out = await run(app, ctx.params.id!, principalId);
   if (!out) return notFound(res);
   return sendJson(res, 200, out);
 }
 
-async function detachSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const principalId = (body as { principalId?: unknown }).principalId;
-  if (typeof principalId !== "string" || !principalId) {
-    return badRequest(res, "principalId required");
-  }
-  const out = await app.detachSession(id, principalId);
-  if (!out) return notFound(res);
-  return sendJson(res, 200, out);
-}
+const regenerateSessionTitle = (ctx: ApiCtx): Promise<void> =>
+  sessionPrincipalAction(ctx, (app, id, principalId) => app.regenerateTitle(id, principalId));
+
+const detachSession = (ctx: ApiCtx): Promise<void> =>
+  sessionPrincipalAction(ctx, (app, id, principalId) => app.detachSession(id, principalId));
 
 async function adoptSession(ctx: ApiCtx): Promise<void> {
   const { principalId, parentSessionId } = ctx.body as { principalId?: unknown; parentSessionId?: unknown };

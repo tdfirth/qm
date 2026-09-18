@@ -137,6 +137,11 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
 
+const orgToggle = (
+  label: string,
+  set: (deps: ServerDeps, scope: string, on: boolean) => unknown,
+): AdminResource["apply"] => generic<boolean>((body, { scope }) => orgOnly(scope, label) ?? boolBody(body), set);
+
 const credentialServices = async (
   deps: Pick<ServerDeps, "credentialServices" | "brokeredServices" | "deviceFlowCutover">,
   scope: ScopeId,
@@ -445,13 +450,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
     readKey: "externalSlackParticipants",
     get: (deps, scope) => deps.config!.getExternalSlackParticipants(scope),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the external-Slack-participants toggle is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, scope, on) => deps.config!.setExternalSlackParticipants(scope, on),
+    apply: orgToggle("the external-Slack-participants toggle is org-wide", (deps, scope, on) =>
+      deps.config!.setExternalSlackParticipants(scope, on),
     ),
   },
   {
@@ -491,13 +491,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
     readKey: "channelHeaderPinDefault",
     get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getChannelHeaderPin(scope) : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the channel pinned-header default is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, scope, on) => deps.config!.setChannelHeaderPinLatest(scope, on),
+    apply: orgToggle("the channel pinned-header default is org-wide", (deps, scope, on) =>
+      deps.config!.setChannelHeaderPinLatest(scope, on),
     ),
   },
   {
@@ -508,14 +503,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
     readKey: "orgAmbient",
     get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getOrgAmbient() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the ambient switch here is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setOrgAmbient(on),
-    ),
+    apply: orgToggle("the ambient switch here is org-wide", (deps, _scope, on) => deps.config!.setOrgAmbient(on)),
   },
   {
     id: "interactive-fast-mode",
@@ -525,13 +513,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
     readKey: "interactiveFastMode",
     get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getInteractiveFastMode() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the interactive fast-mode switch is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setInteractiveFastMode(on),
+    apply: orgToggle("the interactive fast-mode switch is org-wide", (deps, _scope, on) =>
+      deps.config!.setInteractiveFastMode(on),
     ),
   },
   {
@@ -542,13 +525,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
     readKey: "individualModelAuth",
     get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getIndividualModelAuth() : undefined),
-    apply: generic<boolean>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the individual-authorization switch is org-wide");
-        if (bad) return bad;
-        return boolBody(body);
-      },
-      (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
+    apply: orgToggle("the individual-authorization switch is org-wide", (deps, _scope, on) =>
+      deps.config!.setIndividualModelAuth(on),
     ),
   },
   {
