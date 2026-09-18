@@ -415,7 +415,31 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
   };
 
+  const finishNativeChild = async (
+    state: ActiveTurn,
+    receiver: string,
+    status: "completed" | "failed",
+    result: string,
+  ): Promise<void> => {
+    const taskId = state.taskIds.get(receiver);
+    const prior = taskId ? state.taskStatuses.get(taskId) : undefined;
+    if (!taskId || prior !== "in_progress") return;
+    await transitionTask(opts.tasks, taskId, prior, status, state.turn.runId ?? state.turn.session.id);
+    state.taskStatuses.set(taskId, status);
+    if (state.taskResults.has(taskId)) return;
+    state.taskResults.add(taskId);
+    await state.turn.emit({
+      type: "tool_result",
+      payload: { tool: "spawnAgent", callId: taskId, result, isError: status === "failed" },
+      scopeLabel: state.turn.scopeLabel,
+    });
+  };
+
   const processCollabItem = async (state: ActiveTurn, item: CodexItem): Promise<void> => {
+    if (item.type === "subAgentActivity" && item.kind === "interrupted" && typeof item.agentThreadId === "string") {
+      await finishNativeChild(state, item.agentThreadId, "failed", "interrupted");
+      return;
+    }
     if (item.type === "subAgentActivity" && item.kind === "started" && typeof item.agentThreadId === "string") {
       const receiver = item.agentThreadId;
       if (state.taskIds.has(receiver)) return;
@@ -575,27 +599,27 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             }
           }
           await processCollabItem(state, item);
-          if (method === "item/completed" && threadId !== state.threadId && item.type === "agentMessage") {
-            const taskId = state.taskIds.get(threadId);
-            const prior = taskId ? state.taskStatuses.get(taskId) : undefined;
-            if (taskId && prior === "in_progress") {
-              await transitionTask(opts.tasks, taskId, prior, "completed", state.turn.runId ?? state.turn.session.id);
-              state.taskStatuses.set(taskId, "completed");
-              if (!state.taskResults.has(taskId)) {
-                state.taskResults.add(taskId);
-                await state.turn.emit({
-                  type: "tool_result",
-                  payload: {
-                    tool: "spawnAgent",
-                    callId: taskId,
-                    result: typeof item.text === "string" ? item.text : "completed",
-                    isError: false,
-                  },
-                  scopeLabel: state.turn.scopeLabel,
-                });
-              }
-            }
+          if (
+            method === "item/completed" &&
+            threadId !== state.threadId &&
+            item.type === "agentMessage" &&
+            item.phase === "final_answer"
+          )
+            await finishNativeChild(
+              state,
+              threadId,
+              "completed",
+              typeof item.text === "string" ? item.text : "completed",
+            );
+        }
+        if (method === "turn/completed" && threadId !== state.threadId) {
+          const child = p.turn as CodexTurn | undefined;
+          if (!isCodexTurn(child)) {
+            state.reject(new CodexRpcError("Codex app-server sent an invalid child turn/completed payload"));
+            return;
           }
+          if (child.status !== "completed")
+            await finishNativeChild(state, threadId, "failed", child.error?.message ?? child.status);
         }
         if (method === "turn/completed" && threadId === state.threadId) {
           const completed = p.turn as CodexTurn | undefined;
@@ -1394,6 +1418,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       for (const [activeThreadId, activeState] of active) {
         if (activeState === state) active.delete(activeThreadId);
       }
+      if (!ephemeral && state.server.process.exitCode === null)
+        await state.server
+          .request("thread/delete", { threadId: state.threadId }, AbortSignal.timeout(1_000))
+          .catch((error) => swallow("codex: thread delete", error));
       try {
         await closeEphemeral();
       } catch (error) {
