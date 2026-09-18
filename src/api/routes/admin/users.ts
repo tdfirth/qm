@@ -12,7 +12,7 @@ import { resolveBranding } from "../../../resolution/branding.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, conflict, forbidden, notFound, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { FILES_PAGE_SIZE } from "./common.ts";
@@ -79,8 +79,8 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
+  if (!deps.identity) return notFound(res);
+  const bad = (message: string) => badRequest(res, message);
   const b = isObj(body) ? body : {};
   const email = String(b.email ?? "")
     .trim()
@@ -96,13 +96,11 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   const existing = deps.identity.externalMember(email);
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
-  if ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing)))
-    return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
+  if ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))) return conflict(res, ALREADY_A_MEMBER);
   if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant)) {
-    return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
+    return forbidden(res, EXTERNAL_ORG_ADMIN_PORTAL_ONLY);
   }
-  if (role === "member" && holdsGrant && !ownsGrant)
-    return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
+  if (role === "member" && holdsGrant && !ownsGrant) return conflict(res, HOLDS_OWN_GRANT);
   let grantChange: "grant.create" | "grant.revoke" | null = null;
   if (role === "org_admin" && !holdsGrant) grantChange = "grant.create";
   else if (role === "member" && holdsGrant) grantChange = "grant.revoke";
@@ -173,16 +171,16 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity) return notFound(res);
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
-  if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
+  if (!existing) return notFound(res, "external user not found");
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
   if (ctx.capability && (ownsGrant || holdsGrant)) {
-    return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
+    return forbidden(res, EXTERNAL_ORG_ADMIN_PORTAL_ONLY);
   }
-  if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
+  if (holdsGrant && !ownsGrant) return conflict(res, HOLDS_OWN_GRANT);
   if (holdsGrant) {
     try {
       await deps.admin!.revokeGrant(actor, existing.email, scope, "org_admin");
@@ -450,8 +448,8 @@ export async function startImpersonation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
-  if (!target) return sendJson(res, 400, { error: "bad_request", message: "target principal required" });
-  if (target === actor.id) return sendJson(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+  if (!target) return badRequest(res, "target principal required");
+  if (target === actor.id) return badRequest(res, "cannot impersonate yourself");
   const member = await app.directoryMember(target);
   audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });
@@ -473,14 +471,11 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.memory) return notFound(res);
   const principalId = params.principalId!;
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "onboarding requires { status: not_started|pending|completed|dismissed }",
-    });
+    return badRequest(res, "onboarding requires { status: not_started|pending|completed|dismissed }");
   }
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
@@ -499,7 +494,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.memory) return notFound(res);
   const principalId = params.principalId!;
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
@@ -557,10 +552,7 @@ export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope") ?? "";
   const role = url.searchParams.get("role") ?? "";
   if (!principalId || !scope || role !== "org_admin") {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "principalId (path), and scope + role=org_admin (query) required",
-    });
+    return badRequest(res, "principalId (path), and scope + role=org_admin (query) required");
   }
   try {
     await deps.admin!.revokeGrant(actor, principalId, scope, role);

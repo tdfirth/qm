@@ -1,5 +1,5 @@
 import type { App } from "../../app.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
@@ -52,7 +52,7 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const container = (url.searchParams.get("container") ?? "").trim();
   const q = (url.searchParams.get("q") ?? "").trim();
-  if (!container && !q) return sendJson(res, 400, { error: "bad_request", message: "container or q required" });
+  if (!container && !q) return badRequest(res, "container or q required");
   const limit = Math.min(
     SLACK_MIRROR_PAGE_MAX,
     Math.max(1, Number(url.searchParams.get("limit")) || SLACK_MIRROR_PAGE_DEFAULT),
@@ -105,7 +105,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
   });
   if (id) {
     const judgment = await store.get(id);
-    if (!judgment) return sendJson(res, 404, { error: "not_found" });
+    if (!judgment) return notFound(res);
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
     return sendJson(res, 200, { scopeId: scope, judgment, workspaceUrl });
   }
@@ -148,7 +148,7 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "ack_emoji_picks.read", resource: channel ?? "all", scopeLabel: scope });
   if (id) {
     const pick = await store.get(id);
-    if (!pick) return sendJson(res, 404, { error: "not_found" });
+    if (!pick) return notFound(res);
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
     return sendJson(res, 200, { scopeId: scope, pick, workspaceUrl });
   }

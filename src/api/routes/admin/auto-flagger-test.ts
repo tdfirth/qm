@@ -1,4 +1,4 @@
-import { sendJson } from "../../http.ts";
+import { badRequest, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-posture.ts";
@@ -88,7 +88,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (requestedScope !== scope) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "the Auto flagger is org-wide; request an org scope" });
+    badRequest(ctx.res, "the Auto flagger is org-wide; request an org scope");
     return;
   }
   await ctx.deps.refreshModels?.();
@@ -101,10 +101,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   };
   const requestedWindow = body.window === undefined ? DEFAULT_WINDOW : Number(body.window);
   if (!Number.isInteger(requestedWindow) || requestedWindow < 1 || requestedWindow > MAX_WINDOW) {
-    sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `window must be an integer between 1 and ${MAX_WINDOW}`,
-    });
+    badRequest(ctx.res, `window must be an integer between 1 and ${MAX_WINDOW}`);
     return;
   }
   const { sessions, screenSecurity, config: configStore } = ctx.deps;
@@ -126,7 +123,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
     ? await parseAutoFlaggerDraft(ctx.deps, body)
     : ({ value: effective } as { value: AutoFlaggerDraft });
   if ("error" in parsed) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error });
+    badRequest(ctx.res, parsed.error);
     return;
   }
   const candidate = parsed.value;

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { sendJson } from "../http.ts";
+import { forbidden, notFound, sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/direct-file-upload.ts";
 import { isObj, audit } from "./shared.ts";
@@ -28,7 +28,7 @@ async function handleUpload(ctx: ApiCtx): Promise<void> {
           ? (body.scopeId as ScopeId)
           : (capability?.scopeId ?? scopeId("personal", actorId));
       if ((capability && targetScope !== capability.scopeId) || !(await app.belongsToScope(actorId, targetScope)))
-        return sendJson(res, 403, { error: "forbidden" });
+        return forbidden(res);
       if (
         typeof body.name !== "string" ||
         !body.name.trim() ||
@@ -57,7 +57,7 @@ async function handleUpload(ctx: ApiCtx): Promise<void> {
       (capability && upload.scopeId !== capability.scopeId) ||
       !(await app.belongsToScope(actorId, upload.scopeId))
     )
-      return sendJson(res, 404, { error: "not_found" });
+      return notFound(res);
     if (method === "GET") return sendJson(res, 200, { upload });
     if (params.part) return sendJson(res, 200, await uploads.sign(upload.id, Number(params.part)));
     if (pathname.endsWith("/complete")) {

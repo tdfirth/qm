@@ -1,7 +1,7 @@
 import { isStrongSigningSecret } from "../../auth/source-auth.ts";
 import { timingSafeEqual } from "node:crypto";
 import { BackgroundOwnershipConflict, type BackgroundOwnership } from "../../runs/background-ownership.ts";
-import { sendJson } from "../http.ts";
+import { sendJson, unauthorized } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -42,7 +42,7 @@ export function requireDeploymentControl(ctx: ApiCtx): boolean {
   const expected = Buffer.from(`Bearer ${secret}`);
   const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    sendJson(ctx.res, 401, { error: "unauthorized" });
+    unauthorized(ctx.res);
     return false;
   }
   return true;

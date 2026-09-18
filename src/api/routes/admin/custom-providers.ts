@@ -3,7 +3,7 @@ import {
   type CustomProviderSpec,
   type CustomProviderProtocol,
 } from "../../../model/custom-providers.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
@@ -42,7 +42,7 @@ async function validateKey(
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.customProviders) return notFound(ctx.res);
   audit(ctx.deps, {
     principalId: authorized.id,
     action: "custom-providers.read",
@@ -55,9 +55,9 @@ export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
 export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.customProviders) return notFound(ctx.res);
   const id = ctx.params.provider;
-  if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!id) return notFound(ctx.res);
   const body = ctx.body as {
     name?: unknown;
     protocol?: unknown;
@@ -67,13 +67,10 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     validate?: unknown;
   };
   if (typeof body.name !== "string" || typeof body.protocol !== "string" || typeof body.baseUrl !== "string") {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "name, protocol, and baseUrl are required" });
+    return badRequest(ctx.res, "name, protocol, and baseUrl are required");
   }
   if (!(CUSTOM_PROVIDER_PROTOCOLS as readonly string[]).includes(body.protocol)) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`,
-    });
+    return badRequest(ctx.res, `protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
   }
   const spec: CustomProviderSpec = {
     id,
@@ -93,7 +90,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   try {
     await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
   } catch (e) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: (e as Error).message });
+    return badRequest(ctx.res, (e as Error).message);
   }
   await ctx.deps.refreshCustomProviders?.();
   audit(ctx.deps, {
@@ -109,11 +106,11 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
 export async function deleteCustomProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.customProviders) return notFound(ctx.res);
   const id = ctx.params.provider;
-  if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!id) return notFound(ctx.res);
   const removed = await ctx.deps.customProviders.delete(id, authorized.id);
-  if (!removed) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!removed) return notFound(ctx.res);
   await ctx.deps.refreshCustomProviders?.();
   audit(ctx.deps, {
     principalId: authorized.id,

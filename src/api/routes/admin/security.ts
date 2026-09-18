@@ -1,4 +1,4 @@
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 
@@ -36,12 +36,12 @@ export async function releaseSecurityTaint(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const sessionId = (ctx.body as { sessionId?: unknown } | null)?.sessionId;
   if (typeof sessionId !== "string" || !sessionId.trim()) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "sessionId required" });
+    badRequest(ctx.res, "sessionId required");
     return;
   }
   const released = (await ctx.deps.sessions?.clearSecurityTaint(sessionId)) ?? false;
   if (!released) {
-    sendJson(ctx.res, 404, { error: "not_found" });
+    notFound(ctx.res);
     return;
   }
   audit(ctx.deps, {

@@ -1,6 +1,6 @@
 import { parseScopeId, type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
@@ -97,14 +97,11 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   if (!scoped) return;
   const { actor, record: cron } = scoped;
   if (typeof body !== "object" || body === null || !("destination" in body)) {
-    return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
+    return badRequest(res, "destination is required; use null to clear");
   }
   const destination = (body as { destination: unknown }).destination;
   if (destination !== null && !isAdminCronDestination(destination)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "destination must be a principal or slack destination with a target",
-    });
+    return badRequest(res, "destination must be a principal or slack destination with a target");
   }
   const next = destination === null ? undefined : destination;
   const updated = await app.setCronDestination(id, next);

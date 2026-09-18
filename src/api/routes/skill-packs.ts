@@ -1,4 +1,4 @@
-import { sendJson } from "../http.ts";
+import { badRequest, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, authorizeAdmin, orgScope } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
@@ -63,11 +63,10 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   if (typeof b.url !== "string" || !b.url.trim()) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "url is required" });
+    return badRequest(ctx.res, "url is required");
   }
   const subset = asSubset(b.subset);
-  if (subset === undefined)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
+  if (subset === undefined) return badRequest(ctx.res, "subset must be 'all' or string[]");
   const input: NewSkillPack = {
     kind: "git",
     url: b.url.trim(),
@@ -111,14 +110,9 @@ async function importPack(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const body = (ctx.body as Record<string, unknown> | null) ?? {};
   const subset = asSubset(body.selected);
-  if (subset === undefined)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "selected must be 'all' or string[]" });
+  if (subset === undefined) return badRequest(ctx.res, "selected must be 'all' or string[]");
   const scopeIds = asScopeIds(body.scopeIds);
-  if (scopeIds === undefined)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "scopeIds must be an array of 'kind:ref' scope ids",
-    });
+  if (scopeIds === undefined) return badRequest(ctx.res, "scopeIds must be an array of 'kind:ref' scope ids");
   const result = await ctx.app.importSkillPack(ctx.params.id!, subset, scopeIds);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -153,8 +147,7 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
   if (b.syncMode === "pinned" || b.syncMode === "tracked") patch.syncMode = b.syncMode;
   if (b.subset !== undefined) {
     const subset = asSubset(b.subset);
-    if (subset === undefined)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
+    if (subset === undefined) return badRequest(ctx.res, "subset must be 'all' or string[]");
     patch.subset = subset;
   }
   if (b.config !== undefined) patch.config = asConfig(b.config);

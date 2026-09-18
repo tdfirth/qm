@@ -1,4 +1,4 @@
-import { sendJson } from "../http.ts";
+import { notFound } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -8,7 +8,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   const { app, req, res, actor } = ctx;
   const runId = ctx.params.id!;
   const initial = await app.getRun(runId, actor?.p);
-  if (!initial) return sendJson(res, 404, { error: "not_found" });
+  if (!initial) return notFound(res);
   if (res.destroyed) return;
   let closed = false;
   let offset = 0;

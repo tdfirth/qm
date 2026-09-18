@@ -2,7 +2,7 @@ import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelVerificationError } from "../../../model/model-verification.ts";
 import { MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
 import { errMessage } from "../../../util/errors.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope, isObj } from "../shared.ts";
 
@@ -11,7 +11,7 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const store = ctx.deps.modelRegistry;
-  if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!store) return notFound(ctx.res);
   if (ctx.method === "GET") {
     await ctx.deps.refreshModels?.();
     const ids = new Set([
@@ -26,14 +26,13 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 200, { models: await store.statuses(), templates });
   }
   const id = ctx.params.model;
-  if (!id) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!id) return badRequest(ctx.res);
   let verification: { verifiedAt: number; verificationScope: "organization" } | undefined;
   try {
     if (ctx.method === "DELETE") {
-      if (!(await store.delete(id, actor.id))) return sendJson(ctx.res, 404, { error: "not_found" });
+      if (!(await store.delete(id, actor.id))) return notFound(ctx.res);
     } else {
-      if (!isObj(ctx.body) || (ctx.body.id !== undefined && ctx.body.id !== id))
-        return sendJson(ctx.res, 400, { error: "bad_request" });
+      if (!isObj(ctx.body) || (ctx.body.id !== undefined && ctx.body.id !== id)) return badRequest(ctx.res);
       const { verify, ...spec } = ctx.body;
       if (verify !== true)
         return sendJson(ctx.res, 400, {
@@ -58,7 +57,7 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
         { error: error.code, message: error.message },
       );
     }
-    return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(error) });
+    return badRequest(ctx.res, errMessage(error));
   }
   audit(ctx.deps, {
     principalId: actor.id,
@@ -77,8 +76,7 @@ import { verificationFailure } from "../../../model/model-verification.ts";
 export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
   if (!(await authorizeAdmin(ctx, orgScope(ctx.deps)))) return;
   const input = modelLookupInput.safeParse(ctx.body);
-  if (!input.success)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "Choose a provider and enter a valid model ID." });
+  if (!input.success) return badRequest(ctx.res, "Choose a provider and enter a valid model ID.");
   await ctx.deps.refreshModels?.();
   try {
     const saved = (await ctx.deps.modelRegistry?.statuses())?.find(
@@ -121,13 +119,10 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!isObj(ctx.body)) return badRequest(ctx.res);
   const input = modelLookupInput.safeParse({ provider: ctx.body.provider, id: ctx.params.model });
   if (!input.success || ctx.body.verify !== true)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "Choose a provider and explicitly consent to verification with verify: true.",
-    });
+    return badRequest(ctx.res, "Choose a provider and explicitly consent to verification with verify: true.");
   const { config, modelVerifier } = ctx.deps;
   if (!config || !modelVerifier) return sendJson(ctx.res, 503, { error: "verification_unavailable" });
   await ctx.deps.refreshModels?.();

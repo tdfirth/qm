@@ -1,6 +1,6 @@
 import { parseScopeId } from "../../types.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, conflict, forbidden, notFound, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -20,17 +20,11 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const principalId = (url.searchParams.get("principalId") ?? "").trim();
   const scope = (url.searchParams.get("scope") ?? "").trim();
-  if (!principalId || !scope)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
+  if (!principalId || !scope) return badRequest(res, "principalId and scope required");
   const container = channelContainer(scope);
-  if (!container)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambient policy applies to channel and group scopes only",
-    });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
-  if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
+  if (!container) return badRequest(res, "ambient policy applies to channel and group scopes only");
+  if (!deps.channelPolicy) return notFound(res, "not available on this deployment");
+  if (!(await memberScope(ctx, principalId, scope))) return forbidden(res);
   const p = await deps.channelPolicy.get(container);
   return sendJson(res, 200, {
     policy: {
@@ -47,37 +41,24 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
-  if (!principalId || !scope)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
+  if (!principalId || !scope) return badRequest(res, "principalId and scope required");
   const container = channelContainer(scope);
-  if (!container)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambient policy applies to channel and group scopes only",
-    });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
-  if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
-  if (typeof b.orders !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
+  if (!container) return badRequest(res, "ambient policy applies to channel and group scopes only");
+  if (!deps.channelPolicy) return notFound(res, "not available on this deployment");
+  if (!(await memberScope(ctx, principalId, scope))) return forbidden(res);
+  if (typeof b.orders !== "string") return badRequest(res, "orders (string) required");
   if (b.orders.length > MAX_ORDERS_CHARS)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
-    });
+    return badRequest(
+      res,
+      `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
+    );
   const parsed = parseBotLedger(b.bots ?? {});
-  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  if ("error" in parsed) return badRequest(res, parsed.error);
   if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "ambientEnabled must be a boolean or null (null = default rule)",
-    });
+    return badRequest(res, "ambientEnabled must be a boolean or null (null = default rule)");
   const current = await deps.channelPolicy.get(container);
   if (typeof b.baseUpdatedAt === "number" && (current?.updatedAt ?? 0) !== b.baseUpdatedAt) {
-    return sendJson(res, 409, {
-      error: "conflict",
-      message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
-    });
+    return conflict(res, "this channel's policy changed since you loaded it — reload and re-apply your edit");
   }
   const p = await deps.channelPolicy.set(container, b.orders, {
     setBy: principalId,

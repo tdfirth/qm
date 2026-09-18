@@ -1,4 +1,4 @@
-import { sendJson } from "../http.ts";
+import { badRequest, notFound, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -23,20 +23,17 @@ async function addPin(ctx: ApiCtx): Promise<void> {
   const text = typeof b.text === "string" && b.text.trim() ? b.text.trim() : undefined;
   const seq = b.seq;
   if (seq !== undefined && (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0)) {
-    return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
+    return badRequest(res, "seq must be a non-negative integer");
   }
   if (!text && seq === undefined) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "pass `text` (a note to pin) and/or `seq` (a transcript entry to pin)",
-    });
+    return badRequest(res, "pass `text` (a note to pin) and/or `seq` (a transcript entry to pin)");
   }
   const out = await app.pinConversationItem(threadRef, capability!.actorId, {
     ...(text ? { text } : {}),
     ...(seq !== undefined ? { entrySeq: seq } : {}),
   });
   if ("error" in out) {
-    if (out.error === "not_found") return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
+    if (out.error === "not_found") return notFound(res, "no such conversation");
     if (out.error === "bad_entry") {
       return sendJson(res, 404, { error: "entry_not_found", message: `no transcript entry with seq ${seq}` });
     }
@@ -53,7 +50,7 @@ async function listPins(ctx: ApiCtx): Promise<void> {
   const threadRef = conversationRef(ctx);
   if (!threadRef) return;
   const pins = await app.listConversationPins(threadRef, capability!.actorId);
-  if (pins === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
+  if (pins === null) return notFound(res, "no such conversation");
   return sendJson(res, 200, { pins });
 }
 
@@ -62,8 +59,8 @@ async function removePin(ctx: ApiCtx): Promise<void> {
   const threadRef = conversationRef(ctx);
   if (!threadRef) return;
   const removed = await app.unpinConversationItem(threadRef, ctx.params.id!);
-  if (removed === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
-  if (!removed) return sendJson(res, 404, { error: "not_found", message: "no such pin" });
+  if (removed === null) return notFound(res, "no such conversation");
+  if (!removed) return notFound(res, "no such pin");
   return sendJson(res, 200, { ok: true });
 }
 

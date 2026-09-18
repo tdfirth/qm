@@ -49,6 +49,16 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
 }
 
+function errorResponder(status: number, error: string) {
+  return (res: ServerResponse, message?: string): void => sendJson(res, status, { error, message });
+}
+
+export const badRequest = errorResponder(400, "bad_request");
+export const unauthorized = errorResponder(401, "unauthorized");
+export const forbidden = errorResponder(403, "forbidden");
+export const notFound = errorResponder(404, "not_found");
+export const conflict = errorResponder(409, "conflict");
+
 const BODY_DEADLINE = Symbol.for("qm.bodyDeadline");
 type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void } };
 
@@ -171,7 +181,7 @@ export async function verifyOrReject(
 ): Promise<boolean> {
   if (!secret) {
     if (allowUnsigned) return true;
-    sendJson(res, 401, { error: "unauthorized", message: "source authentication is not configured" });
+    unauthorized(res, "source authentication is not configured");
     return false;
   }
   const signature = String(req.headers["x-signature"] ?? "");
@@ -181,7 +191,7 @@ export async function verifyOrReject(
       ? await auth.verify({ signature, timestamp, body: payload, eventId: signature })
       : verifySignature(secret, { signature, timestamp, body: payload }, Date.now(), SOURCE_AUTH_REPLAY_WINDOW_MS);
   if (!r.ok) {
-    sendJson(res, 401, { error: "unauthorized", message: r.reason });
+    unauthorized(res, r.reason);
     return false;
   }
   return true;

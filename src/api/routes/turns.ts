@@ -1,7 +1,7 @@
 import type { TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, forbidden, notFound, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -55,11 +55,11 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
 async function postTurn(ctx: ApiCtx): Promise<void> {
   const { res, app, url, body } = ctx;
   if (!isTurnRequest(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
+    return badRequest(res, "expected a TurnRequest");
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
   const sanitized = sanitizedTurnRequest(body);
-  if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+  if ("error" in sanitized) return badRequest(res, sanitized.error);
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
   const status = result.status === "refused" ? 403 : 200;
@@ -69,15 +69,15 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
 async function getApproval(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const id = ctx.params.id!;
-  if (!id || id.includes("/")) return sendJson(res, 404, { error: "not_found" });
+  if (!id || id.includes("/")) return notFound(res);
   const record = await app.getApproval(id, actor?.p);
-  return record ? sendJson(res, 200, record) : sendJson(res, 404, { error: "not_found" });
+  return record ? sendJson(res, 200, record) : notFound(res);
 }
 
 async function getPendingApproval(ctx: ApiCtx): Promise<void> {
   const { res, app, url, actor } = ctx;
   const threadRef = url.searchParams.get("threadRef") ?? "";
-  if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
+  if (!threadRef) return badRequest(res, "threadRef required");
   return sendJson(res, 200, { pending: await app.pendingApprovalForThread(threadRef, actor?.p) });
 }
 
@@ -85,9 +85,9 @@ async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const editRef = isObj(body) && typeof body.editRef === "string" ? body.editRef : "";
-  if (!id || !editRef) return sendJson(res, 400, { error: "bad_request", message: "editRef required" });
+  if (!id || !editRef) return badRequest(res, "editRef required");
   const found = await app.setRunDeliveryState(id, { editRef });
-  if (!found) return sendJson(res, 404, { error: "not_found" });
+  if (!found) return notFound(res);
   return sendJson(res, 200, { ok: true });
 }
 
@@ -96,7 +96,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
   if (kind !== "abort" && kind !== "steer") {
-    return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
+    return badRequest(res, "kind must be abort or steer");
   }
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
@@ -104,13 +104,13 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
-      return sendJson(res, 400, { error: "bad_request", message: "request must be a TurnRequest" });
+      return badRequest(res, "request must be a TurnRequest");
     }
     if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
-      return sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
+      return forbidden(res, "portal identity does not match the requested actor");
     }
     const sanitized = sanitizedTurnRequest(body.request);
-    if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+    if ("error" in sanitized) return badRequest(res, sanitized.error);
     request = sanitized.request;
   }
   const outcome = await app.signalRun(
@@ -125,7 +125,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     actor?.p,
   );
   if (outcome.accepted) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  if (outcome.reason === "not_found") return notFound(res);
   if (outcome.reason === "text_required")
     return sendJson(res, 400, { error: "bad_request", message: "text required", ...outcome });
   if (outcome.reason === "conversation_mismatch")
@@ -141,14 +141,14 @@ async function getRun(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const id = ctx.params.id!;
   const run = await app.getRun(id, actor?.p);
-  if (!run) return sendJson(res, 404, { error: "not_found" });
+  if (!run) return notFound(res);
   return sendJson(res, 200, run);
 }
 
 async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const { res, app, url, actor } = ctx;
   const threadRef = url.searchParams.get("threadRef") ?? "";
-  if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
+  if (!threadRef) return badRequest(res, "threadRef required");
   const active = await app.activeRunForThread(threadRef, actor?.p);
   return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
 }
@@ -156,10 +156,10 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
 async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
   const { res, app, actor, body } = ctx;
   if (!isObj(body) || typeof body.text !== "string" || typeof body.expectedText !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "text and expectedText required" });
+    return badRequest(res, "text and expectedText required");
   const outcome = await app.editQueuedRun(ctx.params.id!, body.text, body.expectedText, actor?.p);
   if (outcome.edited) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  if (outcome.reason === "not_found") return notFound(res);
   return sendJson(res, outcome.reason === "empty_text" ? 400 : 409, outcome);
 }
 
@@ -167,7 +167,7 @@ async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
   const { res, app, actor } = ctx;
   const outcome = await app.withdrawRun(ctx.params.id!, actor?.p);
   if (outcome.withdrawn) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  if (outcome.reason === "not_found") return notFound(res);
   return sendJson(res, 409, outcome);
 }
 
@@ -196,7 +196,7 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
 async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const idempotencyKey = isObj(body) && typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
-  if (!idempotencyKey) return sendJson(res, 400, { error: "bad_request", message: "idempotencyKey required" });
+  if (!idempotencyKey) return badRequest(res, "idempotencyKey required");
   await app.ackDeliveryByKey(idempotencyKey);
   return sendJson(res, 200, { ok: true });
 }
@@ -209,7 +209,7 @@ async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
   const deliverMs = isObj(body) ? num(body.deliverMs) : undefined;
   const slackInflightMs = isObj(body) ? num(body.slackInflightMs) : undefined;
   if (deliverMs === undefined && slackInflightMs === undefined) {
-    return sendJson(res, 400, { error: "bad_request", message: "deliverMs or slackInflightMs required" });
+    return badRequest(res, "deliverMs or slackInflightMs required");
   }
   await deps.metrics
     ?.updateByRunId(runId, {

@@ -1,7 +1,7 @@
 import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
 import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
@@ -52,7 +52,7 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
   await ctx.deps.refreshModels?.();
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.modelCredentials) return notFound(ctx.res);
   audit(ctx.deps, {
     principalId: authorized.id,
     action: "model-providers.read",
@@ -78,12 +78,12 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
 export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.modelCredentials) return notFound(ctx.res);
   const provider = ctx.params.provider;
-  if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!isModelProvider(provider)) return notFound(ctx.res);
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
   if (typeof apiKey !== "string" || !apiKey.trim()) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
+    return badRequest(ctx.res, "API key is required");
   }
   if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
@@ -102,9 +102,9 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.modelCredentials) return notFound(ctx.res);
   const provider = ctx.params.provider;
-  if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!isModelProvider(provider)) return notFound(ctx.res);
   await ctx.deps.modelCredentials.delete(provider, authorized.id);
   audit(ctx.deps, {
     principalId: authorized.id,

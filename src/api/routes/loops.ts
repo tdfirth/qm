@@ -13,7 +13,7 @@ import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } fro
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { consentRequiredRecipient } from "../../triggers/trigger-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, conflict, forbidden, notFound, sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -50,7 +50,7 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (principalId) return { actorId: principalId, liveHuman: false };
-  sendJson(ctx.res, 403, { error: "forbidden", message: "loops need an agent capability or a principalId" });
+  forbidden(ctx.res, "loops need an agent capability or a principalId");
   return null;
 }
 
@@ -76,18 +76,18 @@ export async function loadAdministrable(
 ): Promise<{ deps: LoopServiceDeps; loop: Loop; acting: ActingPrincipal } | null> {
   const deps = loopDeps(ctx);
   if (!deps) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+    notFound(ctx.res, "loops are not wired on this deployment");
     return null;
   }
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
   const loop = await deps.store.get(ctx.params.id ?? "");
   if (!loop) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
+    notFound(ctx.res, "no such loop");
     return null;
   }
   if (!(await canAdministerLoop(ctx, loop, acting))) {
-    sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
+    forbidden(ctx.res, "you may not administer this loop");
     return null;
   }
   return { deps, loop, acting };
@@ -155,36 +155,24 @@ function capsFromBody(value: unknown): NumericBody<Loop["caps"]> {
 
 async function createLoop(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  if (!deps) return notFound(ctx.res, "loops are not wired on this deployment");
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const b = isObj(ctx.body) ? ctx.body : {};
-  if (typeof b.name !== "string" || !b.name.trim())
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "name required" });
-  if (typeof b.playbook !== "string" || !b.playbook.trim())
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "playbook required" });
+  if (typeof b.name !== "string" || !b.name.trim()) return badRequest(ctx.res, "name required");
+  if (typeof b.playbook !== "string" || !b.playbook.trim()) return badRequest(ctx.res, "playbook required");
   if (typeof b.successCondition !== "string" || !b.successCondition.trim())
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "successCondition required" });
+    return badRequest(ctx.res, "successCondition required");
   const shipActions = shipActionsFromBody(b.shipActions);
-  if (shipActions === null)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
-    });
+  if (shipActions === null) return badRequest(ctx.res, 'shipActions must be [{action, gate: "auto"|"hold"}]');
   if (shipActions.some((policy) => policy.gate === "auto") && !requireLiveHuman(ctx, acting)) return;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `${capsResult.invalidField} must be a finite positive integer`,
-    });
+    return badRequest(ctx.res, `${capsResult.invalidField} must be a finite positive integer`);
   const caps = capsResult.value;
   const governorResult = governorFromBody(b.governor);
   if (governorResult.invalidField)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `${governorResult.invalidField} has an invalid operational value`,
-    });
+    return badRequest(ctx.res, `${governorResult.invalidField} has an invalid operational value`);
   const governor = governorResult.value;
   let schedule;
   if (b.schedule !== undefined) {
@@ -193,24 +181,20 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         ? ctx.capability.timezone
         : DEFAULT_CRON_TIMEZONE;
     schedule = userScheduleFromBody(b.schedule, defaultTimezone);
-    if (!schedule)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "schedule must be a valid schedule object" });
+    if (!schedule) return badRequest(ctx.res, "schedule must be a valid schedule object");
     try {
       validateUserSchedule(schedule);
     } catch (e) {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
+      return badRequest(ctx.res, errMessage(e));
     }
   }
   let destination;
   let recipientConsent;
   if (b.destinationKey !== undefined) {
-    if (typeof b.destinationKey !== "string")
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string" });
-    if (!ctx.capability)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
+    if (typeof b.destinationKey !== "string") return badRequest(ctx.res, "destinationKey must be a string");
+    if (!ctx.capability) return badRequest(ctx.res, "destinationKey requires an agent capability");
     const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
-    if (!resolved.ok || !resolved.destination)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
+    if (!resolved.ok || !resolved.destination) return badRequest(ctx.res, "destinationKey is not available");
     if (!requireLiveHuman(ctx, acting)) return;
     destination = resolved.destination;
     const recipientId = consentRequiredRecipient({ owner: acting.actorId, standing: true, destination });
@@ -218,10 +202,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   }
   const runAs = b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? b.runAs : undefined;
   if ((runAs === "scopeFloor" || runAs === "scopeShared") && acting.scopeId === undefined)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "team loops must be created through an agent capability",
-    });
+    return badRequest(ctx.res, "team loops must be created through an agent capability");
   const ownerScopeId: ScopeId =
     runAs === "scopeFloor" || runAs === "scopeShared" ? acting.scopeId! : scopeId("personal", acting.actorId);
   const input: CreateLoopInput = {
@@ -277,7 +258,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
 
 async function listLoops(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  if (!deps) return notFound(ctx.res, "loops are not wired on this deployment");
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
@@ -316,14 +297,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       ...(typeof b.note === "string" && b.note.trim() ? { note: b.note.trim() } : {}),
     };
   } else if (b.playbook !== undefined) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "playbook must be a non-empty string" });
+    return badRequest(ctx.res, "playbook must be a non-empty string");
   }
   if (typeof b.state === "string") {
     if (!STATES.has(b.state as LoopState))
-      return sendJson(ctx.res, 400, {
-        error: "bad_request",
-        message: "state must be enabled|paused|quarantined|archived",
-      });
+      return badRequest(ctx.res, "state must be enabled|paused|quarantined|archived");
     patch.state = b.state as LoopState;
     if (patch.state === "enabled" && (loop.state === "quarantined" || loop.state === "archived")) {
       if (!requireLiveHuman(ctx, acting)) return;
@@ -333,7 +311,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       }
     }
   } else if (b.state !== undefined) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "state must be a string" });
+    return badRequest(ctx.res, "state must be a string");
   }
   Object.assign(patch, {
     ...(typeof b.name === "string" && b.name.trim() ? { name: b.name } : {}),
@@ -347,18 +325,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   });
   const governorResult = governorFromBody(b.governor);
   if (governorResult.invalidField)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `${governorResult.invalidField} has an invalid operational value`,
-    });
+    return badRequest(ctx.res, `${governorResult.invalidField} has an invalid operational value`);
   const governorPatch = governorResult.value;
   if (governorPatch !== undefined) patch.governor = governorPatch;
   const shipActions = b.shipActions === undefined ? [] : shipActionsFromBody(b.shipActions);
-  if (shipActions === null)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
-    });
+  if (shipActions === null) return badRequest(ctx.res, 'shipActions must be [{action, gate: "auto"|"hold"}]');
   const existingGates = new Map(loop.shipActions.map((policy) => [policy.action, policy.gate]));
   if (
     shipActions.some((policy) => policy.gate === "auto" && existingGates.get(policy.action) !== "auto") &&
@@ -368,25 +339,20 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `${capsResult.invalidField} must be a finite positive integer`,
-    });
+    return badRequest(ctx.res, `${capsResult.invalidField} must be a finite positive integer`);
   const caps = capsResult.value;
   if (caps !== undefined) patch.caps = caps;
   if (b.destinationKey !== undefined) {
     if (b.destinationKey !== null && typeof b.destinationKey !== "string")
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string or null" });
-    if (!ctx.capability)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
+      return badRequest(ctx.res, "destinationKey must be a string or null");
+    if (!ctx.capability) return badRequest(ctx.res, "destinationKey requires an agent capability");
     if (!requireLiveHuman(ctx, acting)) return;
     if (b.destinationKey === null) {
       patch.destination = null;
       patch.recipientConsent = null;
     } else {
       const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
-      if (!resolved.ok || !resolved.destination)
-        return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
+      if (!resolved.ok || !resolved.destination) return badRequest(ctx.res, "destinationKey is not available");
       patch.destination = resolved.destination;
       const recipientId = consentRequiredRecipient({
         owner: loop.owner,
@@ -397,7 +363,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
     }
   }
   const updated = Object.keys(patch).length > 0 ? await deps.store.update(loop.id, patch) : loop;
-  if (!updated) return sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
+  if (!updated) return notFound(ctx.res, "no such loop");
   if (patch.state !== undefined && loop.cronId && deps.crons) {
     try {
       await deps.crons.setEnabled(loop.cronId, patch.state === "enabled");
@@ -426,7 +392,7 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop } = loaded;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!deps.fire) return notFound(ctx.res, "loop firing is not wired");
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
   void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
   return sendJson(ctx.res, 200, { ok: true, fireKey });
@@ -437,7 +403,7 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!requireLiveHuman(ctx, acting)) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!deps.fire) return notFound(ctx.res, "loop firing is not wired");
   const b = isObj(ctx.body) ? ctx.body : {};
   const outputId = ctx.params.outputId ?? "";
   const note = typeof b.note === "string" && b.note.trim() ? b.note.trim() : undefined;
@@ -446,7 +412,7 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
     const item = output ? await deps.items.get(output.itemId) : null;
     if (item?.decisionToken && (item.decisionAt ?? 0) + DECISION_LEASE_MS > Date.now())
       return sendJson(ctx.res, 409, { error: "decision_in_progress" });
-    return sendJson(ctx.res, 404, { error: "not_found", message: "no such ready output" });
+    return notFound(ctx.res, "no such ready output");
   };
   if (b.decision === "ship" || b.decision === "shipped") {
     try {
@@ -458,13 +424,12 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
     }
   }
   if (b.decision === "return" || b.decision === "returned") {
-    if (!note)
-      return sendJson(ctx.res, 400, { error: "bad_request", message: "a return needs a note for the next attempt" });
+    if (!note) return badRequest(ctx.res, "a return needs a note for the next attempt");
     const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
     if (!returned) return decisionMissing();
     return sendJson(ctx.res, 200, { output: returned });
   }
-  return sendJson(ctx.res, 400, { error: "bad_request", message: 'decision must be "shipped" or "returned"' });
+  return badRequest(ctx.res, 'decision must be "shipped" or "returned"');
 }
 
 async function graduateShipAction(ctx: ApiCtx): Promise<void> {
@@ -473,10 +438,9 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
   const { deps, loop, acting } = loaded;
   if (!requireLiveHuman(ctx, acting)) return;
   const b = isObj(ctx.body) ? ctx.body : {};
-  if (typeof b.shipAction !== "string" || !b.shipAction.trim())
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "shipAction required" });
+  if (typeof b.shipAction !== "string" || !b.shipAction.trim()) return badRequest(ctx.res, "shipAction required");
   if (!loop.shipActions.some((policy) => policy.action === b.shipAction))
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "shipAction is not declared by this loop" });
+    return badRequest(ctx.res, "shipAction is not declared by this loop");
   try {
     const modes = await deps.config.getApprovalGrantModesDurable(loop.ownerScopeId);
     const grant = await deps.grants.put(
@@ -500,15 +464,11 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   const b = isObj(ctx.body) ? ctx.body : {};
-  if (typeof b.enabled !== "boolean")
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "enabled must be a boolean" });
+  if (typeof b.enabled !== "boolean") return badRequest(ctx.res, "enabled must be a boolean");
   if (b.enabled) {
     if (!requireLiveHuman(ctx, acting)) return;
     if (loop.state === "quarantined" || loop.state === "archived")
-      return sendJson(ctx.res, 409, {
-        error: "conflict",
-        message: `cannot enable autopilot while loop is ${loop.state}`,
-      });
+      return conflict(ctx.res, `cannot enable autopilot while loop is ${loop.state}`);
     try {
       const modes = await deps.config.getApprovalGrantModesDurable(loop.ownerScopeId);
       const gatesChange = loop.shipActions.some((policy) => policy.gate !== "auto");
@@ -557,8 +517,7 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   if (!requireLiveHuman(ctx, acting)) return;
   const grantId = ctx.params.grantId ?? "";
   const grant = await deps.grants.get(grantId);
-  if (!grant || grant.loopId !== loop.id)
-    return sendJson(ctx.res, 404, { error: "not_found", message: "no such ship grant" });
+  if (!grant || grant.loopId !== loop.id) return notFound(ctx.res, "no such ship grant");
   const revoked = await deps.grants.revoke(grantId, acting.actorId);
   return sendJson(ctx.res, 200, { grant: revoked });
 }

@@ -6,7 +6,7 @@ import { samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
-import { headerValue, sendJson } from "../http.ts";
+import { badRequest, forbidden, headerValue, notFound } from "../http.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -29,17 +29,17 @@ export async function authorizeAdmin(
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
   if (!deps.admin) {
-    sendJson(res, 404, { error: "not_found" });
+    notFound(res);
     return null;
   }
   const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
   if (actor && !(await activePrincipal(deps, actor.id))) {
-    sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
+    forbidden(res, "this principal is no longer active");
     return null;
   }
   if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
-  sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
+  forbidden(res, "admin grant required for this scope");
   return null;
 }
 
@@ -54,7 +54,7 @@ export async function requireScopedAdmin(
 ): Promise<{ actor: Principal; scope: string } | null> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
   if (!scope) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "scope required" });
+    badRequest(ctx.res, "scope required");
     return null;
   }
   const actor = await authorizeAdmin(ctx, scope);

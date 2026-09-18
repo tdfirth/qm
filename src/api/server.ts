@@ -23,11 +23,15 @@ import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import {
-  armBodyDeadline,
-  canonicalPayload,
   PayloadTooLargeError,
+  armBodyDeadline,
+  badRequest,
+  canonicalPayload,
+  forbidden,
+  notFound,
   readRawBody,
   sendJson,
+  unauthorized,
   verifyOrReject,
 } from "./http.ts";
 import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
@@ -193,13 +197,13 @@ async function gate(
     const capSecret = deps.capabilitySecret ?? secret;
     capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
     if (!capability) {
-      sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
+      unauthorized(res, "invalid or expired capability token");
       return null;
     }
     if (deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(capability.actorId).type !== "internal") {
-        sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
+        unauthorized(res, "principal is no longer active");
         return null;
       }
     }
@@ -211,7 +215,7 @@ async function gate(
         deployment.status !== "running" ||
         deployment.createdBy !== capability.actorId
       ) {
-        sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
+        unauthorized(res, "the published app behind this token is not running");
         return null;
       }
     }
@@ -225,35 +229,32 @@ async function gate(
         ...(capability.members ? { members: capability.members } : {}),
       }))
     ) {
-      sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+      forbidden(res, "capability scope membership has been revoked");
       return null;
     }
     if (requiredAud) {
       if (capability.aud !== requiredAud) {
-        sendJson(res, 403, {
-          error: "forbidden",
-          message: `this route requires a capability token with audience "${requiredAud}"`,
-        });
+        forbidden(res, `this route requires a capability token with audience "${requiredAud}"`);
         return null;
       }
     } else if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
-        sendJson(res, 403, { error: "forbidden", message: "capability token audience not valid for this route" });
+        forbidden(res, "capability token audience not valid for this route");
         return null;
       }
       if (pathname.startsWith("/v1/admin/")) {
         const denied = await capabilityAdminDenied(method, pathname, url, capability, deps.config);
         if (denied) {
-          sendJson(res, 403, { error: "forbidden", message: denied });
+          forbidden(res, denied);
           return null;
         }
       }
     } else {
-      sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
+      forbidden(res, "capability token not valid for this route");
       return null;
     }
   } else if (requiredAud) {
-    sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
+    unauthorized(res, `${requiredAud} capability token required`);
     return null;
   } else if (
     !(await verifyOrReject(
@@ -273,7 +274,7 @@ async function gate(
     try {
       body = JSON.parse(raw);
     } catch {
-      sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
+      badRequest(res, "invalid JSON body");
       return null;
     }
   }
@@ -285,7 +286,7 @@ async function gate(
     deps.config &&
     (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
   ) {
-    sendJson(res, 403, { error: "forbidden", message: "Strict posture blocks direct control-plane mutations" });
+    forbidden(res, "Strict posture blocks direct control-plane mutations");
     return null;
   }
 
@@ -313,7 +314,7 @@ async function gate(
         isUnclassifiedWrite(method, pathname);
       if (needsActor) {
         if (!psecret || !actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+          unauthorized(res, "portal identity required");
           return null;
         }
         const field = webTurn ? undefined : userScopedField(method, pathname);
@@ -321,7 +322,7 @@ async function gate(
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActor(field, url, body, req);
         if ((field && asserted !== actor.p) || (!field && asserted !== null && asserted !== actor.p)) {
-          sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
+          forbidden(res, "portal identity does not match the requested actor");
           return null;
         }
       }
@@ -384,7 +385,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         await run(found.route, found.params, ctx);
         return;
       }
-      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      notFound(res, `${base.method} ${base.pathname}`);
     } catch (err) {
       respondError(req, res, err);
     }
@@ -516,7 +517,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         Math.abs(Date.now() - timestamp * 1000) > SOURCE_AUTH_REPLAY_WINDOW_MS ||
         typeof req.headers["x-signature"] !== "string"
       ) {
-        sendJson(res, 401, { error: "unauthorized", message: "missing, invalid, or stale source-auth headers" });
+        unauthorized(res, "missing, invalid, or stale source-auth headers");
         return;
       }
     }

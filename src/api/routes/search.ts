@@ -1,5 +1,5 @@
 import { parseScopeId, type Principal } from "../../types.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 function conversationPrincipals(ctx: ApiCtx): Principal[] | null {
@@ -16,7 +16,7 @@ async function search(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required", message: "agent capability token required" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const query = typeof body.query === "string" ? body.query.trim() : "";
-  if (!query) return sendJson(ctx.res, 400, { error: "bad_request", message: "query required" });
+  if (!query) return badRequest(ctx.res, "query required");
   const principals = conversationPrincipals(ctx);
   if (!principals)
     return sendJson(ctx.res, 409, {

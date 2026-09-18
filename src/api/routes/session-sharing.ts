@@ -7,7 +7,7 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { forbidden, notFound, pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -18,11 +18,10 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const audience = isObj(body) ? body.audience : undefined;
   if (audience !== "internal" && audience !== "external") return sendJson(res, 400, { error: "invalid_audience" });
   await deps.identity?.refresh();
-  if (typeof viewer !== "string" || !deps.identity?.isInternal(deps.identity.classify(viewer)))
-    return sendJson(res, 403, { error: "forbidden" });
+  if (typeof viewer !== "string" || !deps.identity?.isInternal(deps.identity.classify(viewer))) return forbidden(res);
   if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
   const source = await app.getSessionForViewer(params.id!, viewer);
-  if (!source) return sendJson(res, 404, { error: "not_found" });
+  if (!source) return notFound(res);
   const deliveries =
     (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
   if (deliveries.length >= 10_000) return sendJson(res, 413, { error: "share_too_large" });
@@ -116,22 +115,18 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   res.setHeader("Cache-Control", "no-store");
   const share = await deps.sessionShares?.get(params.token!);
   const external = ctx.pathname.startsWith("/v1/public-shares/");
-  if (!share || share.audience !== (external ? "external" : "internal"))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!share || share.audience !== (external ? "external" : "internal")) return notFound(res);
   await deps.identity?.refresh();
   if (!external) {
     const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
-    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer)))
-      return sendJson(res, 403, { error: "forbidden" });
+    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer))) return forbidden(res);
   }
-  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy)))
-    return sendJson(res, 404, { error: "not_found" });
-  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy, share.visibility)))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy))) return notFound(res);
+  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy, share.visibility))) return notFound(res);
   if (params.fileId) {
     const file = share.files.find((file) => file.id === params.fileId);
     const opened = file && (await deps.sessionShareBytes?.open(file.blobKey));
-    if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
+    if (!file || !opened) return notFound(res);
     const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
     res.writeHead(200, {
       "content-type": inline ? file.mimetype : "application/octet-stream",

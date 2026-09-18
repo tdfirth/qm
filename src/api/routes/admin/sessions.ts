@@ -16,7 +16,7 @@ import {
 } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../harness/tape-projection.ts";
 import { swallowAs } from "../../../util/errors.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
@@ -310,7 +310,7 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
     let opts: { orphans: true } | { turnSeqs: number[] } | null = null;
     if (turnParam === "orphan") opts = { orphans: true };
     else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
-    if (!opts) return sendJson(res, 400, { error: "bad_request", message: 'turnSeq must be an integer or "orphan"' });
+    if (!opts) return badRequest(res, 'turnSeq must be an integer or "orphan"');
     const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
     return sendJson(res, 200, { session, requests });
   }

@@ -1,7 +1,7 @@
 import { parseScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
 import type { SandboxBackendName } from "../../../sandbox/sandbox-routing.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
@@ -36,7 +36,7 @@ export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 404, { error: "not_supported", message: "sandbox routing is not wired on this deployment" });
   const scopeId = params.scopeId! as ScopeId;
   if (parseScopeId(scopeId).kind === null) {
-    return sendJson(res, 400, { error: "bad_request", message: "scopeId is not a valid scope id" });
+    return badRequest(res, "scopeId is not a valid scope id");
   }
   const b = (body ?? {}) as Record<string, unknown>;
   const to = typeof b.to === "string" ? (b.to as SandboxBackendName) : undefined;
@@ -52,10 +52,7 @@ export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
       ? b.resumeBlobId
       : undefined;
   if (!to || !runner.availableBackends().includes(to)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `to must be one of: ${runner.availableBackends().join(", ")}`,
-    });
+    return badRequest(res, `to must be one of: ${runner.availableBackends().join(", ")}`);
   }
   try {
     if ((await deps.sandboxResources?.resolve(scopeId)) !== undefined)

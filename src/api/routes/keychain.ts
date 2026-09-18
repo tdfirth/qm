@@ -9,7 +9,7 @@ import {
 import { parseScopeId } from "../../types.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { samePerson } from "../../directory/person.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, forbidden, notFound, sendJson, unauthorized } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
@@ -68,9 +68,8 @@ async function resolveScopeNames(
 
 async function handleKeychain(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, pathname, method, body, capability, params } = ctx;
-  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
-  if (!capability)
-    return sendJson(res, 401, { error: "unauthorized", message: "keychain routes require an agent capability token" });
+  if (!deps.keychain) return notFound(res);
+  if (!capability) return unauthorized(res, "keychain routes require an agent capability token");
   const kc = deps.keychain;
   const actorId = capability.actorId;
   try {
@@ -88,7 +87,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         expiresAt?: unknown;
       };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-      if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+      if (!expiresAt.ok) return badRequest(res, expiresAt.message);
       const files = Array.isArray(b.files)
         ? (b.files as unknown[])
             .filter(
@@ -104,10 +103,10 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           (typeof f.rawMode !== "number" || !Number.isInteger(f.rawMode) || f.rawMode < 0 || f.rawMode > 0o777),
       );
       if (badMode) {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(badMode.rawMode)} for ${badMode.path}`,
-        });
+        return badRequest(
+          res,
+          `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(badMode.rawMode)} for ${badMode.path}`,
+        );
       }
       const cleanFiles: CredentialFile[] | undefined = files?.map(({ path, contentBase64, rawMode }) => ({
         path,
@@ -125,15 +124,12 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
               typeof (f as CredentialFieldInput)?.value !== "string",
           )
         ) {
-          return sendJson(res, 400, { error: "bad_request", message: "each field needs string envKey and value" });
+          return badRequest(res, "each field needs string envKey and value");
         }
         fields = b.fields as CredentialFieldInput[];
       }
       if (typeof b.service !== "string" || (typeof b.secret !== "string" && !files?.length && !fields?.length)) {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: "service plus secret, files[], or fields[] required",
-        });
+        return badRequest(res, "service plus secret, files[], or fields[] required");
       }
       const meta = await kc.save({
         ownerId: actorId,
@@ -178,11 +174,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const ok = await kc.remove(actorId, id);
       if (ok)
         audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: capability.scopeId });
-      return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
+      return ok ? sendJson(res, 200, { ok: true }) : notFound(res);
     }
 
     if (method === "POST" && pathname === "/v1/keychain/grants") {
-      if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: CONSENT_ON_TRIGGERED_TURN });
+      if (capability.triggered) return forbidden(res, CONSENT_ON_TRIGGERED_TURN);
       const b = body as {
         credential?: unknown;
         ask?: unknown;
@@ -192,16 +188,13 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         onBehalfOf?: unknown;
       };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-      if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+      if (!expiresAt.ok) return badRequest(res, expiresAt.message);
       if (
         typeof b.purpose !== "string" ||
         (b.mode !== "once" && b.mode !== "standing") ||
         (typeof b.credential !== "string" && typeof b.ask !== "string")
       ) {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
-        });
+        return badRequest(res, 'expected { credential | ask, mode: "once"|"standing", purpose }');
       }
       const useBlock = (grant: { id: string }) => ({
         command: keychainUseCommand({ grant: grant.id }),
@@ -209,11 +202,10 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       });
       if (typeof b.ask === "string") {
         if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message:
-              "onBehalfOf cannot approve an ask — an ask can release the credential into another conversation, so only its owner's own turn can approve it",
-          });
+          return forbidden(
+            res,
+            "onBehalfOf cannot approve an ask — an ask can release the credential into another conversation, so only its owner's own turn can approve it",
+          );
         }
         const { ask, grant } = await kc.approveAsk({
           askId: b.ask,
@@ -243,17 +235,16 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       let granter = actorId;
       if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
         const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
-        if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+        if ("error" in speaker) return forbidden(res, speaker.error);
         granter = speaker.principalId;
       }
       const credentialId = b.credential as string;
       const credential = await kc.getCredential(credentialId);
       if (credential && !samePerson(credential.ownerId, granter)) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message:
-            "only the credential owner can grant it — if the owner authorized this in the conversation, pass onBehalfOf with their id",
-        });
+        return forbidden(
+          res,
+          "only the credential owner can grant it — if the owner authorized this in the conversation, pass onBehalfOf with their id",
+        );
       }
       const grant = await kc.createGrant({
         credentialId,
@@ -292,29 +283,26 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const ok = await kc.revokeGrant(actorId, id);
       if (ok)
         audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: capability.scopeId });
-      return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
+      return ok ? sendJson(res, 200, { ok: true }) : notFound(res);
     }
 
     if (method === "POST" && pathname === "/v1/keychain/asks") {
       const b = body as { credential?: unknown; purpose?: unknown; requestedMode?: unknown; expiresAt?: unknown };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-      if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+      if (!expiresAt.ok) return badRequest(res, expiresAt.message);
       if (
         typeof b.credential !== "string" ||
         typeof b.purpose !== "string" ||
         (b.requestedMode !== undefined && b.requestedMode !== "once" && b.requestedMode !== "standing")
       ) {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: 'expected { credential, purpose, requestedMode?: "once"|"standing" }',
-        });
+        return badRequest(res, 'expected { credential, purpose, requestedMode?: "once"|"standing" }');
       }
       const scope = parseScopeId(capability.scopeId);
       if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
-        return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
+        return forbidden(res, "asks require a personal or shared conversation");
       }
       const cred = await kc.getCredential(b.credential);
-      if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
+      if (!cred) return notFound(res, "unknown credential");
       const requester = await app.directoryMember(actorId);
       if (
         !(await app.belongsToScope(actorId, capability.scopeId)) ||
@@ -322,10 +310,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         (scope.kind !== "personal" &&
           (requester?.type !== "internal" || (await app.directoryMember(cred.ownerId))?.type !== "internal"))
       ) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "the requester and credential owner must have current access to this conversation",
-        });
+        return forbidden(res, "the requester and credential owner must have current access to this conversation");
       }
       const context = (await app.listContexts(cred.ownerId)).find((c) => c.scopeId === capability.scopeId);
       const cronId = cronIdOf(capability.threadRef);
@@ -378,7 +363,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname.startsWith("/v1/keychain/asks/") && pathname.endsWith("/decline")) {
-      if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: CONSENT_ON_TRIGGERED_TURN });
+      if (capability.triggered) return forbidden(res, CONSENT_ON_TRIGGERED_TURN);
       const id = params.id!;
       const b = body as { note?: unknown };
       const ask = await kc.declineAsk({
@@ -402,21 +387,17 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     if (method === "POST" && pathname === "/v1/keychain/use") {
       const b = body as { grant?: unknown; credential?: unknown };
       if (typeof b.grant !== "string" && typeof b.credential !== "string") {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: "expected { grant } or { credential } (your own, personal conversation only)",
-        });
+        return badRequest(res, "expected { grant } or { credential } (your own, personal conversation only)");
       }
       let m;
       if (typeof b.grant === "string") {
         m = await kc.materialize(b.grant, capability.scopeId, actorId);
       } else {
         if (capability.liveActor !== true) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
-          });
+          return forbidden(
+            res,
+            "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
+          );
         }
         m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);
       }
@@ -441,7 +422,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
     throw e;
   }
-  return sendJson(res, 404, { error: "not_found" });
+  return notFound(res);
 }
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [

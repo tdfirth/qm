@@ -5,7 +5,7 @@ import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug } from "../credentials/keychain.ts";
 import { brokerCredentialAuthHeader, brokerPathAllowed } from "./credential-broker.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { headerValue, pipeToResponse, sendJson } from "./http.ts";
+import { forbidden, headerValue, notFound, pipeToResponse, sendJson, unauthorized } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 
@@ -120,28 +120,24 @@ function gitUrlFor(rec: DecryptedServiceCredential, upstreamPath: string, search
 
 export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   const parsed = parseBrokerPath(ctx.pathname);
-  if (!parsed) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!parsed) return notFound(ctx.res);
   const { slug, upstreamPath } = parsed;
   const method = ctx.method.toUpperCase();
   if (method !== "GET" && method !== "POST") {
     return sendJson(ctx.res, 405, { error: "method_not_allowed", message: "git smart HTTP supports GET and POST" });
   }
-  if (!ctx.deps.serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.serviceCreds) return notFound(ctx.res);
 
   const claims = await capabilityFrom(ctx);
-  if (!claims)
-    return sendJson(ctx.res, 401, { error: "unauthorized", message: "credential-broker capability token required" });
+  if (!claims) return unauthorized(ctx.res, "credential-broker capability token required");
   if (ctx.deps.identity) {
     await ctx.deps.identity.refresh();
     if (ctx.deps.identity.classify(claims.actorId).type !== "internal") {
-      return sendJson(ctx.res, 401, { error: "unauthorized", message: "principal is no longer active" });
+      return unauthorized(ctx.res, "principal is no longer active");
     }
   }
   if (claims.aud !== CREDENTIAL_BROKER_AUD) {
-    return sendJson(ctx.res, 403, {
-      error: "forbidden",
-      message: "git credential broker requires a credential-broker capability token",
-    });
+    return forbidden(ctx.res, "git credential broker requires a credential-broker capability token");
   }
   if (
     !(await ctx.app.authorizesCapabilityScope({
@@ -153,7 +149,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
       ...(claims.members ? { members: claims.members } : {}),
     }))
   ) {
-    return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+    return forbidden(ctx.res, "capability scope membership has been revoked");
   }
   if (!Array.isArray(claims.credentials) || !claims.credentials.includes(slug)) {
     return sendDenied(ctx, claims, 403, "not_entitled", "this session is not entitled to that credential", slug, "");

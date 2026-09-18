@@ -1,7 +1,7 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
-import { sendJson } from "../../http.ts";
+import { forbidden, notFound } from "../../http.ts";
 import { orgScope, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
@@ -16,12 +16,12 @@ export async function requireScopedResource<T>(
   if (!authz) return null;
   const record = await load();
   if (!record) {
-    sendJson(ctx.res, 404, { error: "not_found" });
+    notFound(ctx.res);
     return null;
   }
   if (parseScopeId(authz.scope).kind !== "org" && scopeOf(record) !== authz.scope) {
     if (scopeMismatch === "forbid") {
-      sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
+      forbidden(ctx.res, `${noun} is outside the requested scope`);
       return null;
     }
     return { actor: authz.actor, scope: scopeOf(record), record };

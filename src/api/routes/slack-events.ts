@@ -1,5 +1,5 @@
 import { request, type IncomingHttpHeaders, type OutgoingHttpHeaders } from "node:http";
-import { sendJson } from "../http.ts";
+import { notFound, sendJson } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
 const HOP_BY_HOP = new Set([
@@ -24,7 +24,7 @@ function responseHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
 async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
   const port = receiverPort(ctx.deps.slackEventsPort);
   if (!port) {
-    sendJson(ctx.res, 404, { error: "not_found" });
+    notFound(ctx.res);
     return;
   }
 

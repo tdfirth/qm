@@ -1,6 +1,6 @@
 import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, notFound, sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -8,9 +8,9 @@ const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" &&
 
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity) return notFound(res);
   const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   await deps.identity.deactivate(id);
   audit(deps, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: false });
@@ -18,9 +18,9 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
 
 async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity) return notFound(res);
   const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   await deps.identity.reactivate(id);
   audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
@@ -43,16 +43,10 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     groupsSyncedAt?: unknown;
   };
   if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "members[], channels[], and/or groupMembers[] required",
-    });
+    return badRequest(res, "members[], channels[], and/or groupMembers[] required");
   }
   if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type))) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
-    });
+    return badRequest(res, `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`);
   }
   if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
     await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
@@ -135,7 +129,7 @@ const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const q = (url.searchParams.get("q") ?? "").trim();
-  if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
+  if (!q) return badRequest(res, "q (a name to resolve) required");
   const r = await app.resolveRecipient(q);
   let found: DirectoryMember[] = [];
   if (r.kind === "one") found = [r.member];

@@ -9,7 +9,7 @@ import { KeychainError, type GrantMode } from "../../credentials/keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
-import { escapeHtml, sendJson } from "../http.ts";
+import { badRequest, escapeHtml, forbidden, notFound, sendJson, unauthorized } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
@@ -120,16 +120,12 @@ ${inputs}
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, secret } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
-  if (!capability)
-    return sendJson(res, 401, {
-      error: "unauthorized",
-      message: "secret-drop mint requires an agent capability token",
-    });
+  if (!deps.keychain || !deps.secretDrops) return notFound(res);
+  if (!capability) return unauthorized(res, "secret-drop mint requires an agent capability token");
   const capSecret = deps.capabilitySecret ?? secret;
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
-  if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
+  if (capability.triggered) return forbidden(res, TRIGGERED);
   const b = body as {
     service?: unknown;
     envKey?: unknown;
@@ -140,25 +136,22 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     onBehalfOf?: unknown;
   };
   if (typeof b.service !== "string" || !b.service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "expected { service, purpose, envKey?, host?, grantMode?, fields? }",
-    });
+    return badRequest(res, "expected { service, purpose, envKey?, host?, grantMode?, fields? }");
   }
   if (b.grantMode !== undefined && b.grantMode !== "once" && b.grantMode !== "standing") {
-    return sendJson(res, 400, { error: "bad_request", message: 'grantMode must be "once" or "standing"' });
+    return badRequest(res, 'grantMode must be "once" or "standing"');
   }
   const fields = parseDropFields(b.fields);
   if (fields === "invalid") {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `fields must be 1–${MAX_DROP_FIELDS} items of { key: ENV_VAR_NAME, label?, secret? } with unique keys`,
-    });
+    return badRequest(
+      res,
+      `fields must be 1–${MAX_DROP_FIELDS} items of { key: ENV_VAR_NAME, label?, secret? } with unique keys`,
+    );
   }
   let ownerId = capability.actorId;
   if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, capability.actorId)) {
     const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
-    if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+    if ("error" in speaker) return forbidden(res, speaker.error);
     ownerId = speaker.principalId;
   }
   const scope = parseScopeId(capability.scopeId);
@@ -231,7 +224,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params, req } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.keychain || !deps.secretDrops) return notFound(res);
   const { secret, values } = body as { secret?: unknown; values?: unknown };
   const peeked = await deps.secretDrops.peek(params.id!);
   if (!peeked.ok) {
@@ -239,20 +232,14 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       peeked.reason === "expired"
         ? "this drop link has expired — ask the agent for a fresh one"
         : "this drop link is invalid or was already used — ask the agent for a fresh one";
-    return sendJson(res, 404, { error: "not_found", message });
+    return notFound(res, message);
   }
   const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
   if (!linkClaims) {
-    return sendJson(res, 404, {
-      error: "not_found",
-      message: "this drop link is invalid or was already used — ask the agent for a fresh one",
-    });
+    return notFound(res, "this drop link is invalid or was already used — ask the agent for a fresh one");
   }
   if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId)) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "sign in as the account owner to complete this credential drop",
-    });
+    return forbidden(res, "sign in as the account owner to complete this credential drop");
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
   if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
@@ -269,12 +256,11 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     saveFields = [];
     for (const f of dropFieldDefs) {
       const v = vmap[f.key];
-      if (typeof v !== "string" || !v.trim())
-        return sendJson(res, 400, { error: "bad_request", message: `missing value for ${f.key}` });
+      if (typeof v !== "string" || !v.trim()) return badRequest(res, `missing value for ${f.key}`);
       saveFields.push({ envKey: f.key, value: v.trim(), secret: f.secret !== false });
     }
   } else if (typeof secret !== "string" || !secret.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "expected { secret }" });
+    return badRequest(res, "expected { secret }");
   }
   const redeemed = await deps.secretDrops.redeem(params.id!);
   if (!redeemed.ok) {
@@ -282,11 +268,11 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       redeemed.reason === "expired"
         ? "this drop link has expired — ask the agent for a fresh one"
         : "this drop link is invalid or was already used — ask the agent for a fresh one";
-    return sendJson(res, 404, { error: "not_found", message });
+    return notFound(res, message);
   }
   const drop = redeemed.rec;
   if (drop.orgId !== undefined && drop.orgId !== configOrgId())
-    return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
+    return notFound(res, "this drop link is for a different org");
   try {
     const meta = await deps.keychain.save({
       ownerId: drop.ownerId,

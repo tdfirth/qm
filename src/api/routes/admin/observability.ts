@@ -1,6 +1,6 @@
 import { parseScopeId, type ScopeId } from "../../../types.ts";
 import { cacheHitRatio, isStablePrefixMiss, type TurnMetricSample } from "../../../admin/metrics-sink.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
@@ -319,10 +319,7 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
   if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "limit must be a positive integer and offset a non-negative integer.",
-    });
+    return badRequest(res, "limit must be a positive integer and offset a non-negative integer.");
   }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
   const total = (await deps.errors?.count(filters)) ?? 0;

@@ -3,7 +3,7 @@ import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
-import { sendJson } from "../http.ts";
+import { forbidden, sendJson, unauthorized } from "../http.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -16,11 +16,11 @@ export function composioUserId(org: string, principal: string): string {
 async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
   const principal = ctx.actor?.p;
   if (!principal) {
-    sendJson(ctx.res, 401, { error: "unauthorized" });
+    unauthorized(ctx.res);
     return null;
   }
   if (!(await activePrincipal(ctx.deps, principal))) {
-    sendJson(ctx.res, 403, { error: "forbidden" });
+    forbidden(ctx.res);
     return null;
   }
   const personal = scopeId("personal", principal);
@@ -221,8 +221,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
 
 async function identity(ctx: ApiCtx): Promise<void> {
   const principal = ctx.actor?.p ?? ctx.capability?.actorId;
-  if (!principal || !(await activePrincipal(ctx.deps, principal)))
-    return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!principal || !(await activePrincipal(ctx.deps, principal))) return forbidden(ctx.res);
   return sendJson(ctx.res, 200, { userId: composioUserId(orgId(), principal) });
 }
 

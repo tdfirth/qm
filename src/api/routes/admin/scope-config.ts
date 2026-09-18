@@ -20,7 +20,7 @@ import {
   selectableModelCatalog,
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
@@ -40,7 +40,7 @@ import { discoverScopes } from "./common.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.config) return notFound(res);
   const targetScope = params.scope!;
   const resource = params.resource!;
 
@@ -53,11 +53,10 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   if (resource === "command-policy-simulate") {
     const command = (body as { command?: unknown }).command;
-    if (typeof command !== "string" || !command.trim())
-      return sendJson(res, 400, { error: "bad_request", message: "command is required" });
+    if (typeof command !== "string" || !command.trim()) return badRequest(res, "command is required");
     const supplied = (body as { policy?: unknown }).policy;
     const parsed = supplied === undefined ? null : parseCommandPolicy(supplied);
-    if (parsed && "error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+    if (parsed && "error" in parsed) return badRequest(res, parsed.error);
     const targetKind = parseScopeId(targetScope).kind;
     const target =
       parsed?.policy ??
@@ -91,7 +90,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   }
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
-  if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (!desc) return notFound(res, `unknown admin resource: ${resource}`);
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, actor, targetScope);
@@ -120,7 +119,7 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
 
 export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.admin) return notFound(res);
   const actor = adminActorFrom(ctx);
   if (!actor || !(await activePrincipal(deps, actor.id)))
     return sendJson(res, 200, { isAdmin: false, permissions: [] });
@@ -301,7 +300,7 @@ async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string
 
 export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   const targetScope = ctx.params.scope!;
-  if (!targetScope || targetScope.includes("/")) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!targetScope || targetScope.includes("/")) return notFound(ctx.res);
   if (!(await authorizeAdmin(ctx, targetScope))) return;
   const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
   if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
@@ -400,12 +399,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
 
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, url } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.config) return notFound(res);
   const targetScope = params.scope!;
-  if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
+  if (!targetScope || targetScope.includes("/")) return notFound(res);
   const requestedView = url.searchParams.get("view");
   if (requestedView !== null && !Object.hasOwn(SETTINGS_RESOURCES, requestedView))
-    return sendJson(res, 400, { error: "bad_request", message: "Unknown settings view" });
+    return badRequest(res, "Unknown settings view");
   const started = performance.now();
   const timings: Record<string, number> = {};
   const read = async <T>(name: string, load: () => T | Promise<T>): Promise<T> => {
@@ -491,7 +490,7 @@ export async function retention(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const scope = url.searchParams.get("scope") ?? orgScope(deps);
   if (parseScopeId(scope).kind !== "org") {
-    return sendJson(res, 400, { error: "bad_request", message: "retention is org-wide; request an org scope" });
+    return badRequest(res, "retention is org-wide; request an org scope");
   }
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;

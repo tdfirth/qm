@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, sendJson } from "../http.ts";
 import { externalMemberActive } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -27,10 +27,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
     ids.length > MAX_IDS ||
     !ids.every((id) => typeof id === "string" && id.length > 0 && id.length <= MAX_ID_LENGTH)
   ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `ids must hold 1 to ${MAX_IDS} non-empty strings of at most ${MAX_ID_LENGTH} characters`,
-    });
+    return badRequest(res, `ids must hold 1 to ${MAX_IDS} non-empty strings of at most ${MAX_ID_LENGTH} characters`);
   }
   const now = Date.now();
   const expiresAtMs = b.expiresAtMs;
@@ -40,10 +37,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
     expiresAtMs <= now ||
     expiresAtMs > now + MAX_HORIZON_MS
   ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "expiresAtMs must be a future epoch-millisecond timestamp within 24 hours",
-    });
+    return badRequest(res, "expiresAtMs must be a future epoch-millisecond timestamp within 24 hours");
   }
   for (const id of ids as string[]) {
     if (await deps.replayDedupe.claim(`${NAMESPACE}${id}`, expiresAtMs)) return sendJson(res, 200, { claimed: id });
@@ -54,7 +48,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
 async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const email = (url.searchParams.get("email") ?? "").trim();
-  if (!email) return sendJson(res, 400, { error: "bad_request", message: "email required" });
+  if (!email) return badRequest(res, "email required");
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
   const member = deps.identity.externalMember(email);

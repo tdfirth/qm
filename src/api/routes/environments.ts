@@ -1,13 +1,12 @@
 import { errMessage } from "../../util/errors.ts";
 import { samePerson } from "../../directory/person.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, forbidden, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 async function listEnvironments(ctx: ApiCtx): Promise<void> {
   const { res, app, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+  if (!capability) return forbidden(res, "environments require an agent capability token");
   const rows = await app.listEnvironments();
   return sendJson(res, 200, {
     environments: rows.map(({ environment, attachments }) => ({
@@ -21,10 +20,9 @@ async function listEnvironments(ctx: ApiCtx): Promise<void> {
 
 async function createEnvironment(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+  if (!capability) return forbidden(res, "environments require an agent capability token");
   const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
+  if (!name) return badRequest(res, "name (string) required");
   try {
     const env = await app.createEnvironment({ scopeId: capability.scopeId, name, actorId: capability.actorId });
     return sendJson(res, 200, { environment: { id: env.id, name: env.name, ownerActorId: env.ownerActorId } });
@@ -35,10 +33,9 @@ async function createEnvironment(ctx: ApiCtx): Promise<void> {
 
 async function attachEnvironment(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+  if (!capability) return forbidden(res, "environments require an agent capability token");
   const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
+  if (!name) return badRequest(res, "name (string) required");
   const env = await app.resolveEnvironmentByName(name);
   if (!env) return sendJson(res, 404, { error: "environment_not_found", message: `no environment named "${name}"` });
   if (env.ownerActorId && !samePerson(env.ownerActorId, capability.actorId)) {

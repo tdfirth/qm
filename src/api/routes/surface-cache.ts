@@ -1,4 +1,4 @@
-import { sendJson } from "../http.ts";
+import { badRequest, notFound, sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import type { IngestEvent } from "../../surface-cache/surface-cache.ts";
@@ -57,7 +57,7 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const surface = typeof b.surface === "string" && b.surface ? b.surface : "slack";
   const events = Array.isArray(b.events) ? b.events.map(toEvent).filter((e): e is IngestEvent => e !== null) : [];
-  if (!events.length) return sendJson(res, 400, { error: "bad_request", message: "events[] required" });
+  if (!events.length) return badRequest(res, "events[] required");
   const sb = isObj(b.self) ? b.self : {};
   const self =
     typeof sb.name === "string" || typeof sb.mentionId === "string"
@@ -79,7 +79,7 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
 async function getChannelPolicy(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const container = url.searchParams.get("container");
-  if (!container) return sendJson(res, 400, { error: "bad_request", message: "container required" });
+  if (!container) return badRequest(res, "container required");
   const policy = await app.getChannelPolicy(container);
   return sendJson(res, 200, { policy });
 }
@@ -87,13 +87,11 @@ async function getChannelPolicy(ctx: ApiCtx): Promise<void> {
 async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body } = ctx;
   const b = isObj(body) ? body : {};
-  if (typeof b.container !== "string" || !b.container)
-    return sendJson(res, 400, { error: "bad_request", message: "container required" });
-  if (typeof b.orders !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
+  if (typeof b.container !== "string" || !b.container) return badRequest(res, "container required");
+  if (typeof b.orders !== "string") return badRequest(res, "orders (string) required");
   const setBy = typeof b.setBy === "string" ? b.setBy : undefined;
   const policy = await app.setChannelPolicy(b.container, b.orders, setBy);
-  if (!policy) return sendJson(res, 404, { error: "not_found", message: "surface cache not enabled" });
+  if (!policy) return notFound(res, "surface cache not enabled");
   audit(deps, {
     principalId: setBy ?? "system",
     action: "surface.policy.set",

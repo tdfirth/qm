@@ -1,7 +1,7 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { sleep } from "../../util/async.ts";
@@ -107,10 +107,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const ts = typeof b.ts === "string" && b.ts.trim() ? b.ts.trim() : undefined;
   if (!ts) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "pass the message's `ts` (find it via /v1/surface-context)",
-    });
+    return badRequest(res, "pass the message's `ts` (find it via /v1/surface-context)");
   }
   const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : undefined;

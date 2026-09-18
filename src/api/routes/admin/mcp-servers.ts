@@ -5,7 +5,7 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
-import { sendJson } from "../../http.ts";
+import { badRequest, notFound, sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
@@ -27,7 +27,7 @@ function redact(server: McpServer): Omit<McpServer, "bearerToken" | "clientSecre
 export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.mcpServers) return notFound(ctx.res);
   audit(ctx.deps, {
     principalId: authorized.id,
     action: "mcp-servers.read",
@@ -49,13 +49,10 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
 export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.mcpServers) return notFound(ctx.res);
   const id = ctx.params.id ?? "";
   if (!isValidMcpServerId(id)) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter",
-    });
+    return badRequest(ctx.res, "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter");
   }
   const b = ctx.body as Partial<McpServer> & { validate?: boolean };
   const url = typeof b.url === "string" ? b.url.trim() : "";
@@ -63,33 +60,27 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   try {
     parsed = new URL(url);
   } catch {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "url must be a valid URL" });
+    return badRequest(ctx.res, "url must be a valid URL");
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "url must be http(s)" });
+    return badRequest(ctx.res, "url must be http(s)");
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "url must not carry credentials, query, or fragment",
-    });
+    return badRequest(ctx.res, "url must not carry credentials, query, or fragment");
   }
   const auth = (b.auth ?? "none") as McpServerAuthMode;
   if (!AUTH_MODES.includes(auth)) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
+    return badRequest(ctx.res, `auth must be one of ${AUTH_MODES.join(", ")}`);
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const credentialScope = b.credentialScope ?? existing?.credentialScope ?? "shared";
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
+    return badRequest(ctx.res, "credentialScope must be shared or per-user");
   }
   const credentialHost = b.credentialHost ?? existing?.credentialHost;
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "credentialAccountType must be default, personal, or company",
-    });
+    return badRequest(ctx.res, "credentialAccountType must be default, personal, or company");
   }
   if (
     credentialScope === "per-user" &&
@@ -99,17 +90,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       credentialHost.length > 253 ||
       /[\s/\\?#@]/.test(credentialHost))
   ) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require a credentialHost" });
+    return badRequest(ctx.res, "per-user credentials require a credentialHost");
   }
   if (
     credentialScope === "per-user" &&
     parsed.protocol !== "https:" &&
     !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
   ) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "per-user credentials require HTTPS (except loopback)",
-    });
+    return badRequest(ctx.res, "per-user credentials require HTTPS (except loopback)");
   }
   const server: McpServer = {
     id,
@@ -133,13 +121,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     updatedBy: authorized.id,
   };
   if (auth === "bearer" && !server.bearerToken) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "bearer auth requires bearerToken" });
+    return badRequest(ctx.res, "bearer auth requires bearerToken");
   }
   if (auth === "client-credentials" && (!server.clientId || !server.clientSecret)) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "client-credentials auth requires clientId and clientSecret",
-    });
+    return badRequest(ctx.res, "client-credentials auth requires clientId and clientSecret");
   }
   let toolNames: string[] | undefined;
   if (b.validate !== false && ctx.deps.mcpToolService) {
@@ -165,9 +150,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
 export async function deleteMcpServer(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!ctx.deps.mcpServers) return notFound(ctx.res);
   const id = ctx.params.id ?? "";
-  if (!(await ctx.deps.mcpServers.get(id))) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!(await ctx.deps.mcpServers.get(id))) return notFound(ctx.res);
   await ctx.deps.mcpServers.delete(id);
   audit(ctx.deps, {
     principalId: authorized.id,

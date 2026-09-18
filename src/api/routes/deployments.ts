@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
+import { badRequest, canonicalPayload, escapeHtml, forbidden, notFound, sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -74,12 +74,11 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     const rawTok = req.headers[PORTAL_IDENTITY_HEADER];
     const tok = Array.isArray(rawTok) ? rawTok[0] : rawTok;
     const actor = psecret && tok ? await verifyPortalIdentity(tok, psecret, Date.now()) : null;
-    if (!psecret || !actor || actor.p !== principal)
-      return sendJson(res, 403, { error: "forbidden", message: "portal identity required" });
+    if (!psecret || !actor || actor.p !== principal) return forbidden(res, "portal identity required");
     if (deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(actor.p).type !== "internal") {
-        return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
+        return forbidden(res, "principal is no longer active");
       }
     }
   }
@@ -124,7 +123,7 @@ function adminDeploymentProxyParts(pathname: string): { id: string; subPath: str
 async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   const { req, res, app, deps, secret, auth, url, pathname, method } = ctx;
   const parts = adminDeploymentProxyParts(pathname);
-  if (!parts) return sendJson(res, 404, { error: "not_found" });
+  if (!parts) return notFound(res);
   const actorHeader = (req.headers["x-admin-actor"] as string) ?? "";
   if (
     !(await verifyOrReject(
@@ -141,7 +140,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
   const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
   if (!actor) return;
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
+  if (!deployment) return notFound(res);
   audit(deps, {
     principalId: actor.id,
     action: "deployment.visit",
@@ -496,9 +495,8 @@ async function proxyReach(
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
   if (res.destroyed) return;
-  if (reach.status === "not_found") return sendJson(res, 404, { error: "not_found" });
-  if (reach.status === "denied")
-    return sendJson(res, 403, { error: "forbidden", message: "not in the deployment's scope" });
+  if (reach.status === "not_found") return notFound(res);
+  if (reach.status === "denied") return forbidden(res, "not in the deployment's scope");
   const { host, port } = reach.endpoint;
   const upstreamKey = `${host}:${port}`;
   const shieldedUntil = throttledUpstreams.get(upstreamKey) ?? 0;
@@ -778,19 +776,19 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const suffix = `.${appsDomain.toLowerCase()}`;
   if (!rawHost || !rawHost.endsWith(suffix)) {
     if (!fromAppHost) return false;
-    sendJson(res, 404, { error: "not_found" });
+    notFound(res);
     return true;
   }
   const slug = rawHost.slice(0, -suffix.length);
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
-    sendJson(res, 404, { error: "not_found" });
+    notFound(res);
     return true;
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {
-      sendJson(res, 403, { error: "forbidden", message: "cross-origin app request refused" });
+      forbidden(res, "cross-origin app request refused");
       return true;
     }
   }
@@ -852,7 +850,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment)
         sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else sendJson(res, 404, { error: "not_found" });
+      else notFound(res);
       return true;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -884,7 +882,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
     const d = await app.getDeployment(slug).catch(() => null);
     if (!d) {
-      sendJson(res, 404, { error: "not_found" });
+      notFound(res);
       return true;
     }
     // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
@@ -1102,9 +1100,9 @@ async function runGitHttpBackend(input: {
 
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
-  if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!parts) return notFound(ctx.res);
   const service = gitServiceOf(parts.tail, ctx.url);
-  if (!service) return sendJson(ctx.res, 403, { error: "forbidden", message: "unsupported deployment git service" });
+  if (!service) return forbidden(ctx.res, "unsupported deployment git service");
   const isPush = service === "git-receive-pack";
   if (isPush && !ctx.secret)
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
@@ -1113,22 +1111,20 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     const token = gitTokenFrom(ctx);
     access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
     if (!access) return rejectGitAuth(ctx.res);
-    if (access.deploymentId !== parts.id)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
-    if (isPush && access.permission !== "write")
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
+    if (access.deploymentId !== parts.id) return forbidden(ctx.res, "token is for a different deployment");
+    if (isPush && access.permission !== "write") return forbidden(ctx.res, "deployment git token is read-only");
     if (
       access.principalId &&
       !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))
     ) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git access has been revoked" });
+      return forbidden(ctx.res, "deployment git access has been revoked");
     }
     if (isPush && !access.principalId) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git write access has been revoked" });
+      return forbidden(ctx.res, "deployment git write access has been revoked");
     }
   }
   const repoPath = await ctx.app.deploymentGitRepoPath(parts.id);
-  if (!repoPath) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!repoPath) return notFound(ctx.res);
   try {
     const body = ctx.method === "POST" ? await readRequestBytes(ctx.req) : Buffer.alloc(0);
     const runBackend = () =>
@@ -1184,22 +1180,21 @@ function gitUrlBase(ctx: ApiCtx): string {
 
 async function deploymentGitUrl(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "a git URL requires an agent capability token" });
+  if (!capability) return forbidden(res, "a git URL requires an agent capability token");
   if (!ctx.secret) return sendJson(res, 503, { error: "unavailable", message: "core signing secret not configured" });
   const result = await app.deploymentGitUrlFor(params.id!, capability.actorId, {
     secret: ctx.secret,
     baseUrl: gitUrlBase(ctx),
   });
-  if (!result) return sendJson(res, 403, { error: "forbidden", message: "no access to this deployment" });
+  if (!result) return forbidden(res, "no access to this deployment");
   return sendJson(res, 200, result);
 }
 
 async function createDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
-  if (!isDeployInput(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a DeployInput" });
+  if (!isDeployInput(body)) return badRequest(res, "expected a DeployInput");
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
-  if (principalId && body.createdBy !== principalId) return sendJson(res, 403, { error: "forbidden" });
+  if (principalId && body.createdBy !== principalId) return forbidden(res);
   try {
     return sendJson(res, 200, { deployment: deploymentView(await app.deploy(body)) });
   } catch (e) {
@@ -1241,13 +1236,10 @@ async function deploymentLogs(ctx: ApiCtx): Promise<void> {
   const rawTail = url.searchParams.get("tailLines");
   const tailLines = rawTail === null ? LOGS_DEFAULT_TAIL_LINES : Number(rawTail);
   if (!Number.isInteger(tailLines) || tailLines < 1 || tailLines > LOGS_MAX_TAIL_LINES) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`,
-    });
+    return badRequest(res, `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`);
   }
   const result = await app.deploymentLogsFor(params.id!, viewer, { tailLines });
-  if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
+  if (result.status !== "ok") return notFound(res);
   if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this deployment" });
   return sendJson(res, 200, { logs: result.logs });
 }
@@ -1257,17 +1249,14 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
   const path = normalizedDeploymentFetchPath(url.searchParams.get("path"));
-  if (!path) return sendJson(res, 400, { error: "bad_request", message: "path must be a safe absolute path" });
+  if (!path) return badRequest(res, "path must be a safe absolute path");
   const rawMaxBytes = url.searchParams.get("maxBytes");
   const maxBytes = rawMaxBytes === null ? AGENT_FETCH_DEFAULT_MAX_BYTES : Number(rawMaxBytes);
   if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > AGENT_FETCH_MAX_BYTES) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`,
-    });
+    return badRequest(res, `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`);
   }
   const reach = await app.reachDeployment(params.id!, viewer);
-  if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
+  if (reach.status !== "ok") return notFound(res);
   try {
     const response = await fetchDeploymentResponse(reach, path, maxBytes);
     const rawContentType = response.headers["content-type"];
@@ -1303,7 +1292,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
     const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
     deployment = stored ? deploymentView(stored) : undefined;
   }
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
+  if (!deployment) return notFound(res);
   if (!principalId || !secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
@@ -1312,11 +1301,10 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
 async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
+  if (!id) return notFound(res);
+  if (!(await callerMayManageDeployment(ctx, id))) return forbidden(res);
   const b = body as { version?: unknown };
-  if (typeof b.version !== "number")
-    return sendJson(res, 400, { error: "bad_request", message: "version (number) required" });
+  if (typeof b.version !== "number") return badRequest(res, "version (number) required");
   try {
     await app.rollbackDeployment(id, b.version);
     return sendJson(res, 200, { ok: true });
@@ -1328,14 +1316,13 @@ async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
 async function redeployDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
+  if (!id) return notFound(res);
+  if (!(await callerMayManageDeployment(ctx, id))) return forbidden(res);
   if (!isRedeployInput(body)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message:
-        "entrypoint (string) and files (array) required; env must be a string map, homeFiles an array, alwaysOn a boolean",
-    });
+    return badRequest(
+      res,
+      "entrypoint (string) and files (array) required; env must be a string map, homeFiles an array, alwaysOn a boolean",
+    );
   }
   try {
     return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, body)) });
@@ -1352,9 +1339,9 @@ async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boole
 export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can archive it" });
+    return forbidden(res, "only someone who manages this app can archive it");
   try {
     await app.archiveDeployment(id);
     return sendJson(res, 200, { ok: true });
@@ -1366,9 +1353,9 @@ export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
 export async function restoreDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can restore it" });
+    return forbidden(res, "only someone who manages this app can restore it");
   try {
     const principalId =
       capability?.actorId ??
@@ -1385,12 +1372,11 @@ export async function restoreDeployment(ctx: ApiCtx): Promise<void> {
 export async function renameDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
+    return forbidden(res, "only someone who manages this app can rename it");
   const b = body as { name?: unknown };
-  if (typeof b.name !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
+  if (typeof b.name !== "string") return badRequest(res, "name (string) required");
   try {
     return sendJson(res, 200, { deployment: await app.renameDeployment(id, b.name) });
   } catch (e) {
@@ -1401,12 +1387,11 @@ export async function renameDeployment(ctx: ApiCtx): Promise<void> {
 export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can rename it" });
+    return forbidden(res, "only someone who manages this app can rename it");
   const b = body as { displayName?: unknown };
-  if (typeof b.displayName !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
+  if (typeof b.displayName !== "string") return badRequest(res, "displayName (string) required");
   try {
     return sendJson(res, 200, { deployment: await app.setDeploymentDisplayName(id, b.displayName) });
   } catch (e) {
@@ -1417,12 +1402,11 @@ export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
 async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return notFound(res);
   if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
+    return forbidden(res, "only someone who manages this app can change this");
   const b = body as { alwaysOn?: unknown };
-  if (typeof b.alwaysOn !== "boolean")
-    return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
+  if (typeof b.alwaysOn !== "boolean") return badRequest(res, "alwaysOn (boolean) required");
   try {
     return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentAlwaysOn(id, b.alwaysOn)) });
   } catch (e) {
@@ -1445,22 +1429,21 @@ export function resolveShareTarget(app: App, input: { scope?: string; recipient?
 
 export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability } = ctx;
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
+  if (!capability) return forbidden(res);
   const deployment = await app.getDeployment(params.id!);
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
+  if (!deployment) return notFound(res);
   if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
-    return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+    return forbidden(res, "Only the owner can edit app permissions.");
   return sendJson(res, 200, { grantees: await app.deploymentGrantees(deployment.id) });
 }
 
 export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
+  if (!capability) return forbidden(res, "sharing requires an agent capability token");
   const b = (isObj(body) ? body : {}) as { scope?: unknown; recipient?: unknown; access?: unknown };
   const access = typeof b.access === "string" ? b.access.toLowerCase() : "view";
   if (access !== "view" && access !== "manage" && access !== "none") {
-    return sendJson(res, 400, { error: "bad_request", message: 'access must be "view", "manage", or "none"' });
+    return badRequest(res, 'access must be "view", "manage", or "none"');
   }
   let permission: Permission | null = "read";
   if (access === "none") permission = null;
@@ -1469,7 +1452,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
     ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
   });
-  if (target.kind === "invalid") return sendJson(res, 400, { error: "bad_request", message: target.message });
+  if (target.kind === "invalid") return badRequest(res, target.message);
   if (target.kind === "none")
     return sendJson(res, 404, {
       error: "recipient_not_found",

@@ -4,7 +4,7 @@ import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { errMessage } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { badRequest, forbidden, notFound, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { decideRecipientConsent } from "../../triggers/trigger-store.ts";
 import { canAdministerCron } from "../control-service.ts";
@@ -69,13 +69,13 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
   if (!cron) {
-    sendJson(res, 404, { error: "not_found" });
+    notFound(res);
     return null;
   }
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return cron;
   if (await canAdministerCron(app, cron, principalId)) return cron;
-  sendJson(res, 404, { error: "not_found" });
+  notFound(res);
   return null;
 }
 
@@ -83,14 +83,14 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
   if (!cron) {
-    sendJson(res, 404, { error: "not_found" });
+    notFound(res);
     return null;
   }
   const principalId = url.searchParams.get("principalId");
   if (!principalId || (await canAdministerCron(app, cron, principalId))) return cron;
   const { visible } = await app.listCronsForViewer(principalId);
   if (visible.some((candidate) => candidate.id === id)) return cron;
-  sendJson(res, 404, { error: "not_found" });
+  notFound(res);
   return null;
 }
 
@@ -173,20 +173,16 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       b.unattendedGrants !== undefined &&
       (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
     ) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "unattendedGrants must be an array of recognized grant strings",
-      });
+      return badRequest(res, "unattendedGrants must be an array of recognized grant strings");
     }
     const schedule = userScheduleFromBody(b.schedule, defaultTimezoneFor(capability));
     const task = taskText(b);
     const text = exactText(b);
     if (!schedule || (task === undefined && text === undefined)) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message:
-          "schedule.cron (5-field expression) or schedule.everyMs/firstFireAt, plus task (what to do) or text (exact text to send), required",
-      });
+      return badRequest(
+        res,
+        "schedule.cron (5-field expression) or schedule.everyMs/firstFireAt, plus task (what to do) or text (exact text to send), required",
+      );
     }
     const result = await ctx.deps.control.createCron(
       {
@@ -226,13 +222,12 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       ...(result.group ? { group: result.group } : {}),
     });
   }
-  if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
+  if (!isCreateCron(body)) return badRequest(res, "expected a CreateCronInput");
   if (body.runAs === "scopeShared")
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message:
-        "scopeShared crons must be created through an agent capability (it validates the scope is membership-controlled)",
-    });
+    return badRequest(
+      res,
+      "scopeShared crons must be created through an agent capability (it validates the scope is membership-controlled)",
+    );
   try {
     const cron = await app.createCron(body);
     return sendJson(res, 200, { cron: withoutFireLog(cron) });
@@ -276,11 +271,9 @@ async function disableCron(ctx: ApiCtx): Promise<void> {
 async function retargetCron(ctx: ApiCtx): Promise<void> {
   const { res, body, capability } = ctx;
   const id = ctx.params.id!;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "retarget requires an agent capability token" });
+  if (!capability) return forbidden(res, "retarget requires an agent capability token");
   const dk = isObj(body) ? body.destinationKey : undefined;
-  if (typeof dk !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "destinationKey (string) required" });
+  if (typeof dk !== "string") return badRequest(res, "destinationKey (string) required");
   const r = await ctx.deps.control.retargetCron(id, dk, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { cron: withoutFireLog(r.cron) });
@@ -289,10 +282,9 @@ async function retargetCron(ctx: ApiCtx): Promise<void> {
 async function noteCron(ctx: ApiCtx): Promise<void> {
   const { res, body, capability } = ctx;
   const id = ctx.params.id!;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "note requires an agent capability token" });
+  if (!capability) return forbidden(res, "note requires an agent capability token");
   const note = isObj(body) ? body.note : undefined;
-  if (typeof note !== "string") return sendJson(res, 400, { error: "bad_request", message: "note (string) required" });
+  if (typeof note !== "string") return badRequest(res, "note (string) required");
   const r = await ctx.deps.control.noteCron(id, note, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { ok: true, applied: r.applied });
@@ -308,12 +300,12 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!deps.scheduler) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
+  if (!deps.scheduler) return notFound(res, "scheduler not wired");
   if (cron.archived || !cron.enabled)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
-    });
+    return badRequest(
+      res,
+      `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
+    );
   const result = await deps.scheduler.runNow(id);
   if (!result.started) {
     const refusal = describeRunNowRefusal(id, result)!;
@@ -335,7 +327,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-    return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
+    return badRequest(res, "limit must be a positive integer");
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
   return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total });
@@ -360,9 +352,9 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ? sendJson(res, 200, { ok: true })
         : sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
     }
-    if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
+    if (!isCronPatch(body)) return badRequest(res, CRON_PATCH_BAD_REQUEST);
     if (!hasCronPatchFields(body)) {
-      return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
+      return badRequest(res, CRON_PATCH_NOTHING_TO_CHANGE);
     }
     const schedule =
       body.schedule !== undefined ? userScheduleFromBody(body.schedule, defaultTimezoneFor(capability))! : undefined;
@@ -397,27 +389,17 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { ok: true });
   }
   if ((cron.unattendedGrants?.length ?? 0) > 0) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "a privileged cron may only be patched by its owner from a live turn",
-    });
+    return forbidden(res, "a privileged cron may only be patched by its owner from a live turn");
   }
-  if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
+  if (!isCronPatch(body)) return badRequest(res, CRON_PATCH_BAD_REQUEST);
   if (!hasCronPatchFields(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
+    return badRequest(res, CRON_PATCH_NOTHING_TO_CHANGE);
   }
-  if (body.runAs !== undefined)
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "changing a cron's mode requires an agent capability token",
-    });
+  if (body.runAs !== undefined) return forbidden(res, "changing a cron's mode requires an agent capability token");
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const task = body.action ?? body.task;
   if (body.unfurlLinks !== undefined && !cron.destination) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "unfurlLinks can only be set on a cron with a delivery destination",
-    });
+    return badRequest(res, "unfurlLinks can only be set on a cron with a delivery destination");
   }
   const patch: CronPatch = {
     ...(body.title !== undefined ? { title: body.title } : {}),
@@ -440,21 +422,20 @@ async function cronById(ctx: ApiCtx): Promise<void> {
 async function triggerConsent(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   const id = ctx.params.id!;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "consent requires an agent capability token" });
+  if (!capability) return forbidden(res, "consent requires an agent capability token");
   const decision = isObj(body) ? body.decision : undefined;
   if (decision !== "accept" && decision !== "decline") {
-    return sendJson(res, 400, { error: "bad_request", message: 'decision must be "accept" or "decline"' });
+    return badRequest(res, 'decision must be "accept" or "decline"');
   }
   const cron = await app.getCron(id);
   const webhook = cron ? null : await app.getWebhook(id);
   const trigger = cron ?? webhook;
-  if (!trigger) return sendJson(res, 404, { error: "not_found" });
+  if (!trigger) return notFound(res);
   const decided = decideRecipientConsent(trigger.recipientConsent, capability.actorId, decision, Date.now());
   if (!decided.ok) {
     return decided.reason === "no_consent"
-      ? sendJson(res, 400, { error: "bad_request", message: "this trigger has no recipient consent to decide on" })
-      : sendJson(res, 403, { error: "forbidden", message: "only the delivery recipient can accept or decline this" });
+      ? badRequest(res, "this trigger has no recipient consent to decide on")
+      : forbidden(res, "only the delivery recipient can accept or decline this");
   }
   if (cron) await app.setCronRecipientConsent(id, decided.consent);
   else await app.setWebhookRecipientConsent(id, decided.consent);
