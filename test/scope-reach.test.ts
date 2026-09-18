@@ -313,8 +313,11 @@ test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope lab
 
 test("reached-room provenance remains complete across the minimum payload-cap boundary", async () => {
   for (const maxToolResultChars of [200, 201]) {
-    const emitted: Array<{ type: string; payload: { result?: string; resultTruncated?: boolean }; scopeLabel: string }> =
-      [];
+    const emitted: Array<{
+      type: string;
+      payload: { result?: string; resultTruncated?: boolean };
+      scopeLabel: string;
+    }> = [];
     const { tc } = sinkToolContext();
     tc.execute = async (_command, opts) => ({
       stdout: "x".repeat(2_000),
