@@ -31,6 +31,7 @@
   --success: #1a7f37;
   --warning: #a66700;
   --scrim: oklch(0.145 0 0);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .dark {
@@ -288,7 +289,9 @@ a.chat-row-open {
   color: var(--foreground);
   cursor: pointer;
   text-align: left;
-  transition: background 0.12s ease;
+  transition:
+    background 0.12s ease,
+    transform 160ms var(--ease-out);
 }
 .navrow:hover {
   background: var(--secondary);
@@ -975,7 +978,9 @@ a.chat-row-open {
   cursor: pointer;
   font: inherit;
   text-align: left;
-  transition: background 0.12s ease;
+  transition:
+    background 0.12s ease,
+    transform 160ms var(--ease-out);
 }
 .user-pill:hover,
 .user-menu.menu-open .user-pill {
@@ -1365,6 +1370,7 @@ a.chat-row-open {
   color: var(--foreground);
   cursor: pointer;
   text-decoration: none;
+  transition: transform 160ms var(--ease-out);
 }
 .icon-btn:hover {
   background: var(--secondary);
@@ -4174,7 +4180,10 @@ qm-markdown .tok-in {
   background: var(--cta);
   color: var(--cta-foreground);
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition:
+    background 0.12s ease,
+    opacity 0.12s ease,
+    transform 160ms var(--ease-out);
 }
 .send-btn:hover:not(:disabled) {
   background: var(--cta-hover);
@@ -4202,7 +4211,8 @@ qm-markdown .tok-in {
   cursor: pointer;
   transition:
     background 0.12s ease,
-    opacity 0.12s ease;
+    opacity 0.12s ease,
+    transform 160ms var(--ease-out);
 }
 .stop-btn:hover:not(:disabled) {
   background: var(--secondary);
@@ -4379,7 +4389,9 @@ summary.stopped-head:focus-visible {
   background: var(--background);
   color: var(--foreground);
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition:
+    background 0.12s ease,
+    transform 160ms var(--ease-out);
 }
 .btn:hover {
   background: var(--secondary);
@@ -5106,7 +5118,7 @@ a.connector-widget:focus-visible {
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--muted-foreground) 30%, transparent);
   border-top-color: var(--muted-foreground);
-  animation: chat-spin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .kc-loading .spinner {
@@ -11892,4 +11904,158 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: 11.5px;
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
+}
+
+.btn:active,
+.icon-btn:active,
+.navrow:active,
+.user-pill:active,
+.send-btn:active:not(:disabled),
+.stop-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.menu-popover,
+.session-menu-popover,
+.slash-popover {
+  transform-origin: 50% 100%;
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+}
+.session-menu-popover:not(.drop-up, .user-menu-popover),
+.menu-control[data-drop="down"] .menu-popover:not(.drop-up) {
+  transform-origin: 50% 0;
+  @starting-style {
+    transform: scale(0.96) translateY(-4px);
+  }
+}
+.qm-tooltip {
+  transition:
+    opacity 125ms var(--ease-out),
+    transform 125ms var(--ease-out);
+}
+.qm-tooltip.visible {
+  @starting-style {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+dialog.project-dialog {
+  opacity: 0;
+  transform: scale(0.96);
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out),
+    display 150ms allow-discrete,
+    overlay 150ms allow-discrete;
+}
+dialog.project-dialog[open] {
+  opacity: 1;
+  transform: none;
+  transition-duration: 200ms;
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+dialog.project-dialog::backdrop {
+  opacity: 0;
+  transition:
+    opacity 150ms var(--ease-out),
+    display 150ms allow-discrete,
+    overlay 150ms allow-discrete;
+}
+dialog.project-dialog[open]::backdrop {
+  opacity: 1;
+  transition-duration: 200ms;
+  @starting-style {
+    opacity: 0;
+  }
+}
+.project-dialog-backdrop {
+  transition: opacity 200ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
+.project-dialog-backdrop > .project-dialog {
+  transition: transform 200ms var(--ease-out);
+  @starting-style {
+    transform: scale(0.96);
+  }
+}
+.session-row,
+.bg-row-output,
+.recent-project-children,
+.archived-children {
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.work-fold::details-content,
+.thinking-row::details-content,
+.tool-expandable::details-content {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out),
+    content-visibility 180ms allow-discrete;
+}
+.work-fold[open]::details-content,
+.thinking-row[open]::details-content,
+.tool-expandable[open]::details-content {
+  opacity: 1;
+  transform: none;
+}
+@keyframes copied-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+.msg-copy.copied > svg,
+.btn.copied::after {
+  animation: copied-pop 160ms var(--ease-out);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn:active,
+  .icon-btn:active,
+  .navrow:active,
+  .user-pill:active,
+  .send-btn:active,
+  .stop-btn:active {
+    transform: none;
+  }
+  .menu-popover,
+  .session-menu-popover,
+  .slash-popover,
+  .qm-tooltip,
+  dialog.project-dialog,
+  .project-dialog-backdrop > .project-dialog,
+  .session-row,
+  .bg-row-output,
+  .recent-project-children,
+  .archived-children,
+  .work-fold::details-content,
+  .thinking-row::details-content,
+  .tool-expandable::details-content {
+    transition-property: opacity, display, overlay, content-visibility;
+  }
+  .msg-copy.copied > svg,
+  .btn.copied::after {
+    animation: none;
+  }
 }

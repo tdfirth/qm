@@ -82,7 +82,8 @@ export function setTheme(choice: ThemeChoice): void {
   } catch {
     void 0;
   }
-  applyTheme();
+  if (document.startViewTransition) document.startViewTransition(applyTheme);
+  else applyTheme();
   drawSettings();
 }
 
