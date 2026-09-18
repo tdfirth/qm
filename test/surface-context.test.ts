@@ -4,6 +4,7 @@ import { scopeId } from "../src/types.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
+import { waitFor } from "./support/settle.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -31,18 +32,18 @@ describe("surface-context pulls", async () => {
   };
 
   const fulfillNext = async (answer: (q: any) => unknown): Promise<any> => {
-    for (let i = 0; i < 100; i++) {
-      const res = await signedGet(pendingPath());
-      const { requests } = (await res.json()) as { requests: Array<{ id: string; query: any }> };
-      if (requests.length) {
-        const r = requests[0]!;
-        const ok = await signedPost(`/v1/surface-context/${r.id}/result`, answer(r.query));
-        assert.equal(ok.status, 200);
-        return r.query;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error("no pending context request appeared");
+    const requests = await waitFor(
+      async () => {
+        const res = await signedGet(pendingPath());
+        return ((await res.json()) as { requests: Array<{ id: string; query: any }> }).requests;
+      },
+      (pending) => pending.length > 0,
+      5_000,
+    );
+    const r = requests[0]!;
+    const ok = await signedPost(`/v1/surface-context/${r.id}/result`, answer(r.query));
+    assert.equal(ok.status, 200);
+    return r.query;
   };
 
   before(async () => {

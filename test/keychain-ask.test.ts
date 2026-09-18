@@ -26,6 +26,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { waitFor } from "./support/settle.ts";
 import { dmTurn, turnRequest } from "./support/turns.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -639,14 +640,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
 
   const post = (path: string, body: unknown, cap: string) => api.post(path, body, { "x-agent-capability": cap });
   const get = (path: string, cap: string) => api.get(path, { "x-agent-capability": cap });
-  const waitFor = async <T>(probe: () => Promise<T[]>, ms = 5_000): Promise<T[]> => {
-    const start = Date.now();
-    for (;;) {
-      const v = await probe();
-      if (v.length > 0 || Date.now() - start > ms) return v;
-      await new Promise((r) => setTimeout(r, 25));
-    }
-  };
+  const waitForAny = <T>(probe: () => Promise<T[]>) => waitFor(probe, (v) => v.length > 0, 5_000);
 
   before(async () => {
     await built.app.upsertDirectory([
@@ -837,19 +831,19 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       410,
     );
 
-    const resolution = await waitFor(async () =>
+    const resolution = await waitForAny(async () =>
       (await built.sessions.getEntries(session!.id)).filter(
         (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
       ),
     );
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const delivered = await waitFor(async () =>
+    const delivered = await waitForAny(async () =>
       (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${ask.id}\``)),
     );
     assert.equal(delivered.length, 1);
     assert.equal(delivered[0]!.destination.target, "C_INFRA");
 
-    await waitFor(async () =>
+    await waitForAny(async () =>
       (((await (await get("/v1/keychain/asks", await bobInInfra())).json()) as any).asks as any[]).filter(
         (a) => a.id === ask.id && a.notifiedAt !== undefined,
       ),
@@ -888,7 +882,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     const { ask } = (await res.json()) as any;
     assert.equal(ask.status, "declined");
 
-    const delivered = await waitFor(async () =>
+    const delivered = await waitForAny(async () =>
       (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${ask.id}\``)),
     );
     assert.equal(delivered.length, 1);
@@ -1049,7 +1043,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         const { grant, use } = (await response.json()) as any;
         assert.equal(grant.audienceScopeId, scope);
         assert.equal(use.command, undefined);
-        const resumed = await waitFor(async () =>
+        const resumed = await waitForAny(async () =>
           (await built.sessions.getEntries(session.id)).filter(
             (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
           ),
@@ -1184,7 +1178,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       assert.equal(approved.grant.audienceScopeId, personal);
       assert.equal(approved.use.command, undefined);
       assert.match(approved.use.note, /Do not load or consume/);
-      const resumed = await waitFor(async () =>
+      const resumed = await waitForAny(async () =>
         (await built.sessions.getEntries(session.id)).filter(
           (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
         ),
@@ -1248,7 +1242,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     await new Promise((r) => setTimeout(r, 120));
 
     await built.scheduler.tick(Date.now());
-    const delivered = await waitFor(async () =>
+    const delivered = await waitForAny(async () =>
       (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${made.ask.id}\``)),
     );
     assert.equal(delivered.length, 1, "exactly one expired-resolution delivery");

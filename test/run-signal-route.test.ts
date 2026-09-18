@@ -9,6 +9,7 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { waitFor } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { dmTurn, turnRequest } from "./support/turns.ts";
 
@@ -219,12 +220,7 @@ test("an orphaned steer with a request replays as the steerer, not the run's own
   assert.ok(claimed);
   await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
-  for (let i = 0; !replayed && i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
-  }
-  assert.ok(replayed, "the steer text was re-enqueued as its own turn");
+  const replayed = await waitFor(() => built.runs.activeForThread(threadRef), Boolean, 5_000);
   assert.equal(replayed!.request.actor.id, "web-eve");
   assert.equal(replayed!.request.text, "finish this instead");
   assert.deepEqual(replayed!.request.attachments, [attachment], "the steer's own files survive the replay");
@@ -249,12 +245,7 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.ok(claimed);
   await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
-  for (let i = 0; !replayed && i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
-  }
-  assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
+  const replayed = await waitFor(() => built.runs.activeForThread(threadRef), Boolean, 5_000);
   assert.equal(replayed!.request.actor.id, "internal:U1");
   assert.equal(replayed!.request.text, "still matters");
 });

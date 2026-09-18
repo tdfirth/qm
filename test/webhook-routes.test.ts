@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { waitFor } from "./support/settle.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -258,15 +259,15 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     });
     assert.equal(accepted.status, 202);
     const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
-    let events: Array<{ sessionId?: string; payload: string }> = [];
-    for (let i = 0; i < 100; i++) {
-      const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
-      ({ events } = (await history.json()) as { events: typeof events });
-      if (events[0]?.sessionId) break;
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    const events = await waitFor(
+      async () => {
+        const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
+        return ((await history.json()) as { events: Array<{ sessionId?: string; payload: string }> }).events;
+      },
+      (events) => Boolean(events[0]?.sessionId),
+      1_000,
+    );
     assert.equal(events.length, 1);
-    assert.ok(events[0]?.sessionId);
     assert.match(events[0]!.payload, /agent message for worklog/);
     const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
     const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });

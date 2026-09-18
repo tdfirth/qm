@@ -6,6 +6,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
+import { waitFor } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { dmTurn, orchestratorTurn } from "./support/turns.ts";
@@ -109,7 +110,7 @@ test("a shed-participants event is rehydrated from the session store before subs
     at: 7,
     participantsShed: true,
   });
-  assert.ok(await waitFor(() => got.length > 0), "the flagged event reached the subscriber");
+  await waitFor(() => got.length > 0, Boolean, 2_000);
   assert.deepEqual(got[0]!.participants, ["U1"], "the routing field is rebuilt from durable session membership");
   assert.equal(got[0]!.participantsShed, undefined, "the internal shed flag never leaves the app");
   assert.equal(got[0]!.state, "working");
@@ -125,7 +126,7 @@ test("a shed event still reaches subscribers when the participant lookup fails",
   const got: SessionStateEvent[] = [];
   built.app.subscribeSessionStates((e) => got.push(e));
   built.sessionStateBus.emit({ threadRef: thread, state: "working", at: 8, participantsShed: true });
-  assert.ok(await waitFor(() => got.length > 0), "the transition is not dropped with the lookup");
+  await waitFor(() => got.length > 0, Boolean, 2_000);
   assert.equal(got[0]!.participants, undefined);
   assert.equal(got[0]!.participantsShed, undefined);
 });
@@ -135,7 +136,7 @@ test("a shed event for an unknown thread still reaches subscribers, just without
   const got: SessionStateEvent[] = [];
   built.app.subscribeSessionStates((e) => got.push(e));
   built.sessionStateBus.emit({ threadRef: "web:U1:ghost", state: "idle", at: 9, participantsShed: true });
-  assert.ok(await waitFor(() => got.length > 0));
+  await waitFor(() => got.length > 0, Boolean, 2_000);
   assert.equal(got[0]!.participants, undefined);
   assert.equal(got[0]!.participantsShed, undefined);
 });
@@ -189,15 +190,6 @@ function resolvedDm(text: string, thread: string): OrchestratorInput {
   );
 }
 
-async function waitFor(cond: () => boolean, ms = 2000): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (cond()) return true;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  return cond();
-}
-
 test("a terminal run with another run still queued on the thread emits no settle — the LAST live run owns it", async () => {
   const built = freshApp();
   const thread = "web:U1:queued";
@@ -225,7 +217,7 @@ test("a terminal run with another run still queued on the thread emits no settle
   const leasedB = await built.runs.claimById(b.id, "w1", 30_000);
   assert.ok(leasedB);
   await built.runs.complete(b.id, leasedB!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok(await waitFor(() => statesFor(got, thread).includes("idle")), "the last run's terminal settles idle");
+  await waitFor(() => statesFor(got, thread).includes("idle"), Boolean, 2_000);
 });
 
 test("a FAILED (parked) run still settles from durable truth: leftover blocking approval wins, UUID intact", async () => {
@@ -240,10 +232,7 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   const leased = await built.runs.claimById(run.id, "w1", 30_000);
   assert.ok(leased);
   await built.runs.fail(run.id, leased!.leaseToken!, "kaboom", { retry: false });
-  assert.ok(
-    await waitFor(() => statesFor(got, thread).some((state) => state !== "working")),
-    "terminal emitted a settle",
-  );
+  await waitFor(() => statesFor(got, thread).some((state) => state !== "working"), Boolean, 2_000);
   const settle = got.find((e) => e.threadRef === thread && e.state !== "working");
   assert.equal(settle?.state, "awaiting_approval", "the undecided blocking approval keeps the session awaiting");
   assert.equal(settle?.sessionId, uuid, "the frame carries the durable session UUID, not the threadRef");
@@ -260,7 +249,7 @@ test("a settle frame is stamped with the run's durable finishedAt — a later en
   const leased = await built.runs.claimById(run.id, "w1", 30_000);
   assert.ok(leased);
   await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok(await waitFor(() => statesFor(got, thread).filter((s) => s === "idle").length >= 2));
+  await waitFor(() => statesFor(got, thread).filter((s) => s === "idle").length >= 2, Boolean, 2_000);
   const second = [...got].reverse().find((e) => e.threadRef === thread && e.state === "idle");
   const row = await built.runs.get(run.id);
   assert.equal(second!.at, row!.finishedAt, "the settle frame carries the run's durable finishedAt");

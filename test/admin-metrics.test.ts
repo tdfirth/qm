@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { TurnRequest } from "../src/types.ts";
 import { startApi, tmpDir } from "./support/api.ts";
+import { waitFor } from "./support/settle.ts";
 import { dmTurn } from "./support/turns.ts";
 
 const start = () =>
@@ -148,11 +149,11 @@ test("metrics: session+lease measured per turn; detached post-turn capture recor
       "lease p50 is a real number",
     );
 
-    for (let i = 0; i < 100 && (m.anatomy.capture.count ?? 0) < 1; i++) {
-      await new Promise((r) => setTimeout(r, 20));
-      m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
-    }
-    assert.ok(m.anatomy.capture.count >= 1, "the detached post-turn capture was recorded");
+    m = await waitFor(
+      () => getJson(s.base, "/v1/admin/metrics?scope=org:default-org"),
+      (metrics) => (metrics.anatomy.capture.count ?? 0) >= 1,
+      2_000,
+    );
     assert.ok(typeof m.anatomy.capture.p50 === "number" && m.anatomy.capture.p50 >= 0, "capture p50 is a real number");
     assert.equal(
       m.anatomy.traceA.samples + m.anatomy.traceB.samples,
