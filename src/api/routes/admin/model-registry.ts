@@ -3,13 +3,10 @@ import { ModelVerificationError } from "../../../model/model-verification.ts";
 import { MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { badRequest, notFound, sendJson } from "../../http.ts";
-import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope, isObj } from "../shared.ts";
+import { audit, orgScope, isObj, orgAdmin } from "../shared.ts";
 
-export async function modelRegistry(ctx: ApiCtx): Promise<void> {
+export const modelRegistry = orgAdmin(async (ctx, actor) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const store = ctx.deps.modelRegistry;
   if (!store) return notFound(ctx.res);
   if (ctx.method === "GET") {
@@ -67,14 +64,13 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
   });
   await store.refresh();
   return sendJson(ctx.res, 200, { ok: true, ...verification });
-}
+});
 
 import { builtinModelSpec, lookupModel, modelLookupInput } from "../../../model/model-lookup.ts";
 import { builtInModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { verificationFailure } from "../../../model/model-verification.ts";
 
-export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
-  if (!(await authorizeAdmin(ctx, orgScope(ctx.deps)))) return;
+export const lookupRegistryModel = orgAdmin(async (ctx) => {
   const input = modelLookupInput.safeParse(ctx.body);
   if (!input.success) return badRequest(ctx.res, "Choose a provider and enter a valid model ID.");
   await ctx.deps.refreshModels?.();
@@ -113,12 +109,10 @@ export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
       message: "The model ID does not match the selected provider.",
     });
   }
-}
+});
 
-export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
+export const enableBuiltinModel = orgAdmin(async (ctx, actor) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!isObj(ctx.body)) return badRequest(ctx.res);
   const input = modelLookupInput.safeParse({ provider: ctx.body.provider, id: ctx.params.model });
   if (!input.success || ctx.body.verify !== true)
@@ -184,4 +178,4 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
     verificationScope: "organization",
     message: "Existing model verified and added to the web picker. Organization default unchanged.",
   });
-}
+});

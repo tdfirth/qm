@@ -21,7 +21,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { badRequest, notFound, sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope, orgAdmin } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
   ADMIN_RESOURCE_BY_ID,
@@ -107,15 +107,13 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function getAdminResources(ctx: ApiCtx): Promise<void> {
+export const getAdminResources = orgAdmin(async (ctx, actor) => {
   const { res, deps } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   await deps.refreshModels?.();
   audit(deps, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
   return sendJson(res, 200, { resources: adminResourceManifest() });
-}
+});
 
 export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
@@ -134,11 +132,9 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ...status, permissions });
 }
 
-export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
+export const listAdminScopes = orgAdmin(async (ctx, actor) => {
   const { res, app, deps } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
   const crons = await app.listCrons();
   const deployments = await app.listDeployments();
@@ -208,7 +204,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
       a.scopeId.localeCompare(b.scopeId),
   );
   return sendJson(res, 200, { scopeId: scope, scopes, environments });
-}
+});
 
 interface ScopeEnvironmentMetadata {
   environment?: { id: string; name: string; ownerActorId: string | null };

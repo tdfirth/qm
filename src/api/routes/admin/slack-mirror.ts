@@ -1,6 +1,6 @@
 import type { App } from "../../app.ts";
 import { badRequest, notFound, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, orgScope, orgAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
 const SLACK_MIRROR_PAGE_MAX = 400;
@@ -29,11 +29,9 @@ async function mirrorNames(deps: ApiCtx["deps"]) {
   };
 }
 
-export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
+export const listSlackMirrorContainers = orgAdmin(async (ctx, actor) => {
   const { res, app, deps } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   audit(deps, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
   const raw = await app.listSurfaceContainers({ limit: SLACK_MIRROR_PAGE_MAX + 1 });
   const hasMore = raw.length > SLACK_MIRROR_PAGE_MAX;
@@ -43,13 +41,11 @@ export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
     name: c.name ?? channelsById.get(c.container.toLowerCase()),
   }));
   return sendJson(res, 200, { scopeId: scope, containers, hasMore, limit: SLACK_MIRROR_PAGE_MAX });
-}
+});
 
-export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
+export const listSlackMirrorMessages = orgAdmin(async (ctx, actor) => {
   const { res, app, deps, url } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const container = (url.searchParams.get("container") ?? "").trim();
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!container && !q) return badRequest(res, "container or q required");
@@ -86,13 +82,11 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   const hasMore = raw.length > limit;
   const messages = withNames(hasMore ? raw.slice(raw.length - limit) : raw);
   return sendJson(res, 200, { scopeId: scope, mode: "timeline", container, messages, hasMore, limit });
-}
+});
 
-export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
+export const listAmbientJudgments = orgAdmin(async (ctx, actor) => {
   const { res, deps, url } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const store = deps.ambientJudgments;
   if (!store) return sendJson(res, 200, { scopeId: scope, judgments: [], counts: { act: 0, ignore: 0, fastlane: 0 } });
   const container = (url.searchParams.get("container") ?? "").trim() || undefined;
@@ -134,13 +128,11 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
     hasMore,
     limit,
   });
-}
+});
 
-export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
+export const listAckEmojiPicks = orgAdmin(async (ctx, actor) => {
   const { res, deps, url } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const store = deps.ackEmojiPicks;
   if (!store) return sendJson(res, 200, { scopeId: scope, picks: [], counts: { picked: 0, declined: 0 } });
   const channel = (url.searchParams.get("container") ?? "").trim() || undefined;
@@ -171,4 +163,4 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   ]);
   const hasMore = picks.length > limit;
   return sendJson(res, 200, { scopeId: scope, picks: hasMore ? picks.slice(0, limit) : picks, counts, hasMore, limit });
-}
+});

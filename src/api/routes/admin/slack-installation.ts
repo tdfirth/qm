@@ -1,5 +1,5 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, orgScope, orgAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
@@ -23,10 +23,8 @@ function standardEmoji(): StandardEmojiEntry[] {
   return standardEmojiCache;
 }
 
-export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
+export const getSlackInstallation = orgAdmin(async (ctx, actor) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   audit(ctx.deps, {
     principalId: actor.id,
@@ -79,12 +77,10 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
     source: ctx.deps.slackEnvironmentState === "partial" ? "invalid_environment" : "none",
     createUrl,
   });
-}
+});
 
-export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
+export const putSlackInstallation = orgAdmin(async (ctx, actor) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const body = ctx.body as { botToken?: unknown; appToken?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
@@ -107,12 +103,10 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return sendJson(ctx.res, 400, { error: "invalid_slack_installation", message: errMessage(error) });
   }
-}
+});
 
-export async function deleteSlackInstallation(ctx: ApiCtx): Promise<void> {
+export const deleteSlackInstallation = orgAdmin(async (ctx, actor) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   await ctx.deps.slackInstallation.delete(actor.id);
   audit(ctx.deps, {
@@ -122,12 +116,10 @@ export async function deleteSlackInstallation(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   return sendJson(ctx.res, 200, { configured: false, managed: true, source: "admin" });
-}
+});
 
-export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
+export const getSlackEmojiList = orgAdmin(async (ctx) => {
   const scope = orgScope(ctx.deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const managed = await ctx.deps.slackInstallation?.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
   if (!botToken) {
@@ -154,11 +146,9 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return sendJson(ctx.res, 502, { error: "slack_unreachable", message: errMessage(error) });
   }
-}
+});
 
-export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+export const startSlackInstallation = orgAdmin(async (ctx) => {
   if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
   try {
     const step = (ctx.body as { step?: unknown } | undefined)?.step ?? "install";
@@ -168,7 +158,7 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
   } catch {
     return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
   }
-}
+});
 
 export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });

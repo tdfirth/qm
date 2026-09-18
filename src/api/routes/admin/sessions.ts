@@ -17,7 +17,7 @@ import {
 import { createTranscriptSource } from "../../../harness/tape-projection.ts";
 import { swallowAs } from "../../../util/errors.ts";
 import { badRequest, sendJson } from "../../http.ts";
-import { audit, requireScopedAdmin } from "../shared.ts";
+import { audit, scopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
 import {
@@ -156,11 +156,8 @@ async function cronFireResults(app: App, summaries: readonly SessionSummary[]): 
   return results;
 }
 
-export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
+export const listAdminSessions = scopedAdmin(async (ctx, { actor, scope }) => {
   const { res, app, deps, url } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: "sessions.read", resource: "sessions", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const categoryParam = url.searchParams.get("category") ?? "conversation";
@@ -296,7 +293,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
       ? { nextCursor: `${summaries[summaries.length - 1]!.lastActivity}~${summaries[summaries.length - 1]!.id}` }
       : {}),
   });
-}
+});
 
 export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, url } = ctx;
@@ -391,11 +388,8 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
+export const listAdminShadowDeliveries = scopedAdmin(async (ctx, { actor, scope }) => {
   const { res, app, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
   audit(deps, {
     principalId: actor.id,
     action: "deliveries.shadow.read",
@@ -419,4 +413,4 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
       })),
   );
   return sendJson(res, 200, { scopeId: scope, shadow });
-}
+});

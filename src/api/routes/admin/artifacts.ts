@@ -1,7 +1,7 @@
 import { parseScopeId, type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
 import { badRequest, sendJson } from "../../http.ts";
-import { audit, requireScopedAdmin } from "../shared.ts";
+import { audit, scopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { requireScopedResource } from "./common.ts";
@@ -18,12 +18,9 @@ function isAdminCronDestination(v: unknown): v is Destination {
   return keys.every((k) => k === "type" || k === "target" || k === "audienceScopeId" || k === "onBehalfOf");
 }
 
-export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
+export const listAdminArtifacts = scopedAdmin(async (ctx, { actor, scope }) => {
   const { res, app, deps, pathname } = ctx;
   const resource = pathname.slice("/v1/admin/".length);
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   if (resource === "crons") {
@@ -83,7 +80,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
       };
     });
   return sendJson(res, 200, { scopeId: scope, skills });
-}
+});
 
 export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, params, body } = ctx;

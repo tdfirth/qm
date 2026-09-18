@@ -10,7 +10,7 @@ import {
   pipeToResponse,
   sendJson,
 } from "../../http.ts";
-import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin, scopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
@@ -85,11 +85,8 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   return;
 }
 
-export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
+export const listAdminFiles = scopedAdmin(async (ctx, { actor, scope }) => {
   const { res, app, deps, url } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
@@ -129,16 +126,13 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
     cursor = page.nextCursor;
   } while (cursor && files.length < FILES_LIST_MAX);
   return sendJson(res, 200, { scopeId: scope, files });
-}
+});
 
-export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
+export const uploadAdminFile = scopedAdmin(async (ctx, { actor, scope }) => {
   const { res, deps, body } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
   if (!deps.files) return notFound(res, "file store not wired");
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
-  const { actor, scope } = authz;
   const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   const name = safeAttachmentName(typeof b.name === "string" ? b.name : "");
@@ -186,4 +180,4 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   } finally {
     await deps.blobTransfer.delete(blobId);
   }
-}
+});

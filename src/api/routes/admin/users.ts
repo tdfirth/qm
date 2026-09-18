@@ -13,7 +13,7 @@ import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { badRequest, conflict, forbidden, notFound, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import { audit, isObj, orgScope, orgAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { FILES_PAGE_SIZE } from "./common.ts";
 
@@ -28,11 +28,9 @@ const HOLDS_OWN_GRANT =
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const FORGET_AFTER_MS = 24 * 60 * 60 * 1000;
 
-export async function listUsers(ctx: ApiCtx): Promise<void> {
+export const listUsers = orgAdmin(async (ctx, actor) => {
   const { res, deps } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   audit(deps, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
@@ -49,7 +47,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(signInUrl ? { signInUrl } : {}),
   };
   return sendJson(res, 200, { scopeId: scope, users, grants, externalUsers, inviteEmail });
-}
+});
 
 function signInUrlOf(deps: ApiCtx["deps"]): string | undefined {
   return deps.portalUrl ? `${deps.portalUrl.replace(/\/+$/, "")}/auth/login` : undefined;
@@ -74,11 +72,9 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
   return participants.some((participant) => samePerson(participant.principalId, email));
 }
 
-export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
+export const inviteExternalUser = orgAdmin(async (ctx, actor) => {
   const { res, deps, body } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!deps.identity) return notFound(res);
   const bad = (message: string) => badRequest(res, message);
   const b = isObj(body) ? body : {};
@@ -164,13 +160,11 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
     ...(emailProblem ? { emailProblem } : {}),
     ...(signInUrl ? { signInUrl } : {}),
   });
-}
+});
 
-export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
+export const revokeExternalUser = orgAdmin(async (ctx, actor) => {
   const { res, deps, params } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   if (!deps.identity) return notFound(res);
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(params.email ?? "");
@@ -209,12 +203,10 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   await deps.identity.removeExternalMember(existing.email);
   audit(deps, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
   return sendJson(res, 200, { ok: true, removed: true });
-}
+});
 
-export async function searchDirectory(ctx: ApiCtx): Promise<void> {
+export const searchDirectory = orgAdmin(async (ctx) => {
   const { res, deps, app, url } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || !deps.directory) return sendJson(res, 200, { members: [] });
   const r = await app.resolveRecipient(q);
@@ -224,13 +216,11 @@ export async function searchDirectory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     members: members.map((m) => ({ principalId: m.principalId, displayName: m.displayName })),
   });
-}
+});
 
-export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
+export const listKeychainStatus = orgAdmin(async (ctx, actor) => {
   const { res, app, deps } = ctx;
   const scope = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   audit(deps, { principalId: actor.id, action: "keychain.read", resource: "keychain", scopeLabel: scope });
 
   if (!deps.keychain)
@@ -294,13 +284,11 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   const grantsWithUse = grants.map((g) => ({ ...g, useCount: useCountByGrant.get(g.id) ?? 0 }));
 
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
-}
+});
 
-export async function getUserDetail(ctx: ApiCtx): Promise<void> {
+export const getUserDetail = orgAdmin(async (ctx, actor) => {
   const { res, app, deps, params } = ctx;
   const org = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
   const principalId = params.principalId!;
   const personal = makeScopeId("personal", principalId);
   audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
@@ -440,37 +428,31 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     config,
     onboarding,
   });
-}
+});
 
-export async function startImpersonation(ctx: ApiCtx): Promise<void> {
+export const startImpersonation = orgAdmin(async (ctx, actor) => {
   const { res, app, deps, body } = ctx;
   const org = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   if (!target) return badRequest(res, "target principal required");
   if (target === actor.id) return badRequest(res, "cannot impersonate yourself");
   const member = await app.directoryMember(target);
   audit(deps, { principalId: actor.id, action: "impersonate.start", resource: target, scopeLabel: org });
   return sendJson(res, 200, { ok: true, target, displayName: member?.displayName ?? target });
-}
+});
 
-export async function stopImpersonation(ctx: ApiCtx): Promise<void> {
+export const stopImpersonation = orgAdmin(async (ctx, actor) => {
   const { res, deps, body } = ctx;
   const org = orgScope(deps);
-  const actor = await authorizeAdmin(ctx, org);
-  if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   audit(deps, { principalId: actor.id, action: "impersonate.stop", resource: target || "-", scopeLabel: org });
   return sendJson(res, 200, { ok: true });
-}
+});
 
 const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending", "completed", "dismissed"]);
 
-export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
+export const setUserOnboarding = orgAdmin(async (ctx, actor) => {
   const { res, deps, body, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   if (!deps.memory) return notFound(res);
   const principalId = params.principalId!;
   const status = (body as { status?: unknown }).status;
@@ -488,12 +470,10 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
     scopeLabel: personal,
   });
   return sendJson(res, 200, { ok: true, scopeId: personal, status });
-}
+});
 
-export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
+export const resetUserToBrandNew = orgAdmin(async (ctx, actor) => {
   const { res, deps, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   if (!deps.memory) return notFound(res);
   const principalId = params.principalId!;
   const personal = makeScopeId("personal", principalId);
@@ -518,12 +498,10 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
     scopeLabel: personal,
   });
   return sendJson(res, 200, { ok: true, scopeId: personal, deletedSessions });
-}
+});
 
-export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
+export const createAdminGrant = orgAdmin(async (ctx, actor) => {
   const { res, deps, body } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
     const grant = await deps.admin!.createGrant(actor, {
@@ -542,12 +520,10 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
     if (e instanceof AdminError) return sendJson(res, e.status, { error: "grant_failed", message: e.message });
     throw e;
   }
-}
+});
 
-export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
+export const revokeAdminGrant = orgAdmin(async (ctx, actor) => {
   const { res, deps, url, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   const principalId = params.principalId!;
   const scope = url.searchParams.get("scope") ?? "";
   const role = url.searchParams.get("role") ?? "";
@@ -567,4 +543,4 @@ export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
     if (e instanceof AdminError) return sendJson(res, e.status, { error: "revoke_failed", message: e.message });
     throw e;
   }
-}
+});

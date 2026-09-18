@@ -2,13 +2,10 @@ import { parseScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
 import type { SandboxBackendName } from "../../../sandbox/sandbox-routing.ts";
 import { badRequest, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { audit, orgScope, orgAdmin } from "../shared.ts";
 
-export async function listSandboxRoutes(ctx: ApiCtx): Promise<void> {
+export const listSandboxRoutes = orgAdmin(async (ctx, actor) => {
   const { res, deps } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   const runner = deps.sandboxMigration;
   if (!runner)
     return sendJson(res, 404, { error: "not_supported", message: "sandbox routing is not wired on this deployment" });
@@ -25,12 +22,10 @@ export async function listSandboxRoutes(ctx: ApiCtx): Promise<void> {
     availableBackends: runner.availableBackends(),
     routes: routes.map(([scopeId, r]) => ({ scopeId, ...r })),
   });
-}
+});
 
-export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
+export const migrateSandboxScope = orgAdmin(async (ctx, actor) => {
   const { res, deps, body, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
-  if (!actor) return;
   const runner = deps.sandboxMigration;
   if (!runner)
     return sendJson(res, 404, { error: "not_supported", message: "sandbox routing is not wired on this deployment" });
@@ -81,11 +76,9 @@ export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, 409, { error: "migration_failed", message: errMessage(err) });
   }
-}
+});
 
-export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+export const manageSandboxResources = orgAdmin(async (ctx, actor) => {
   const resources = ctx.deps.sandboxResources;
   if (!resources) return sendJson(ctx.res, 404, { error: "not_supported" });
   const scopeId = ctx.params.scopeId!;
@@ -130,4 +123,4 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return sendJson(ctx.res, 400, { error: "sandbox_request_failed", message: errMessage(error) });
   }
-}
+});

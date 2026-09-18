@@ -1,6 +1,6 @@
 import { badRequest, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, authorizeAdmin, orgScope } from "./shared.ts";
+import { audit, orgScope, orgAdmin } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
@@ -36,9 +36,7 @@ function asConfig(v: unknown): PackConfig | undefined {
   return cfg;
 }
 
-async function listPacks(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const listPacks = orgAdmin(async (ctx, actor) => {
   const packs = await ctx.app.listSkillPacks();
   const importedByPack = new Map<string, Set<string>>();
   for (const sk of await ctx.app.listSkills()) {
@@ -56,11 +54,9 @@ async function listPacks(ctx: ApiCtx): Promise<void> {
     scopeLabel: orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, { packs: decorated });
-}
+});
 
-async function registerPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const registerPack = orgAdmin(async (ctx, actor) => {
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   if (typeof b.url !== "string" || !b.url.trim()) {
     return badRequest(ctx.res, "url is required");
@@ -90,11 +86,9 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
     scopeLabel: pack.targetScopeId,
   });
   sendJson(ctx.res, 200, { pack });
-}
+});
 
-async function packCatalog(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const packCatalog = orgAdmin(async (ctx, actor) => {
   const plan = await ctx.app.skillPackCatalog(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -103,11 +97,9 @@ async function packCatalog(ctx: ApiCtx): Promise<void> {
     scopeLabel: orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, plan);
-}
+});
 
-async function importPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const importPack = orgAdmin(async (ctx, actor) => {
   const body = (ctx.body as Record<string, unknown> | null) ?? {};
   const subset = asSubset(body.selected);
   if (subset === undefined) return badRequest(ctx.res, "selected must be 'all' or string[]");
@@ -121,11 +113,9 @@ async function importPack(ctx: ApiCtx): Promise<void> {
     scopeLabel: scopeIds.length ? scopeIds.join(",") : orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, result);
-}
+});
 
-async function syncPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const syncPack = orgAdmin(async (ctx, actor) => {
   const result = await ctx.app.syncSkillPack(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -134,11 +124,9 @@ async function syncPack(ctx: ApiCtx): Promise<void> {
     scopeLabel: orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, result);
-}
+});
 
-async function patchPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const patchPack = orgAdmin(async (ctx, actor) => {
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   const patch: Partial<Omit<SkillPack, "id" | "createdAt">> = {};
   if (typeof b.ref === "string" && b.ref.trim()) patch.ref = b.ref.trim();
@@ -159,11 +147,9 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
     scopeLabel: pack.targetScopeId,
   });
   sendJson(ctx.res, 200, { pack });
-}
+});
 
-async function removePack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
-  if (!actor) return;
+const removePack = orgAdmin(async (ctx, actor) => {
   const result = await ctx.app.removeSkillPack(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
@@ -172,7 +158,7 @@ async function removePack(ctx: ApiCtx): Promise<void> {
     scopeLabel: orgScope(ctx.deps),
   });
   sendJson(ctx.res, 200, result);
-}
+});
 
 export const skillPackRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/admin/skill-packs", auth: "either", handle: registerPack },

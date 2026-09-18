@@ -61,6 +61,22 @@ export async function requireScopedAdmin(
   return actor ? { actor, scope } : null;
 }
 
+export function orgAdmin(handle: (ctx: ApiCtx, actor: Principal) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+    if (actor) await handle(ctx, actor);
+  };
+}
+
+export function scopedAdmin(
+  handle: (ctx: ApiCtx, authz: { actor: Principal; scope: string }) => Promise<void>,
+): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const authz = await requireScopedAdmin(ctx);
+    if (authz) await handle(ctx, authz);
+  };
+}
+
 export { resolveCapabilityDestination } from "../capability-destination.ts";
 
 export async function verifiedConversationSpeaker(

@@ -1,13 +1,10 @@
 import { badRequest, notFound, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
-import type { ApiCtx } from "../route.ts";
+import { audit, orgScope, orgAdmin } from "../shared.ts";
 
 const MAX_FLAGS = 200;
 
-export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
+export const listSecurityFlags = orgAdmin(async (ctx, actor) => {
   const scope = orgScope();
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const requested = Number(ctx.url.searchParams.get("limit") ?? 50);
   const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, MAX_FLAGS) : 50;
   const events = (await ctx.deps.auditLog?.tail({ limit: MAX_FLAGS })) ?? [];
@@ -28,12 +25,10 @@ export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   sendJson(ctx.res, 200, { flags });
-}
+});
 
-export async function releaseSecurityTaint(ctx: ApiCtx): Promise<void> {
+export const releaseSecurityTaint = orgAdmin(async (ctx, actor) => {
   const scope = orgScope();
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
   const sessionId = (ctx.body as { sessionId?: unknown } | null)?.sessionId;
   if (typeof sessionId !== "string" || !sessionId.trim()) {
     badRequest(ctx.res, "sessionId required");
@@ -52,4 +47,4 @@ export async function releaseSecurityTaint(ctx: ApiCtx): Promise<void> {
     status: "ok",
   });
   sendJson(ctx.res, 200, { released: true, sessionId });
-}
+});
