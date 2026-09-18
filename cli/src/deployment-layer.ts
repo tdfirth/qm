@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
@@ -169,6 +170,7 @@ function isCoreUnreachable(error: unknown): boolean {
   if (error instanceof CoreUnreachableError) return true;
   if (error instanceof CliError) return false;
   for (let e: unknown = error; e instanceof Error; e = e.cause) {
+    if (e.name === "TimeoutError" || e.name === "AbortError") return true;
     const code = (e as { code?: unknown }).code;
     if (typeof code === "string" && CONNECTIVITY_CODES.has(code)) return true;
   }
@@ -181,6 +183,8 @@ interface DeploymentLayerTransportOpts {
   method: "GET" | "PUT";
   body: string;
   envFile?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 /**
@@ -211,7 +215,16 @@ export function httpDeploymentLayerTransport(
       method: opts.method,
       headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
-      ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
+      ...(opts.signal || opts.timeoutMs || o.timeoutMs
+        ? {
+            signal: AbortSignal.any([
+              ...(opts.signal ? [opts.signal] : []),
+              ...(opts.timeoutMs || o.timeoutMs
+                ? [AbortSignal.timeout(Math.min(opts.timeoutMs ?? Infinity, o.timeoutMs ?? Infinity))]
+                : []),
+            ]),
+          }
+        : {}),
       redirect: "error",
     };
     if (o.request) return o.request(opts.config, url, init);
@@ -227,6 +240,8 @@ export async function deploymentLayerRequest(opts: {
   body?: string;
   envFile?: string;
   transport: DeploymentLayerTransport;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<{ status: number; body: string }> {
   return opts.transport({
     config: opts.config,
@@ -234,6 +249,8 @@ export async function deploymentLayerRequest(opts: {
     method: opts.method,
     body: opts.body ?? "",
     ...(opts.envFile ? { envFile: opts.envFile } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
   });
 }
 
@@ -244,6 +261,8 @@ export async function syncDeploymentLayer(opts: {
   sandboxDir: string;
   envFile?: string;
   allowUnavailable?: boolean;
+  signal?: AbortSignal;
+  retryDelayMs?: number;
 }): Promise<void> {
   if (!existsSync(opts.sandboxDir)) {
     step(`deployment layer: skipped (no sandbox directory at ${opts.sandboxDir})`);
@@ -301,25 +320,55 @@ export async function syncDeploymentLayerBody(
     configDir: string;
     envFile?: string;
     allowUnavailable?: boolean;
+    signal?: AbortSignal;
+    retryDelayMs?: number;
   },
   body: string,
 ): Promise<DeploymentLayerSyncResult | undefined> {
-  let response: { status: number; body: string };
-  try {
-    response = await deploymentLayerRequest({
-      config: opts.config,
-      configDir: opts.configDir,
-      method: "PUT",
-      body,
-      transport: opts.transport,
-      ...(opts.envFile ? { envFile: opts.envFile } : {}),
-    });
-  } catch (error) {
-    if (opts.allowUnavailable && isCoreUnreachable(error)) {
-      step(`deployment layer: core is not reachable; deployment succeeded and sync is deferred until the next up`);
+  const retryStatuses = new Set([502, 503, 504]);
+  const attempts = 5;
+  const deadline = Date.now() + 30_000;
+  let response: { status: number; body: string } | undefined;
+  let unavailableError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (opts.signal?.aborted) throw new CliError("deployment layer sync was cancelled");
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    try {
+      response = await deploymentLayerRequest({
+        config: opts.config,
+        configDir: opts.configDir,
+        method: "PUT",
+        body,
+        transport: opts.transport,
+        timeoutMs: Math.min(5_000, remainingMs),
+        ...(opts.envFile ? { envFile: opts.envFile } : {}),
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      });
+    } catch (error) {
+      if (opts.signal?.aborted) throw new CliError("deployment layer sync was cancelled");
+      if (!isCoreUnreachable(error)) throw new CliError(`could not sync deployment layer: ${errMessage(error)}`);
+      unavailableError = error;
+      response = undefined;
+    }
+    if (response && !retryStatuses.has(response.status)) break;
+    if (attempt === attempts) break;
+    const delayMs = Math.min(opts.retryDelayMs ?? 3_000, deadline - Date.now());
+    if (delayMs <= 0) break;
+    try {
+      await sleep(delayMs, undefined, { signal: opts.signal });
+    } catch {
+      throw new CliError("deployment layer sync was cancelled");
+    }
+  }
+  if (!response || (opts.allowUnavailable && retryStatuses.has(response.status))) {
+    if (opts.allowUnavailable) {
+      step(`deployment layer: core remained unavailable; deployment succeeded, sync did not land and remains deferred`);
       return;
     }
-    throw new CliError(`could not sync deployment layer: ${errMessage(error)}`);
+    throw new CliError(
+      `could not sync deployment layer: ${errMessage(unavailableError ?? "core remained unavailable")}`,
+    );
   }
   if (response.status < 200 || response.status >= 300)
     throw new CliError(`deployment layer sync failed (${response.status}): ${response.body}`);

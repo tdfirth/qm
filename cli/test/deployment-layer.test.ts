@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
 import {
+  CoreUnreachableError,
   currentDeploymentLayerState,
   deploymentLayerBundle,
   syncDeploymentLayer,
@@ -484,6 +485,7 @@ test("a non-2xx sync response is a CliError carrying the status and body", async
             transport: dockerDeploymentLayerTransport,
             configDir: dir,
             sandboxDir: join(dir, "sandbox"),
+            retryDelayMs: 1,
           }),
         /deployment layer sync failed \(503\): core warming up/,
       ),
@@ -566,6 +568,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
         configDir: dir,
         sandboxDir: join(dir, "sandbox"),
         allowUnavailable: true,
+        retryDelayMs: 1,
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
@@ -576,6 +579,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
             transport: dockerDeploymentLayerTransport,
             configDir: dir,
             sandboxDir: join(dir, "sandbox"),
+            retryDelayMs: 1,
           }),
         /could not sync deployment layer/,
       ),
@@ -598,6 +602,109 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
   }
 });
 
+test("sync retries transient core readiness failures until the layer lands", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let attempts = 0;
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new CoreUnreachableError("core is starting");
+        if (attempts === 2) return { status: 503, body: "core warming up" };
+        return { status: 200, body: JSON.stringify({ version: 4, contentHash: "landed", durable: true }) };
+      },
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      retryDelayMs: 1,
+    });
+    assert.equal(attempts, 3);
+    assert.ok(lines.some((line) => /deployment layer: v4 landed/.test(line)));
+    assert.ok(!lines.some((line) => /sync deferred/.test(line)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable exhausts a bounded readiness window before truthfully deferring", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let attempts = 0;
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport: async () => {
+        attempts += 1;
+        throw new CoreUnreachableError("core remains unavailable");
+      },
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      retryDelayMs: 1,
+    });
+    assert.equal(attempts, 5);
+    assert.ok(lines.some((line) => /sync did not land and remains deferred/.test(line)));
+    assert.ok(!lines.some((line) => /deferred until the next up/.test(line)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable does not retry terminal deployment-layer responses", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-"));
+  try {
+    writeLayer(dir);
+    let attempts = 0;
+    await assert.rejects(
+      () =>
+        syncDeploymentLayer({
+          config: makeConfig("http://example.invalid"),
+          transport: async () => {
+            attempts += 1;
+            return { status: 401, body: "invalid signature" };
+          },
+          configDir: dir,
+          sandboxDir: join(dir, "sandbox"),
+          allowUnavailable: true,
+        }),
+      /deployment layer sync failed \(401\): invalid signature/,
+    );
+    assert.equal(attempts, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deployment-layer readiness waiting honors cancellation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-"));
+  const controller = new AbortController();
+  try {
+    writeLayer(dir);
+    let attempts = 0;
+    const pending = syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport: async () => {
+        attempts += 1;
+        throw new CoreUnreachableError("core is starting");
+      },
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 20);
+    await assert.rejects(pending, /deployment layer sync was cancelled/);
+    assert.equal(attempts, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function fakeFly(dir: string, body: string): string {
   const bin = join(dir, "fake-fly.cjs");
   writeFileSync(bin, `#!/usr/bin/env node\nconst fs = require("node:fs");\n${body}\n`);
@@ -611,6 +718,7 @@ function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof
     transport: flyDeploymentLayerTransport,
     configDir: dir,
     sandboxDir: join(dir, "sandbox"),
+    retryDelayMs: 1,
     ...(allowUnavailable !== undefined ? { allowUnavailable } : {}),
   };
 }
@@ -637,6 +745,24 @@ test("fly sync succeeds on the response marker, piping the exact bundle over std
     );
     const args = JSON.parse(readFileSync(argsLog, "utf8")) as string[];
     assert.deepEqual(args.slice(0, 4), ["ssh", "console", "-a", "acme-core"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fly sync cancels an in-flight SSH request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
+  const controller = new AbortController();
+  try {
+    writeLayer(dir);
+    const bin = fakeFly(dir, `process.on("SIGTERM", () => {}); setTimeout(() => {}, 20_000);`);
+    const started = Date.now();
+    const pending = withEnv({ FLY_BIN: bin }, () =>
+      syncDeploymentLayer({ ...flySyncOpts(dir), signal: controller.signal }),
+    );
+    setTimeout(() => controller.abort(), 20);
+    await assert.rejects(pending, /deployment layer sync was cancelled/);
+    assert.ok(Date.now() - started < 1_000);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
