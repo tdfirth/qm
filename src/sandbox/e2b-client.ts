@@ -115,8 +115,18 @@ export const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
 export const E2B_EXEC_MARGIN_MS = 60_000;
 const ALL_TRAFFIC = "0.0.0.0/0";
 
+const HOSTNAME_MATCHED_PORTS: Record<string, string> = { "http:": "80", "https:": "443" };
+
 export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
-  return { allowOut: [new URL(egressProxyUrl).hostname], denyOut: [ALL_TRAFFIC] };
+  const url = new URL(egressProxyUrl);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const port = url.port || HOSTNAME_MATCHED_PORTS[url.protocol] || "";
+  const ipLiteral = /^[\d.]+$/.test(host) || host.includes(":");
+  if (!ipLiteral && port !== "80" && port !== "443")
+    throw new Error(
+      `E2B egress proxy ${egressProxyUrl}: E2B matches allowed hostnames only on ports 80 and 443; give the proxy on one of those ports or by IP address`,
+    );
+  return { allowOut: [host], denyOut: [ALL_TRAFFIC] };
 }
 
 export function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs" | "maxCommandMs">): {
@@ -125,9 +135,9 @@ export function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" |
   maxCommandMs: number;
 } {
   const maxLifetimeMs = opts.maxLifetimeMs ?? E2B_PRO_MAX_LIFETIME_MS;
-  if (!Number.isFinite(maxLifetimeMs) || maxLifetimeMs <= 0)
-    throw new Error("e2b maxLifetimeMs must be a positive finite number of milliseconds");
-  const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
+  if (!Number.isFinite(maxLifetimeMs) || maxLifetimeMs <= E2B_EXEC_MARGIN_MS)
+    throw new Error(`e2b maxLifetimeMs must be a finite number of milliseconds above ${E2B_EXEC_MARGIN_MS}`);
+  const maxCommandMs = Math.min(opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS, maxLifetimeMs - E2B_EXEC_MARGIN_MS);
   const requested = opts.sandboxTtlMs ?? Math.max(DEFAULT_TTL_MS, maxCommandMs + E2B_EXEC_MARGIN_MS);
   return { sandboxTtlMs: Math.min(maxLifetimeMs, requested), maxLifetimeMs, maxCommandMs };
 }
@@ -178,16 +188,17 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     const gone = (err: unknown): unknown =>
       isSandboxGone(lib, err) ? new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message)) : err;
     const extend = async (ms: number): Promise<void> => {
-      const bounded = Math.min(maxLifetimeMs, ms);
+      const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
+      const at = Date.now() + bounded;
       try {
         await sbx.setTimeout(bounded);
       } catch (err) {
         throw gone(err);
       }
-      expiresAtMs = Date.now() + bounded;
+      expiresAtMs = at;
     };
     const cover = async (commandMs: number): Promise<void> => {
-      const needed = commandMs + E2B_EXEC_MARGIN_MS;
+      const needed = Math.min(commandMs, maxCommandMs) + E2B_EXEC_MARGIN_MS;
       if (Date.now() + needed <= expiresAtMs) return;
       await extend(Math.max(ttlMs, needed));
     };

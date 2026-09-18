@@ -525,6 +525,32 @@ test("recovery snapshots follow the native interval and supersede the previous c
   assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
 });
 
+test("legacy keepWarm teardown still takes its portable checkpoint", async () => {
+  const counting = instrumentedSnapshotStore();
+  const s = make({ snapshots: counting.store });
+  const h = await s.provision(layers);
+  await s.teardown(h, { keepWarm: true });
+  assert.equal(counting.puts(), 1);
+  assert.equal(fake.current(h.id)?.state, "running");
+});
+
+test("a failing snapshot delete never wedges destroy", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const client = {
+    ...nativeClient(),
+    async deleteSnapshot(): Promise<void> {
+      throw new Error("snapshot API unavailable");
+    },
+  };
+  const s = make({ client, store });
+  const h = await s.provision(layers);
+  await s.teardown(h);
+  assert.ok((await store.get(scope))?.recoverySnapshotId);
+  await s.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  assert.equal(fake.current(scopeName()), null);
+});
+
 test("keepWarm teardown extends the sandbox timeout to the keep-warm horizon", async () => {
   const s = make({ keepWarmSec: 7200 });
   const h = await s.provision(layers);

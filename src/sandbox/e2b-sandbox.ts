@@ -176,10 +176,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           const info = await client.info?.(session.sandboxId);
           noteInfo(info);
           await store.put(scope, {
+            ...stored,
             sandboxId: session.sandboxId,
             createdAtMs: Date.now(),
             nativePause: info?.onTimeout === "pause",
-            ...(stored?.recoverySnapshotId ? { recoverySnapshotId: stored.recoverySnapshotId } : {}),
           });
           return adopt(session);
         } catch (err) {
@@ -211,6 +211,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         }
         await store.merge(scope, {
           sandboxId: session.sandboxId,
+          createdAtMs: Date.now(),
           preservationState: "running",
           preservationError: undefined,
           recoveryError: undefined,
@@ -366,11 +367,16 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         if (!(error instanceof E2bSandboxGoneError)) throw error;
       }
     }
-    if (stored?.recoverySnapshotId) await client.deleteSnapshot(stored.recoverySnapshotId);
     await store.delete(scope);
     sessionByName.delete(name);
     scopeByName.delete(name);
+    await forgetSnapshot(stored?.recoverySnapshotId);
   }
+
+  const forgetSnapshot = (snapshotId: string | undefined): Promise<void> =>
+    snapshotId
+      ? client.deleteSnapshot(snapshotId).catch(swallowAs("e2b-sandbox: recovery snapshot delete", undefined))
+      : Promise.resolve();
 
   async function captureRecoverySnapshot(scope: string, session: E2bSession, previous?: string): Promise<void> {
     try {
@@ -381,8 +387,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         lastSnapshotMs: Date.now(),
         homeDirty: false,
       });
-      if (previous && previous !== snapshotId)
-        await client.deleteSnapshot(previous).catch(swallowAs("e2b-sandbox: superseded snapshot delete", undefined));
+      if (previous !== snapshotId) await forgetSnapshot(previous);
     } catch (e) {
       await store.merge(scope, { recoveryError: errMessage(e) });
       reportError("sandbox_snapshot", "recovery_snapshot_failed", errMessage(e), scope);
@@ -528,8 +533,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         };
         if (session) await session.kill().catch(killGone);
         else if (stored) await client.kill(stored.sandboxId).catch(killGone);
-        if (stored?.recoverySnapshotId) await client.deleteSnapshot(stored.recoverySnapshotId);
         await store.delete(scopeId);
+        await forgetSnapshot(stored?.recoverySnapshotId);
       });
     },
 
@@ -634,6 +639,13 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
+    if (!stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+      try {
+        await snapshotHome(scope, session);
+      } catch (e) {
+        reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
+      }
+    }
     if (tdOpts?.keepWarm) {
       try {
         await session.keepAlive(keepWarmMs);
@@ -642,16 +654,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       }
       return;
     }
-    if (stored?.nativePause) {
-      if (snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
-        await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
-    } else if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
-      try {
-        await snapshotHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-      }
-    }
+    if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
+      await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
     try {
       await session.pause();
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });

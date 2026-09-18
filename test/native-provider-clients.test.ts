@@ -59,8 +59,9 @@ const fakeE2bSandbox = (sandboxId: string) => ({
     e2bCalls.push(["updateNetwork", network]);
   },
   commands: {
-    async run(cmd: string, options: unknown) {
+    async run(cmd: string, options: { background?: boolean }) {
       e2bCalls.push(["run", cmd, options]);
+      if (options?.background !== true) throw new Error("the client must start commands in the background");
       if (startError) throw startError;
       return {
         pid: 7,
@@ -204,6 +205,9 @@ test("E2B extends the sandbox timeout only when a command outlives the remaining
   );
   await session.runCommand("echo again", { timeoutMs: 1_000 });
   assert.equal(e2bCalls.filter((c) => c[0] === "setTimeout").length, 1, "the extension covers later short commands");
+  await session.keepAlive(30_000);
+  const kept = e2bCalls.filter((c) => c[0] === "setTimeout").at(-1)![1] as number;
+  assert.ok(kept > 600_000, `keepAlive never shortens a lifetime already covering a command (${kept})`);
 
   e2bCalls.length = 0;
   const hobby = createSdkE2bClient({ apiKey: "test", maxLifetimeMs: 3600_000 });
@@ -211,14 +215,13 @@ test("E2B extends the sandbox timeout only when a command outlives the remaining
   assert.equal((e2bCalls[0]![2] as { timeoutMs: number }).timeoutMs, 3600_000, "TTL never exceeds the plan cap");
   await capped.runCommand("sleep", { timeoutMs: 3600_000 });
   await capped.keepAlive(7200_000);
-  assert.deepEqual(
-    e2bCalls.filter((c) => c[0] === "setTimeout"),
-    [
-      ["setTimeout", 3600_000],
-      ["setTimeout", 3600_000],
-    ],
+  const caps = e2bCalls.filter((c) => c[0] === "setTimeout").map((c) => c[1]);
+  assert.ok(caps.length >= 1, "the keep-warm request beyond the cap still extends to the cap");
+  assert.ok(
+    caps.every((ms) => ms === 3600_000),
+    `every extension is capped at the plan maximum (${caps.join(",")})`,
   );
-  assert.throws(() => createSdkE2bClient({ apiKey: "test", maxLifetimeMs: 0 }), /positive finite/);
+  assert.throws(() => createSdkE2bClient({ apiKey: "test", maxLifetimeMs: 0 }), /above 60000/);
 });
 
 test("E2B refuses to re-run a command lost mid-flight and classifies gone sandboxes by SDK error class", async () => {
@@ -260,6 +263,9 @@ test("E2B turns the egress proxy into host-level network rules on create and on 
   await client.connect("e2b-native");
   assert.deepEqual(e2bCalls.at(-1), ["updateNetwork", rules]);
   assert.deepEqual(e2bEgressNetwork("http://10.0.0.5:3128"), { allowOut: ["10.0.0.5"], denyOut: ["0.0.0.0/0"] });
+  assert.deepEqual(e2bEgressNetwork("http://egress.example.com"), rules);
+  assert.throws(() => e2bEgressNetwork("http://proxy.internal:3128"), /ports 80 and 443/);
+  assert.throws(() => e2bEgressNetwork("https://egress.example.com:8443"), /ports 80 and 443/);
 });
 
 test("E2B persistent snapshots and metrics map onto the client contract", async () => {

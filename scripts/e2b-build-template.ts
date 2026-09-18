@@ -32,9 +32,8 @@ if (layerDir) {
   } else {
     const staging = mkdtempSync(join(tmpdir(), "e2b-layer-"));
     const items: CopyItem[] = files.map((file, index) => {
-      const src = join(staging, String(index));
-      writeFileSync(src, file.content);
-      return { src, dest: file.to, mode: parseInt(file.mode, 8), user: "user" };
+      writeFileSync(join(staging, String(index)), file.content);
+      return { src: String(index), dest: file.to, mode: parseInt(file.mode, 8), user: "user" };
     });
     const layerName = process.env.E2B_LAYER_TEMPLATE_NAME ?? `${baseName}-layer`;
     const layered = await Template.build(
