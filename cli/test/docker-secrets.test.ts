@@ -61,173 +61,165 @@ process.exit(0);
 
 test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async (t) => {
   const dir = tempDir(t, "qm-docker-secrets-");
-  const log = console.log,
-    warn = console.warn;
   const lines: string[] = [];
   const ambientAnthropic = "ambient-anthropic-supersecret";
-  try {
-    writeFileSync(
-      join(dir, CONFIG_FILENAME),
-      JSON.stringify({
-        contract: 1,
-        orgId: "sekrit",
-        publicUrl: "http://localhost:8080",
-        target: "docker",
-        services: ["core", "slack"],
-        plugins: [
-          {
-            name: "linear",
-            image: "ghcr.io/x:1",
-            env: { LINEAR_REGION: "us", PLUG_TOKEN: "config-placeholder" },
-            secrets: [{ name: "PLUG_TOKEN" }, { name: "EMPTY_TOKEN", required: false }],
-          },
-          { name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false },
-        ],
-        sandbox: {
-          app: "sekrit-sandboxes",
-          env: { TZ: "UTC" },
-          secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
+  writeFileSync(
+    join(dir, CONFIG_FILENAME),
+    JSON.stringify({
+      contract: 1,
+      orgId: "sekrit",
+      publicUrl: "http://localhost:8080",
+      target: "docker",
+      services: ["core", "slack"],
+      plugins: [
+        {
+          name: "linear",
+          image: "ghcr.io/x:1",
+          env: { LINEAR_REGION: "us", PLUG_TOKEN: "config-placeholder" },
+          secrets: [{ name: "PLUG_TOKEN" }, { name: "EMPTY_TOKEN", required: false }],
         },
-        securityScreen: {
-          backend: "proxy",
-          provider: "example-screen",
-          endpoint: "https://screen.example.test/classify",
-          rollout: "enforce",
+        { name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false },
+      ],
+      sandbox: {
+        app: "sekrit-sandboxes",
+        env: { TZ: "UTC" },
+        secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
+      },
+      securityScreen: {
+        backend: "proxy",
+        provider: "example-screen",
+        endpoint: "https://screen.example.test/classify",
+        rollout: "enforce",
+      },
+      secretEnv: {
+        core: {
+          EXTRA_API_KEY: "EXTRA_API_KEY",
+          APPS_SESSION_ALIAS: "PORTAL_IDENTITY_SECRET",
+          SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN",
         },
-        secretEnv: {
-          core: {
-            EXTRA_API_KEY: "EXTRA_API_KEY",
-            APPS_SESSION_ALIAS: "PORTAL_IDENTITY_SECRET",
-            SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN",
-          },
+      },
+      env: {
+        core: {
+          HARNESS: "pi",
+          CORE_SIGNING_SECRET: "config-placeholder",
+          DATABASE_URL: "postgres://config/placeholder",
+          PUBLIC_API_URL: "https://config-placeholder.invalid",
+          FLY_RESIDENT_ENV_SB_TOKEN: "config-placeholder",
         },
-        env: {
-          core: {
-            HARNESS: "pi",
-            CORE_SIGNING_SECRET: "config-placeholder",
-            DATABASE_URL: "postgres://config/placeholder",
-            PUBLIC_API_URL: "https://config-placeholder.invalid",
-            FLY_RESIDENT_ENV_SB_TOKEN: "config-placeholder",
-          },
-          slack: { WEB_UI_PUBLIC_URL: "http://folded.example.com/web-ui", CORE_SIGNING_SECRET: "config-placeholder" },
-        },
-      }),
-    );
-    writeFileSync(
-      join(dir, ".env"),
-      [
-        ...Object.entries(SECRETS)
-          .filter(([name]) => name !== "ANTHROPIC_API_KEY")
-          .map(([k, v]) => `${k}=${v}`),
-        "ANTHROPIC_API_KEY=",
-        "EMPTY_TOKEN=",
-        "HARNESS=pi",
-      ].join("\n"),
-    );
-    const fake = fakeDocker(dir);
-    setEnv(t, {
-      ...Object.fromEntries(Object.keys(SECRETS).map((name) => [name, undefined])),
-      PATH: `${dir}:${process.env.PATH}`,
-      DATABASE_URL: "postgres://external/db",
-      ANTHROPIC_API_KEY: ambientAnthropic,
-    });
-    console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-    console.warn = console.log;
-    const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-    await dockerUp(config, dir, {});
+        slack: { WEB_UI_PUBLIC_URL: "http://folded.example.com/web-ui", CORE_SIGNING_SECRET: "config-placeholder" },
+      },
+    }),
+  );
+  writeFileSync(
+    join(dir, ".env"),
+    [
+      ...Object.entries(SECRETS)
+        .filter(([name]) => name !== "ANTHROPIC_API_KEY")
+        .map(([k, v]) => `${k}=${v}`),
+      "ANTHROPIC_API_KEY=",
+      "EMPTY_TOKEN=",
+      "HARNESS=pi",
+    ].join("\n"),
+  );
+  const fake = fakeDocker(dir);
+  setEnv(t, {
+    ...Object.fromEntries(Object.keys(SECRETS).map((name) => [name, undefined])),
+    PATH: `${dir}:${process.env.PATH}`,
+    DATABASE_URL: "postgres://external/db",
+    ANTHROPIC_API_KEY: ambientAnthropic,
+  });
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  t.mock.method(console, "warn", console.log);
+  const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
+  await dockerUp(config, dir, {});
 
-    const argv = readFileSync(fake.argvLog, "utf8");
-    for (const value of Object.values(SECRETS)) {
-      assert.ok(!argv.includes(value), `secret value must not reach the docker argv: ${value}`);
-    }
-    assert.ok(
-      !argv.includes("postgres://external/db"),
-      "a BYO DATABASE_URL (it embeds a password) must not reach the docker argv",
-    );
-    assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
-    assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
-    assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
-    assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
-    const signerArgs = argv
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as string[])
-      .find((args) => args.includes("qm-sekrit-signer"));
-    assert.ok(signerArgs, "coreless plugin starts");
-    assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
-    assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
-    assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ROLLOUT=enforce"));
+  const argv = readFileSync(fake.argvLog, "utf8");
+  for (const value of Object.values(SECRETS)) {
+    assert.ok(!argv.includes(value), `secret value must not reach the docker argv: ${value}`);
+  }
+  assert.ok(
+    !argv.includes("postgres://external/db"),
+    "a BYO DATABASE_URL (it embeds a password) must not reach the docker argv",
+  );
+  assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
+  assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
+  assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
+  assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
+  const signerArgs = argv
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[])
+    .find((args) => args.includes("qm-sekrit-signer"));
+  assert.ok(signerArgs, "coreless plugin starts");
+  assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
+  assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
+  assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
+  assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
+  assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
+  assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ROLLOUT=enforce"));
 
-    assert.ok(
-      argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),
-      "virtual-service env folds into the core env",
-    );
-    assert.ok(
-      lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("HARNESS")),
-      "unforwarded .env keys are warned about",
-    );
-    assert.ok(
-      !lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("SB_TOKEN")),
-      "consumed secret names are not warned about",
-    );
+  assert.ok(
+    argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),
+    "virtual-service env folds into the core env",
+  );
+  assert.ok(
+    lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("HARNESS")),
+    "unforwarded .env keys are warned about",
+  );
+  assert.ok(
+    !lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("SB_TOKEN")),
+    "consumed secret names are not warned about",
+  );
 
-    const envFiles = readFileSync(fake.envCopy, "utf8");
-    assert.ok(envFiles.includes(`CORE_SIGNING_SECRET=${SECRETS.CORE_SIGNING_SECRET}`));
-    assert.ok(
-      !envFiles.includes("config-placeholder"),
-      "secret-store values win over colliding config env on services and plugins",
-    );
-    assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL routes through the env-file");
-    assert.ok(
-      envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
-      "secretEnv values route through the file",
-    );
-    assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets route through the file");
-    assert.match(
-      envFiles,
-      new RegExp(`^ANTHROPIC_API_KEY=${ambientAnthropic}$`, "m"),
-      "a blank scaffold entry falls back to the ambient secret",
-    );
-    assert.doesNotMatch(envFiles, /^EMPTY_TOKEN=/m, "a blank optional secret with no ambient value remains unset");
-    assert.ok(
-      envFiles.includes(`PUBLIC_API_URL=${SECRETS.PUBLIC_API_URL}`),
-      "the sandbox-reachable self-API URL reaches core",
-    );
-    assert.ok(
-      envFiles.includes(`FLY_RESIDENT_ENV_SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}`),
-      "dual-role secret is forwarded into sandboxes",
-    );
-    assert.match(
-      envFiles,
-      new RegExp(`^SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}$`, "m"),
-      "dual-role secret keeps its plain name for the in-process slack surface",
-    );
-    assert.match(
-      envFiles,
-      new RegExp(`^EXTRA_API_KEY=${SECRETS.EXTRA_API_KEY}$`, "m"),
-      "config secretEnv extras route through the file",
-    );
-    assert.match(
-      envFiles,
-      new RegExp(`^APPS_SESSION_ALIAS=${SECRETS.PORTAL_IDENTITY_SECRET}$`, "m"),
-      "a secretEnv alias delivers the stored value under its declared env name",
-    );
-    assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
-    assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
-    for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
+  const envFiles = readFileSync(fake.envCopy, "utf8");
+  assert.ok(envFiles.includes(`CORE_SIGNING_SECRET=${SECRETS.CORE_SIGNING_SECRET}`));
+  assert.ok(
+    !envFiles.includes("config-placeholder"),
+    "secret-store values win over colliding config env on services and plugins",
+  );
+  assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL routes through the env-file");
+  assert.ok(
+    envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
+    "secretEnv values route through the file",
+  );
+  assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets route through the file");
+  assert.match(
+    envFiles,
+    new RegExp(`^ANTHROPIC_API_KEY=${ambientAnthropic}$`, "m"),
+    "a blank scaffold entry falls back to the ambient secret",
+  );
+  assert.doesNotMatch(envFiles, /^EMPTY_TOKEN=/m, "a blank optional secret with no ambient value remains unset");
+  assert.ok(
+    envFiles.includes(`PUBLIC_API_URL=${SECRETS.PUBLIC_API_URL}`),
+    "the sandbox-reachable self-API URL reaches core",
+  );
+  assert.ok(
+    envFiles.includes(`FLY_RESIDENT_ENV_SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}`),
+    "dual-role secret is forwarded into sandboxes",
+  );
+  assert.match(
+    envFiles,
+    new RegExp(`^SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}$`, "m"),
+    "dual-role secret keeps its plain name for the in-process slack surface",
+  );
+  assert.match(
+    envFiles,
+    new RegExp(`^EXTRA_API_KEY=${SECRETS.EXTRA_API_KEY}$`, "m"),
+    "config secretEnv extras route through the file",
+  );
+  assert.match(
+    envFiles,
+    new RegExp(`^APPS_SESSION_ALIAS=${SECRETS.PORTAL_IDENTITY_SECRET}$`, "m"),
+    "a secretEnv alias delivers the stored value under its declared env name",
+  );
+  assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
+  assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
+  for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
 
-    for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
-      const args = JSON.parse(line) as string[];
-      const index = args.indexOf("--env-file");
-      if (index !== -1)
-        assert.ok(!existsSync(args[index + 1]!), "the env-file is removed once the container is created");
-    }
-  } finally {
-    console.log = log;
-    console.warn = warn;
+  for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
+    const args = JSON.parse(line) as string[];
+    const index = args.indexOf("--env-file");
+    if (index !== -1) assert.ok(!existsSync(args[index + 1]!), "the env-file is removed once the container is created");
   }
 });
 
@@ -237,50 +229,43 @@ test(
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-pg-");
     const xdg = tempDir(t, "qm-docker-secrets-xdg-");
-    const log = console.log,
-      warn = console.warn;
-    try {
-      writeFileSync(
-        join(dir, CONFIG_FILENAME),
-        JSON.stringify({
-          contract: 1,
-          orgId: "sekritpg",
-          publicUrl: "http://localhost:8080",
-          target: "docker",
-          services: ["core"],
-        }),
-      );
-      writeFileSync(
-        join(dir, ".env"),
-        `CAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
-      );
-      const fake = fakeDocker(dir);
-      setEnv(t, { PATH: `${dir}:${process.env.PATH}`, XDG_CONFIG_HOME: xdg, DATABASE_URL: undefined });
-      console.log = (): void => {};
-      console.warn = console.log;
-      const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-      await dockerUp(config, dir, {});
+    writeFileSync(
+      join(dir, CONFIG_FILENAME),
+      JSON.stringify({
+        contract: 1,
+        orgId: "sekritpg",
+        publicUrl: "http://localhost:8080",
+        target: "docker",
+        services: ["core"],
+      }),
+    );
+    writeFileSync(
+      join(dir, ".env"),
+      `CAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
+    );
+    const fake = fakeDocker(dir);
+    setEnv(t, { PATH: `${dir}:${process.env.PATH}`, XDG_CONFIG_HOME: xdg, DATABASE_URL: undefined });
+    t.mock.method(console, "log", (): void => {});
+    t.mock.method(console, "warn", console.log);
+    const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
+    await dockerUp(config, dir, {});
 
-      const statePath = join(xdg, "qm", "deployments", "sekritpg", "state.json");
-      const password = (JSON.parse(readFileSync(statePath, "utf8")) as { pgPassword?: string }).pgPassword;
-      assert.ok(password, "the generated pg password is recorded in deployment state");
-      assert.equal(statSync(statePath).mode & 0o777, 0o600, "state.json holds the pg password and must be 0600");
+    const statePath = join(xdg, "qm", "deployments", "sekritpg", "state.json");
+    const password = (JSON.parse(readFileSync(statePath, "utf8")) as { pgPassword?: string }).pgPassword;
+    assert.ok(password, "the generated pg password is recorded in deployment state");
+    assert.equal(statSync(statePath).mode & 0o777, 0o600, "state.json holds the pg password and must be 0600");
 
-      const argv = readFileSync(fake.argvLog, "utf8");
-      assert.ok(!argv.includes(password), "the pg password must not reach the docker argv");
-      assert.ok(!argv.includes("POSTGRES_PASSWORD"), "POSTGRES_PASSWORD travels via the env-file, not -e");
-      assert.ok(!argv.includes("postgres://"), "the derived DATABASE_URL must not reach the docker argv");
+    const argv = readFileSync(fake.argvLog, "utf8");
+    assert.ok(!argv.includes(password), "the pg password must not reach the docker argv");
+    assert.ok(!argv.includes("POSTGRES_PASSWORD"), "POSTGRES_PASSWORD travels via the env-file, not -e");
+    assert.ok(!argv.includes("postgres://"), "the derived DATABASE_URL must not reach the docker argv");
 
-      const envFiles = readFileSync(fake.envCopy, "utf8");
-      assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password via the env-file");
-      assert.ok(
-        envFiles.includes(`DATABASE_URL=postgres://postgres:${password}@pg:5432/qm`),
-        "the core gets DATABASE_URL via the env-file",
-      );
-    } finally {
-      console.log = log;
-      console.warn = warn;
-    }
+    const envFiles = readFileSync(fake.envCopy, "utf8");
+    assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password via the env-file");
+    assert.ok(
+      envFiles.includes(`DATABASE_URL=postgres://postgres:${password}@pg:5432/qm`),
+      "the core gets DATABASE_URL via the env-file",
+    );
   },
 );
 
@@ -289,40 +274,33 @@ test(
   { timeout: 60_000 },
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-gate-");
-    const log = console.log,
-      warn = console.warn;
-    try {
-      writeFileSync(
-        join(dir, CONFIG_FILENAME),
-        JSON.stringify({
-          contract: 1,
-          orgId: "sekritgate",
-          publicUrl: "http://localhost:8080",
-          target: "docker",
-          services: ["core", "slack"],
-        }),
-      );
-      writeFileSync(
-        join(dir, ".env"),
-        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nCORE_SIGNING_SECRET=${"a".repeat(32)}\nPORTAL_IDENTITY_SECRET=identity\nSLACK_APP_TOKEN=app\n`,
-      );
-      const fake = fakeDocker(dir);
-      setEnv(t, {
-        PATH: `${dir}:${process.env.PATH}`,
-        DATABASE_URL: "postgres://external/db",
-        SLACK_BOT_TOKEN: undefined,
-      });
-      console.log = (): void => {};
-      console.warn = console.log;
-      const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-      await assert.rejects(dockerUp(config, dir, {}), /required secrets have no value.*SKILL_SIGNING_SECRET/s);
-      for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
-        const args = JSON.parse(line) as string[];
-        assert.notEqual(args[0], "run", "no container may start when a required secret is missing");
-      }
-    } finally {
-      console.log = log;
-      console.warn = warn;
+    writeFileSync(
+      join(dir, CONFIG_FILENAME),
+      JSON.stringify({
+        contract: 1,
+        orgId: "sekritgate",
+        publicUrl: "http://localhost:8080",
+        target: "docker",
+        services: ["core", "slack"],
+      }),
+    );
+    writeFileSync(
+      join(dir, ".env"),
+      `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nCORE_SIGNING_SECRET=${"a".repeat(32)}\nPORTAL_IDENTITY_SECRET=identity\nSLACK_APP_TOKEN=app\n`,
+    );
+    const fake = fakeDocker(dir);
+    setEnv(t, {
+      PATH: `${dir}:${process.env.PATH}`,
+      DATABASE_URL: "postgres://external/db",
+      SLACK_BOT_TOKEN: undefined,
+    });
+    t.mock.method(console, "log", (): void => {});
+    t.mock.method(console, "warn", console.log);
+    const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
+    await assert.rejects(dockerUp(config, dir, {}), /required secrets have no value.*SKILL_SIGNING_SECRET/s);
+    for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
+      const args = JSON.parse(line) as string[];
+      assert.notEqual(args[0], "run", "no container may start when a required secret is missing");
     }
   },
 );
@@ -332,36 +310,29 @@ test(
   { timeout: 60_000 },
   async (t) => {
     const dir = tempDir(t, "qm-docker-secrets-nl-");
-    const log = console.log,
-      warn = console.warn;
-    try {
-      writeFileSync(
-        join(dir, CONFIG_FILENAME),
-        JSON.stringify({
-          contract: 1,
-          orgId: "sekritnl",
-          publicUrl: "http://localhost:8080",
-          target: "docker",
-          services: ["core"],
-        }),
-      );
-      writeFileSync(
-        join(dir, ".env"),
-        `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
-      );
-      fakeDocker(dir);
-      setEnv(t, {
-        PATH: `${dir}:${process.env.PATH}`,
-        DATABASE_URL: "postgres://external/db",
-        CORE_SIGNING_SECRET: "-----BEGIN KEY-----\nabc\n-----END KEY-----",
-      });
-      console.log = (): void => {};
-      console.warn = console.log;
-      const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
-      await assert.rejects(dockerUp(config, dir, {}), /CORE_SIGNING_SECRET contains a newline/);
-    } finally {
-      console.log = log;
-      console.warn = warn;
-    }
+    writeFileSync(
+      join(dir, CONFIG_FILENAME),
+      JSON.stringify({
+        contract: 1,
+        orgId: "sekritnl",
+        publicUrl: "http://localhost:8080",
+        target: "docker",
+        services: ["core"],
+      }),
+    );
+    writeFileSync(
+      join(dir, ".env"),
+      `CAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
+    );
+    fakeDocker(dir);
+    setEnv(t, {
+      PATH: `${dir}:${process.env.PATH}`,
+      DATABASE_URL: "postgres://external/db",
+      CORE_SIGNING_SECRET: "-----BEGIN KEY-----\nabc\n-----END KEY-----",
+    });
+    t.mock.method(console, "log", (): void => {});
+    t.mock.method(console, "warn", console.log);
+    const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
+    await assert.rejects(dockerUp(config, dir, {}), /CORE_SIGNING_SECRET contains a newline/);
   },
 );

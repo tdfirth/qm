@@ -211,50 +211,42 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   setEnv(t, { ANTHROPIC_API_KEY: "proc-wins" });
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    await flySecretsPush(config, dir);
-    const calls = readFileSync(fake.log, "utf8");
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"),
-      "plain name for the core process",
-    );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_ANTHROPIC_API_KEY=-"),
-      "renamed variant forwarded into sandboxes",
-    );
-    assert.ok(calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
-    assert.ok(!calls.includes("-a acme-core COMPANY_TOKEN=-"), "a sandbox-only secret is not staged plain");
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core SLACK_BOT_TOKEN=-"),
-      "virtual-service secrets stage plain on core",
-    );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-srcplug CORE_SIGNING_SECRET=-"),
-      "discovered source plugins get the signing secret",
-    );
-    assert.ok(calls.includes("apps create acme-core --org personal"), "the service app exists before secret staging");
-    assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
-    assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
-    assert.ok(
-      calls.includes("secrets unset --stage -a acme-signer CORE_API_URL CORE_SIGNING_SECRET"),
-      "coreless plugins lose previously stored core access",
-    );
-    assert.ok(
-      !calls.includes("secrets set --stage -a acme-signer CORE_SIGNING_SECRET"),
-      "coreless plugins do not get the signing secret",
-    );
-    assert.ok(
-      !calls.includes("apps create acme-sb --org personal"),
-      "secret delivery never adopts or creates the separately managed sandbox registry app",
-    );
-    assert.ok(!calls.includes("-a acme-srcplug SLACK_BOT_TOKEN"), "other secrets do not fan out to plugins");
-    assert.ok(calls.includes("value:k\n"), "the deployment .env wins over ambient process credentials");
-    assert.ok(!calls.includes("value:proc-wins"), "ambient credentials do not replace deployment-scoped values");
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (): void => {});
+  await flySecretsPush(config, dir);
+  const calls = readFileSync(fake.log, "utf8");
+  assert.ok(calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"), "plain name for the core process");
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_ANTHROPIC_API_KEY=-"),
+    "renamed variant forwarded into sandboxes",
+  );
+  assert.ok(calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
+  assert.ok(!calls.includes("-a acme-core COMPANY_TOKEN=-"), "a sandbox-only secret is not staged plain");
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-core SLACK_BOT_TOKEN=-"),
+    "virtual-service secrets stage plain on core",
+  );
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-srcplug CORE_SIGNING_SECRET=-"),
+    "discovered source plugins get the signing secret",
+  );
+  assert.ok(calls.includes("apps create acme-core --org personal"), "the service app exists before secret staging");
+  assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
+  assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
+  assert.ok(
+    calls.includes("secrets unset --stage -a acme-signer CORE_API_URL CORE_SIGNING_SECRET"),
+    "coreless plugins lose previously stored core access",
+  );
+  assert.ok(
+    !calls.includes("secrets set --stage -a acme-signer CORE_SIGNING_SECRET"),
+    "coreless plugins do not get the signing secret",
+  );
+  assert.ok(
+    !calls.includes("apps create acme-sb --org personal"),
+    "secret delivery never adopts or creates the separately managed sandbox registry app",
+  );
+  assert.ok(!calls.includes("-a acme-srcplug SLACK_BOT_TOKEN"), "other secrets do not fan out to plugins");
+  assert.ok(calls.includes("value:k\n"), "the deployment .env wins over ambient process credentials");
+  assert.ok(!calls.includes("value:proc-wins"), "ambient credentials do not replace deployment-scoped values");
 });
 
 test("fly secrets push warns that staged secrets are not live when machines are running", async (t) => {
@@ -279,24 +271,17 @@ if (a.startsWith("status -a acme-core")) console.log(JSON.stringify({ Machines: 
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 `,
   );
-  const log = console.log;
-  const warnLog = console.warn;
   const warnings: string[] = [];
-  console.log = (): void => {};
-  console.warn = (msg: string): void => {
+  t.mock.method(console, "log", (): void => {});
+  t.mock.method(console, "warn", (msg: string): void => {
     warnings.push(msg);
-  };
-  try {
-    await flySecretsPush(config, dir);
-    assert.ok(
-      warnings.some((line) => line.includes("staged secrets are NOT live yet on acme-core")),
-      warnings.join("\n"),
-    );
-    assert.ok(warnings.some((line) => line.includes("run `qm up`")));
-  } finally {
-    console.log = log;
-    console.warn = warnLog;
-  }
+  });
+  await flySecretsPush(config, dir);
+  assert.ok(
+    warnings.some((line) => line.includes("staged secrets are NOT live yet on acme-core")),
+    warnings.join("\n"),
+  );
+  assert.ok(warnings.some((line) => line.includes("run `qm up`")));
 });
 
 test("fly secrets push stays quiet about staging when no machines are running", async (t) => {
@@ -321,20 +306,13 @@ if (a.startsWith("status -a")) console.log(JSON.stringify({ Machines: [] }));
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 `,
   );
-  const log = console.log;
-  const warnLog = console.warn;
   const warnings: string[] = [];
-  console.log = (): void => {};
-  console.warn = (msg: string): void => {
+  t.mock.method(console, "log", (): void => {});
+  t.mock.method(console, "warn", (msg: string): void => {
     warnings.push(msg);
-  };
-  try {
-    await flySecretsPush(config, dir);
-    assert.ok(!warnings.some((line) => line.includes("staged secrets are NOT live")), warnings.join("\n"));
-  } finally {
-    console.log = log;
-    console.warn = warnLog;
-  }
+  });
+  await flySecretsPush(config, dir);
+  assert.ok(!warnings.some((line) => line.includes("staged secrets are NOT live")), warnings.join("\n"));
 });
 
 test("fly secrets push removes the disabled Fly app publisher token", async (t) => {
@@ -358,14 +336,9 @@ if (a === "secrets list -a acme-core") console.log("FLY_DEPLOY_API_TOKEN digest"
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 `,
   );
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    await flySecretsPush(config, dir);
-    assert.match(readFileSync(fake.log, "utf8"), /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (): void => {});
+  await flySecretsPush(config, dir);
+  assert.match(readFileSync(fake.log, "utf8"), /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
 });
 
 test("fly secrets push falls back to an ambient secret when the scaffold entry is blank", async (t) => {
@@ -387,14 +360,9 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   setEnv(t, { CORE_SIGNING_SECRET: "ambient-signing-secret-that-is-long-enough" });
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    await flySecretsPush(config, dir);
-    assert.match(readFileSync(fake.log, "utf8"), /value:ambient-signing-secret-that-is-long-enough/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (): void => {});
+  await flySecretsPush(config, dir);
+  assert.match(readFileSync(fake.log, "utf8"), /value:ambient-signing-secret-that-is-long-enough/);
 });
 
 test("fly live check requires deployed machines and a healthy public endpoint", async (t) => {
@@ -424,29 +392,24 @@ else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ s
 else console.log("ok");`,
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...args: unknown[]): void => void lines.push(args.join(" "));
-  try {
-    await flyCheckLive(config, dir, {
-      fetchImpl: async (url) => {
-        assert.equal(url, "https://qm.example.test/healthz");
-        return new Response('{"ok":true}', { status: 200 });
-      },
-      report: false,
-    });
-    assert.deepEqual(lines, [], "JSON callers can suppress all human-readable live-check output");
-    const calls = readFileSync(fake.log, "utf8");
-    for (const app of ["acme-core", "acme-web-ui", "acme-portal"]) {
-      assert.ok(calls.includes(`status -a ${app} --json`));
-    }
-    assert.match(
-      calls,
-      /ssh console -a acme-core --machine machine-core .* --quiet/,
-      "live readiness proves S3 from the running core",
-    );
-  } finally {
-    console.log = log;
+  t.mock.method(console, "log", (...args: unknown[]): void => void lines.push(args.join(" ")));
+  await flyCheckLive(config, dir, {
+    fetchImpl: async (url) => {
+      assert.equal(url, "https://qm.example.test/healthz");
+      return new Response('{"ok":true}', { status: 200 });
+    },
+    report: false,
+  });
+  assert.deepEqual(lines, [], "JSON callers can suppress all human-readable live-check output");
+  const calls = readFileSync(fake.log, "utf8");
+  for (const app of ["acme-core", "acme-web-ui", "acme-portal"]) {
+    assert.ok(calls.includes(`status -a ${app} --json`));
   }
+  assert.match(
+    calls,
+    /ssh console -a acme-core --machine machine-core .* --quiet/,
+    "live readiness proves S3 from the running core",
+  );
 });
 
 test("fly live readiness rejects the wrong organization identity, region, and rendered env", async (t) => {
@@ -804,31 +767,26 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     dir,
     `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    await flySecretsPush(config, dir);
-    const calls = readFileSync(fake.log, "utf8");
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-portal PORTAL_SESSION_SECRET=-"),
-      "the portal keeps its plain delivery",
-    );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core DEPLOY_APPS_SESSION_SECRET=-"),
-      "the alias delivers the stored value under its declared env name on core",
-    );
-    assert.ok(!calls.includes("-a acme-core PORTAL_SESSION_SECRET"), "the alias adds no plain-name delivery on core");
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core EXTRA_API_KEY=-"),
-      "config secretEnv extras stage on their service",
-    );
-    assert.ok(
-      calls.includes(`value:${"portal-session".repeat(3)}`),
-      "the aliased delivery pushes the store secret's value",
-    );
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (): void => {});
+  await flySecretsPush(config, dir);
+  const calls = readFileSync(fake.log, "utf8");
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-portal PORTAL_SESSION_SECRET=-"),
+    "the portal keeps its plain delivery",
+  );
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-core DEPLOY_APPS_SESSION_SECRET=-"),
+    "the alias delivers the stored value under its declared env name on core",
+  );
+  assert.ok(!calls.includes("-a acme-core PORTAL_SESSION_SECRET"), "the alias adds no plain-name delivery on core");
+  assert.ok(
+    calls.includes("secrets set --stage -a acme-core EXTRA_API_KEY=-"),
+    "config secretEnv extras stage on their service",
+  );
+  assert.ok(
+    calls.includes(`value:${"portal-session".repeat(3)}`),
+    "the aliased delivery pushes the store secret's value",
+  );
 });
 
 test("shared publisher authorization uses app-scoped access without organization listing", (t) => {

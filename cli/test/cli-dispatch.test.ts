@@ -293,7 +293,6 @@ else console.log("{}");
 `,
   );
   chmodSync(aws, 0o755);
-  const previousFetch = globalThis.fetch;
   setEnv(t, { AWS_BIN: aws, GITHUB_SHA: undefined });
   const layerResponse = JSON.stringify({
     bundle: JSON.parse(layerBody),
@@ -301,7 +300,7 @@ else console.log("{}");
     status: "applied",
     runtimeContentHash: layerHash,
   });
-  globalThis.fetch = async () => new Response(layerResponse, { status: 200 });
+  t.mock.method(globalThis, "fetch", async () => new Response(layerResponse, { status: 200 }));
   let layerRequests = 0;
   t.mock.method(https, "request", (url: URL, options: https.RequestOptions, callback: (response: unknown) => void) => {
     assert.equal(url.pathname, "/v1/deployment-layer");
@@ -319,16 +318,12 @@ else console.log("{}");
       });
     return request;
   });
-  try {
-    const checked = await run(["check", "--json", "--live"], dir);
-    assert.equal(checked.exitCode, null, checked.out);
-    const result = JSON.parse(checked.out) as { valid: boolean; clauses: Record<string, { status: string }> };
-    assert.equal(result.valid, true);
-    assert.equal(result.clauses["aws.live-drift"]?.status, "pass");
-    assert.equal(layerRequests, 1);
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+  const checked = await run(["check", "--json", "--live"], dir);
+  assert.equal(checked.exitCode, null, checked.out);
+  const result = JSON.parse(checked.out) as { valid: boolean; clauses: Record<string, { status: string }> };
+  assert.equal(result.valid, true);
+  assert.equal(result.clauses["aws.live-drift"]?.status, "pass");
+  assert.equal(layerRequests, 1);
 });
 
 test("version prints a semver", async () => {

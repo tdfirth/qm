@@ -1606,21 +1606,16 @@ console.log("");`,
   );
   setEnv(t, { QM_AWS_LEASE_RENEW_MS: "5" });
   const warnings: string[] = [];
-  const warnLog = console.warn;
-  console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
-  try {
-    await withAwsLease(config.aws!, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    });
-    assert.match(warnings.join("\n"), /"deploy" lease in acme-qm-deploy-locks was taken over by another QM operation/);
-    assert.equal(
-      readFileSync(fake.log, "utf8").match(/dynamodb update-item/g)?.length,
-      1,
-      "renewal stops once the lease is lost",
-    );
-  } finally {
-    console.warn = warnLog;
-  }
+  t.mock.method(console, "warn", (...parts: unknown[]): void => void warnings.push(parts.join(" ")));
+  await withAwsLease(config.aws!, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+  assert.match(warnings.join("\n"), /"deploy" lease in acme-qm-deploy-locks was taken over by another QM operation/);
+  assert.equal(
+    readFileSync(fake.log, "utf8").match(/dynamodb update-item/g)?.length,
+    1,
+    "renewal stops once the lease is lost",
+  );
 });
 
 test("AWS deploy requires PUBLIC_API_URL to equal the declared HTTPS public URL", async (t) => {
@@ -2928,19 +2923,14 @@ test("AWS rollback surfaces the pre-deploy database snapshot of the deployment i
     ),
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsRollback(single);
-    const out = lines.join("\n");
-    assert.match(out, /rollback restores code and configuration, not data/);
-    assert.match(
-      out,
-      /restore-db-instance-from-db-snapshot --db-snapshot-identifier acme-qm-core-predeploy-current --db-instance-identifier acme-qm-core-restored --region us-west-2, then repoint the stack at the restored instance/,
-    );
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsRollback(single);
+  const out = lines.join("\n");
+  assert.match(out, /rollback restores code and configuration, not data/);
+  assert.match(
+    out,
+    /restore-db-instance-from-db-snapshot --db-snapshot-identifier acme-qm-core-predeploy-current --db-instance-identifier acme-qm-core-restored --region us-west-2, then repoint the stack at the restored instance/,
+  );
 });
 
 test("AWS rollback surfaces the restore point recorded before the rolled-back deployment", async (t) => {
@@ -2964,22 +2954,17 @@ test("AWS rollback surfaces the restore point recorded before the rolled-back de
     ),
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsRollback(single);
-    const out = lines.join("\n");
-    assert.match(
-      out,
-      /the database restore point taken before the first rolled-back deployment is 2026-07-29T00:00:00\.000Z/,
-    );
-    assert.match(
-      out,
-      /restore-db-instance-to-point-in-time --source-db-instance-identifier acme-qm-core --target-db-instance-identifier acme-qm-core-restored --restore-time 2026-07-29T00:00:00\.000Z --region us-west-2, then repoint the stack at the restored instance/,
-    );
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsRollback(single);
+  const out = lines.join("\n");
+  assert.match(
+    out,
+    /the database restore point taken before the first rolled-back deployment is 2026-07-29T00:00:00\.000Z/,
+  );
+  assert.match(
+    out,
+    /restore-db-instance-to-point-in-time --source-db-instance-identifier acme-qm-core --target-db-instance-identifier acme-qm-core-restored --restore-time 2026-07-29T00:00:00\.000Z --region us-west-2, then repoint the stack at the restored instance/,
+  );
 });
 
 test("AWS rollback across a mixed chain surfaces the oldest rolled-back restore, legacy snapshot included", async (t) => {
@@ -3009,20 +2994,15 @@ test("AWS rollback across a mixed chain surfaces the oldest rolled-back restore,
     ),
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsRollback(single, "a");
-    const out = lines.join("\n");
-    assert.match(
-      out,
-      /the database snapshot taken before the first rolled-back deployment is acme-qm-core-predeploy-b \(restore: aws rds restore-db-instance-from-db-snapshot/,
-      "the legacy snapshot on the oldest rolled-back deployment wins over the newer restore point",
-    );
-    assert.doesNotMatch(out, /2026-07-29T00:00:00\.000Z/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsRollback(single, "a");
+  const out = lines.join("\n");
+  assert.match(
+    out,
+    /the database snapshot taken before the first rolled-back deployment is acme-qm-core-predeploy-b \(restore: aws rds restore-db-instance-from-db-snapshot/,
+    "the legacy snapshot on the oldest rolled-back deployment wins over the newer restore point",
+  );
+  assert.doesNotMatch(out, /2026-07-29T00:00:00\.000Z/);
 });
 
 test("AWS rollback --to a manifest several steps back surfaces the target's successor snapshot, not the current one", async (t) => {
@@ -3052,20 +3032,15 @@ test("AWS rollback --to a manifest several steps back surfaces the target's succ
     ),
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsRollback(single, "a");
-    const out = lines.join("\n");
-    assert.match(
-      out,
-      /--db-snapshot-identifier acme-qm-core-predeploy-b --db-instance-identifier acme-qm-core-restored --region us-west-2/,
-      "the data restore point is the snapshot taken before the target's successor",
-    );
-    assert.doesNotMatch(out, /acme-qm-core-predeploy-c/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsRollback(single, "a");
+  const out = lines.join("\n");
+  assert.match(
+    out,
+    /--db-snapshot-identifier acme-qm-core-predeploy-b --db-instance-identifier acme-qm-core-restored --region us-west-2/,
+    "the data restore point is the snapshot taken before the target's successor",
+  );
+  assert.doesNotMatch(out, /acme-qm-core-predeploy-c/);
 });
 
 test("AWS rollback surfaces the snapshot even when a rotation manifest sits directly after the target", async (t) => {
@@ -3094,18 +3069,13 @@ test("AWS rollback surfaces the snapshot even when a rotation manifest sits dire
     ),
   );
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsRollback(single, "b");
-    assert.match(
-      lines.join("\n"),
-      /--db-snapshot-identifier acme-qm-core-predeploy-c/,
-      "the rotation record between target and deploy does not hide the restore point",
-    );
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsRollback(single, "b");
+  assert.match(
+    lines.join("\n"),
+    /--db-snapshot-identifier acme-qm-core-predeploy-c/,
+    "the rotation record between target and deploy does not hide the restore point",
+  );
 });
 
 test("rollback resolves a label through its full-service manifest before mutating ECS", async (t) => {
@@ -3303,24 +3273,19 @@ test("aws logs never reinterprets --tail and interleaves all workloads instead o
   const dir = tempDir(t, "qm-aws-logs-");
   const fake = fakeAws(t, dir, `console.log("line-from-" + process.argv[4]);`);
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    awsLogs(oneServiceConfig(), "core", { follow: false, tail: 7 });
-    const calls = readFileSync(fake.log, "utf8");
-    assert.ok(!calls.includes("--since"), "--tail must not silently become --since");
-    assert.ok(
-      lines.join("\n").includes("--tail is a docker-only line count"),
-      "explicit notice instead of reinterpretation",
-    );
-    const twoServices = twoServiceConfig();
-    await awsLogs(twoServices, undefined, { follow: false });
-    const out = lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-    assert.match(out, /core\s*\| line-from-/);
-    assert.match(out, /web-ui\s*\| line-from-/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  awsLogs(oneServiceConfig(), "core", { follow: false, tail: 7 });
+  const calls = readFileSync(fake.log, "utf8");
+  assert.ok(!calls.includes("--since"), "--tail must not silently become --since");
+  assert.ok(
+    lines.join("\n").includes("--tail is a docker-only line count"),
+    "explicit notice instead of reinterpretation",
+  );
+  const twoServices = twoServiceConfig();
+  await awsLogs(twoServices, undefined, { follow: false });
+  const out = lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(out, /core\s*\| line-from-/);
+  assert.match(out, /web-ui\s*\| line-from-/);
 });
 
 test("AWS virtual Slack logs resolve to the core task", (t) => {
@@ -3729,17 +3694,12 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
   chmodSync(dockerBin, 0o755);
   setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsUp(single, dir, { dryRun: true });
-    const calls = readFileSync(fake.log, "utf8");
-    assert.doesNotMatch(calls, /ecr describe-images|ecr batch-delete-image|dynamodb put-item|ecs update-service/);
-    assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx imagetools inspect/);
-    assert.match(lines.join("\n"), new RegExp(`qm-core@sha256:${"a".repeat(64)}`));
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsUp(single, dir, { dryRun: true });
+  const calls = readFileSync(fake.log, "utf8");
+  assert.doesNotMatch(calls, /ecr describe-images|ecr batch-delete-image|dynamodb put-item|ecs update-service/);
+  assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx imagetools inspect/);
+  assert.match(lines.join("\n"), new RegExp(`qm-core@sha256:${"a".repeat(64)}`));
 });
 
 test("aws up resolves image digests only while holding the deploy lease", async (t) => {
@@ -3755,51 +3715,46 @@ test("aws up resolves image digests only while holding the deploy lease", async 
   const fake = statefulAws(t, dir, oneServiceConfig());
   setEnv(t, { PATH: `${dir}:${process.env.PATH}` });
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await awsUp(oneServiceConfig(), dir, { yes: true });
-    const calls = readFileSync(fake.log, "utf8");
-    assert.match(
-      calls,
-      /ecs register-task-definition .*--tags \[\{"key":"ManagedBy","value":"qm-cli"\},\{"key":"Deployment","value":"acme"\}\]/,
-    );
-    const lease = calls.indexOf("dynamodb put-item");
-    const login = calls.indexOf("get-login-password");
-    const digest = calls.indexOf("ecr describe-images");
-    const update = calls.indexOf("ecs update-service");
-    const manifest = calls.indexOf("dynamodb transact-write-items");
-    const promotion = calls.indexOf("ecr put-image");
-    const cleanup = calls.indexOf("ecr batch-delete-image");
-    const release = calls.indexOf("dynamodb delete-item");
-    assert.ok(
-      [lease, login, digest, update, manifest, promotion, cleanup, release].every((index) => index !== -1),
-      calls,
-    );
-    assert.ok(
-      calls.lastIndexOf("lambda-microvms get-microvm-image") > lease,
-      "the deploy image is revalidated after acquiring the shared lease",
-    );
-    assert.ok(lease < login && login < digest, "push + digest resolution happen inside the lease");
-    assert.ok(
-      digest < update && update < manifest,
-      "the staged digest drives ECS before the durable manifest is recorded",
-    );
-    assert.ok(manifest < promotion, "the stable tag is promoted only after deployment success is durable");
-    assert.ok(promotion < cleanup && cleanup < release, "the staging tag is cleaned before releasing the lease");
-    const now = Math.floor(Date.now() / 1000);
-    const leaseExpiry = Number(calls.match(/dynamodb put-item[^\n]*"expiresAt":\{"N":"(\d+)"\}/)?.[1]);
-    assert.ok(leaseExpiry > now && leaseExpiry <= now + 60 * 60 + 5, "the lease uses a bounded TTL");
-    const transactions = calls.split("\n").filter((line) => line.includes("dynamodb transact-write-items"));
-    assert.equal(transactions.length, 1, "the manifest is one unconditional transaction");
-    assert.doesNotMatch(calls, /--client-request-token/);
-    assert.doesNotMatch(calls, /dynamodb update-item/);
-    assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
-    assert.ok(readFileSync(dockerLog, "utf8").includes("imagetools create"), "the image was pushed via docker");
-    assert.match(readFileSync(dockerLog, "utf8"), /--tag [^\s]+\/qm-core:qm-staging/);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await awsUp(oneServiceConfig(), dir, { yes: true });
+  const calls = readFileSync(fake.log, "utf8");
+  assert.match(
+    calls,
+    /ecs register-task-definition .*--tags \[\{"key":"ManagedBy","value":"qm-cli"\},\{"key":"Deployment","value":"acme"\}\]/,
+  );
+  const lease = calls.indexOf("dynamodb put-item");
+  const login = calls.indexOf("get-login-password");
+  const digest = calls.indexOf("ecr describe-images");
+  const update = calls.indexOf("ecs update-service");
+  const manifest = calls.indexOf("dynamodb transact-write-items");
+  const promotion = calls.indexOf("ecr put-image");
+  const cleanup = calls.indexOf("ecr batch-delete-image");
+  const release = calls.indexOf("dynamodb delete-item");
+  assert.ok(
+    [lease, login, digest, update, manifest, promotion, cleanup, release].every((index) => index !== -1),
+    calls,
+  );
+  assert.ok(
+    calls.lastIndexOf("lambda-microvms get-microvm-image") > lease,
+    "the deploy image is revalidated after acquiring the shared lease",
+  );
+  assert.ok(lease < login && login < digest, "push + digest resolution happen inside the lease");
+  assert.ok(
+    digest < update && update < manifest,
+    "the staged digest drives ECS before the durable manifest is recorded",
+  );
+  assert.ok(manifest < promotion, "the stable tag is promoted only after deployment success is durable");
+  assert.ok(promotion < cleanup && cleanup < release, "the staging tag is cleaned before releasing the lease");
+  const now = Math.floor(Date.now() / 1000);
+  const leaseExpiry = Number(calls.match(/dynamodb put-item[^\n]*"expiresAt":\{"N":"(\d+)"\}/)?.[1]);
+  assert.ok(leaseExpiry > now && leaseExpiry <= now + 60 * 60 + 5, "the lease uses a bounded TTL");
+  const transactions = calls.split("\n").filter((line) => line.includes("dynamodb transact-write-items"));
+  assert.equal(transactions.length, 1, "the manifest is one unconditional transaction");
+  assert.doesNotMatch(calls, /--client-request-token/);
+  assert.doesNotMatch(calls, /dynamodb update-item/);
+  assert.match(calls, /ecr batch-delete-image .*imageTag=qm-staging/);
+  assert.ok(readFileSync(dockerLog, "utf8").includes("imagetools create"), "the image was pushed via docker");
+  assert.match(readFileSync(dockerLog, "utf8"), /--tag [^\s]+\/qm-core:qm-staging/);
 });
 
 test("AWS up requires a complete trusted baseline before a partial deployment", async (t) => {

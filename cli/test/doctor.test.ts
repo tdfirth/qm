@@ -220,21 +220,16 @@ process.exit(0);
   );
   chmodSync(bin, 0o755);
   setEnv(t, { FLY_BIN: bin });
-  const log = console.log;
   const lines: string[] = [];
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await assert.doesNotReject(
-      flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
-    );
-    assert.ok(
-      lines.some((line) => line.includes("acme-core: not created yet")),
-      `printed: ${lines.join(" | ")}`,
-    );
-    assert.ok(!lines.some((line) => line.includes("missing")), `printed: ${lines.join(" | ")}`);
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await assert.doesNotReject(
+    flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
+  );
+  assert.ok(
+    lines.some((line) => line.includes("acme-core: not created yet")),
+    `printed: ${lines.join(" | ")}`,
+  );
+  assert.ok(!lines.some((line) => line.includes("missing")), `printed: ${lines.join(" | ")}`);
 });
 
 test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back to the template", (t) => {
@@ -262,26 +257,21 @@ test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back 
 test("requiredSlackScopes warns when the deployment manifest lags the template's scopes, and stays quiet on a superset", (t) => {
   const dir = tempDir(t, "qm-doctor-stale-");
   const lines: string[] = [];
-  const priorWarn = console.warn;
-  console.warn = (...args: unknown[]): void => void lines.push(args.join(" "));
-  try {
-    const templateScopes = requiredSlackScopes();
-    writeFileSync(join(dir, "slack-app-manifest.yml"), "oauth_config:\n  scopes:\n    bot:\n      - chat:write\n");
-    requiredSlackScopes(dir);
-    assert.equal(lines.length, 1, "a lagging manifest draws exactly one warning");
-    for (const scope of templateScopes.filter((s) => s !== "chat:write")) {
-      assert.ok(lines[0]!.includes(scope), `warning names missing scope ${scope}`);
-    }
-    lines.length = 0;
-    writeFileSync(
-      join(dir, "slack-app-manifest.yml"),
-      JSON.stringify({ oauth_config: { scopes: { bot: [...templateScopes, "custom:extra"] } } }),
-    );
-    assert.deepEqual(requiredSlackScopes(dir), [...templateScopes, "custom:extra"]);
-    assert.deepEqual(lines, [], "a superset manifest draws no warning");
-  } finally {
-    console.warn = priorWarn;
+  t.mock.method(console, "warn", (...args: unknown[]): void => void lines.push(args.join(" ")));
+  const templateScopes = requiredSlackScopes();
+  writeFileSync(join(dir, "slack-app-manifest.yml"), "oauth_config:\n  scopes:\n    bot:\n      - chat:write\n");
+  requiredSlackScopes(dir);
+  assert.equal(lines.length, 1, "a lagging manifest draws exactly one warning");
+  for (const scope of templateScopes.filter((s) => s !== "chat:write")) {
+    assert.ok(lines[0]!.includes(scope), `warning names missing scope ${scope}`);
   }
+  lines.length = 0;
+  writeFileSync(
+    join(dir, "slack-app-manifest.yml"),
+    JSON.stringify({ oauth_config: { scopes: { bot: [...templateScopes, "custom:extra"] } } }),
+  );
+  assert.deepEqual(requiredSlackScopes(dir), [...templateScopes, "custom:extra"]);
+  assert.deepEqual(lines, [], "a superset manifest draws no warning");
 });
 
 test("slackManifestBotScopes reads both YAML and JSON manifests", () => {
@@ -370,45 +360,33 @@ test("slackCheck passes when granted scopes are a superset of the manifest's", a
 
 test("Slack doctor validates deployment-file tokens before conflicting ambient tokens", async (t) => {
   const dir = manifestDir(t);
-  const priorFetch = globalThis.fetch;
   setEnv(t, { SLACK_BOT_TOKEN: "xoxb-ambient", SLACK_APP_TOKEN: "xapp-ambient" });
   const seen: string[] = [];
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", (async (input: string | URL | Request, init?: RequestInit) => {
     seen.push(new Headers(init?.headers).get("authorization") ?? "");
     const url = String(input);
     return url.endsWith("/auth.test")
       ? authOk("chat:write, users:read")
       : new Response(JSON.stringify({ ok: true }), { status: 200 });
-  }) as typeof fetch;
-  try {
-    await doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir });
-    assert.deepEqual(seen, ["Bearer xoxb-test", "Bearer xapp-test"]);
-  } finally {
-    globalThis.fetch = priorFetch;
-  }
+  }) as typeof fetch);
+  await doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir });
+  assert.deepEqual(seen, ["Bearer xoxb-test", "Bearer xapp-test"]);
 });
 
 test("Slack doctor validates the bot through its configured API while Socket Mode stays on Slack", async (t) => {
   const dir = manifestDir(t);
-  const priorFetch = globalThis.fetch;
   const seen: string[] = [];
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", (async (input: string | URL | Request) => {
     const url = String(input);
     seen.push(url);
     return url.endsWith("/auth.test")
       ? authOk("chat:write, users:read")
       : new Response(JSON.stringify({ ok: true }), { status: 200 });
-  }) as typeof fetch;
-  try {
-    await doctorCommon(
-      slackConfig(),
-      new Map([...SLACK_TOKENS, ["SLACK_API_URL", "https://slack-twin.example/api/"]]),
-      { configDir: dir },
-    );
-    assert.deepEqual(seen, ["https://slack-twin.example/api/auth.test", "https://slack.com/api/apps.connections.open"]);
-  } finally {
-    globalThis.fetch = priorFetch;
-  }
+  }) as typeof fetch);
+  await doctorCommon(slackConfig(), new Map([...SLACK_TOKENS, ["SLACK_API_URL", "https://slack-twin.example/api/"]]), {
+    configDir: dir,
+  });
+  assert.deepEqual(seen, ["https://slack-twin.example/api/auth.test", "https://slack.com/api/apps.connections.open"]);
 });
 
 test("Slack doctor does not require a Socket Mode token for HTTP events", async (t) => {
@@ -459,28 +437,23 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
   void _sandbox;
   const noSandbox: QmConfig = { ...rest, env: {} };
   setEnv(t, { FLY_BIN: "/nonexistent/fly-should-never-run" });
-  const log = console.log;
   const lines: string[] = [];
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await doctorCommon(
-      noSandbox,
-      new Map([
-        ["CAPABILITY_SECRET", "capability-value"],
-        ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
-        ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
-        ["PORTAL_IDENTITY_SECRET", "identity-value"],
-        ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
-      ]),
-      { requiredSecretValues: true },
-    );
-    assert.ok(
-      lines.some((line) => line.includes("sandbox: not configured")),
-      `printed: ${lines.join(" | ")}`,
-    );
-  } finally {
-    console.log = log;
-  }
+  t.mock.method(console, "log", (...parts: unknown[]): void => void lines.push(parts.join(" ")));
+  await doctorCommon(
+    noSandbox,
+    new Map([
+      ["CAPABILITY_SECRET", "capability-value"],
+      ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
+      ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
+      ["PORTAL_IDENTITY_SECRET", "identity-value"],
+      ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
+    ]),
+    { requiredSecretValues: true },
+  );
+  assert.ok(
+    lines.some((line) => line.includes("sandbox: not configured")),
+    `printed: ${lines.join(" | ")}`,
+  );
 });
 
 test("an explicitly named --env-file that does not exist is a bad-path error, not 'secrets missing'", (t) => {
@@ -542,23 +515,18 @@ test("doctor without required local values warns-and-skips the live Slack check 
   writeFileSync(bin, "#!/usr/bin/env node\nprocess.exit(0);\n");
   chmodSync(bin, 0o755);
   setEnv(t, { FLY_BIN: bin, SLACK_BOT_TOKEN: undefined, SLACK_APP_TOKEN: undefined });
-  const warnLog = console.warn;
   const warned: string[] = [];
-  console.warn = (...parts: unknown[]): void => void warned.push(parts.join(" "));
-  try {
-    await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), { configDir: dir });
-    assert.ok(
-      warned.some((line) => line.includes("skipping the live Slack check")),
-      `warned: ${warned.join(" | ")}`,
-    );
-    await assert.rejects(
-      doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
-        requiredSecretValues: true,
-        configDir: dir,
-      }),
-      /required secrets are missing/,
-    );
-  } finally {
-    console.warn = warnLog;
-  }
+  t.mock.method(console, "warn", (...parts: unknown[]): void => void warned.push(parts.join(" ")));
+  await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), { configDir: dir });
+  assert.ok(
+    warned.some((line) => line.includes("skipping the live Slack check")),
+    `warned: ${warned.join(" | ")}`,
+  );
+  await assert.rejects(
+    doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
+      requiredSecretValues: true,
+      configDir: dir,
+    }),
+    /required secrets are missing/,
+  );
 });

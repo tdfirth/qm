@@ -229,18 +229,13 @@ test("conformance passes against a live core: base-port override, signed request
         sandbox: { app: "acme-sandboxes" },
       }),
     );
-    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
-      const log = console.log;
-      console.log = (): void => {};
-      try {
-        await runConformance(
-          { config: loadConfigInDir(dir).config, configDir: dir, sandboxDir: join(dir, "sandbox"), target: "docker" },
-          { runtime: true },
-        );
-      } finally {
-        console.log = log;
-      }
-    });
+    t.mock.method(console, "log", (): void => {});
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+      runConformance(
+        { config: loadConfigInDir(dir).config, configDir: dir, sandboxDir: join(dir, "sandbox"), target: "docker" },
+        { runtime: true },
+      ),
+    );
     assert.equal(captured.length, 1);
     const request = captured[0]!;
     assert.equal(request.method, "GET");
@@ -286,27 +281,22 @@ test("conformance fails when the stored layer matches but the core still serves 
         sandbox: { app: "acme-sandboxes" },
       }),
     );
-    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
-      const log = console.log;
-      console.log = (): void => {};
-      try {
-        await assert.rejects(
-          () =>
-            runConformance(
-              {
-                config: loadConfigInDir(dir).config,
-                configDir: dir,
-                sandboxDir: join(dir, "sandbox"),
-                target: "docker",
-              },
-              { runtime: true },
-            ),
-          /runtime\.layer-resolved: .*serving a previous resolved layer/,
-        );
-      } finally {
-        console.log = log;
-      }
-    });
+    t.mock.method(console, "log", (): void => {});
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+      assert.rejects(
+        () =>
+          runConformance(
+            {
+              config: loadConfigInDir(dir).config,
+              configDir: dir,
+              sandboxDir: join(dir, "sandbox"),
+              target: "docker",
+            },
+            { runtime: true },
+          ),
+        /runtime\.layer-resolved: .*serving a previous resolved layer/,
+      ),
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
   }
@@ -329,27 +319,22 @@ test("conformance reports a non-JSON layer response as a contract failure, not a
         sandbox: { app: "acme-sandboxes" },
       }),
     );
-    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
-      const log = console.log;
-      console.log = (): void => {};
-      try {
-        await assert.rejects(
-          () =>
-            runConformance(
-              {
-                config: loadConfigInDir(dir).config,
-                configDir: dir,
-                sandboxDir: join(dir, "sandbox"),
-                target: "docker",
-              },
-              { runtime: true },
-            ),
-          /runtime\.layer-resolved: .*unparseable JSON/,
-        );
-      } finally {
-        console.log = log;
-      }
-    });
+    t.mock.method(console, "log", (): void => {});
+    await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
+      assert.rejects(
+        () =>
+          runConformance(
+            {
+              config: loadConfigInDir(dir).config,
+              configDir: dir,
+              sandboxDir: join(dir, "sandbox"),
+              target: "docker",
+            },
+            { runtime: true },
+          ),
+        /runtime\.layer-resolved: .*unparseable JSON/,
+      ),
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
   }
