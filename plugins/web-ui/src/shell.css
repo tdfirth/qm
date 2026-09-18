@@ -480,6 +480,7 @@ a.chat-row-open {
   gap: 1px;
   min-width: 0;
   margin-left: 9px;
+  margin-right: 8px;
 }
 .archived-children {
   margin-left: 13px;
@@ -698,6 +699,7 @@ a.chat-row-open {
   gap: 1px;
   min-width: 0;
   margin-left: 13px;
+  margin-right: 8px;
 }
 .pinned-children .session {
   padding-left: 6px;

@@ -63,6 +63,10 @@ test("sidebar conversations keep space between their backgrounds and the scrollb
   assert.match(list, /box-sizing:\s*border-box;/);
   assert.match(list, /padding-right:\s*8px;/);
   assert.match(list, /scrollbar-gutter:\s*stable;/);
+  const projectChildren = shellCss.match(/\.recent-project-children,[\s\S]*?\.archived-children \{[^}]+\}/)?.[0] ?? "";
+  const pinnedChildren = shellCss.match(/\.pinned-children \{[^}]+\}/)?.[0] ?? "";
+  assert.match(projectChildren, /margin-right:\s*8px;/);
+  assert.match(pinnedChildren, /margin-right:\s*8px;/);
 });
 
 test("every drop zone the canvas renders has a positioning rule in shell.css", () => {
