@@ -12,6 +12,7 @@ import {
   runtimeSecretNames,
   secretDestinations,
   secretsForService,
+  validatedSecrets,
   type ComputedSecret,
 } from "../src/secrets.ts";
 import { isReservedContainerName, pluginNameError, SERVICE_NAMES } from "../src/services.ts";
@@ -213,10 +214,12 @@ test("naming a base model provider makes that provider's key a required deployme
 test("the providers a deployment did not select stay optional", () => {
   for (const [provider, harness, requiredKeys] of [
     ["anthropic", "pi", ["ANTHROPIC_API_KEY"]],
+    ["anthropic", "opencode", ["ANTHROPIC_API_KEY"]],
+    ["anthropic", "claude", ["ANTHROPIC_API_KEY"]],
     ["openai", "pi", ["OPENAI_API_KEY"]],
-    ["openrouter", "opencode", ["OPENROUTER_API_KEY"]],
-    ["anthropic", "codex", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]],
-    ["openrouter", "codex", ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]],
+    ["openai", "opencode", ["OPENAI_API_KEY"]],
+    ["openai", "codex", ["OPENAI_API_KEY"]],
+    ["openrouter", "pi", ["OPENROUTER_API_KEY"]],
     [undefined, "mock", []],
   ] as const) {
     const config = makeConfig({
@@ -327,6 +330,50 @@ test("a secretEnv alias delivers the stored secret under its declared env name o
     !computedSecrets(config).some((s) => s.name === "DEPLOY_APPS_SESSION_SECRET"),
     "the alias env name is delivery, not a second stored secret",
   );
+});
+
+test("an explicit alias replaces an optional catalog delivery", () => {
+  const config = makeConfig({
+    modelProvider: "anthropic",
+    env: { core: { HARNESS: "pi" } },
+    secretEnv: { core: { OPENAI_API_KEY: "MY_OPENAI_KEY" } },
+  });
+  const secrets = validatedSecrets(config);
+  const canonical = secrets.find((secret) => secret.name === "OPENAI_API_KEY");
+  const alias = secrets.find((secret) => secret.name === "MY_OPENAI_KEY");
+  assert.ok(canonical);
+  assert.equal(canonical.required, false);
+  assert.deepEqual(runtimeSecretNames("core", canonical), []);
+  assert.ok(alias);
+  assert.equal(alias.required, true);
+  assert.deepEqual(runtimeSecretNames("core", alias), ["OPENAI_API_KEY"]);
+});
+
+test("an explicit alias cannot replace a required catalog delivery", () => {
+  const config = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "pi" } },
+    secretEnv: { core: { OPENAI_API_KEY: "MY_OPENAI_KEY" } },
+  });
+  assert.throws(
+    () => validatedSecrets(config),
+    /core would receive env OPENAI_API_KEY from both MY_OPENAI_KEY and OPENAI_API_KEY|core would receive env OPENAI_API_KEY from both OPENAI_API_KEY and MY_OPENAI_KEY/,
+  );
+});
+
+test("optional catalog precedence applies to non-OpenAI aliases", () => {
+  const config = makeConfig({
+    modelProvider: "anthropic",
+    env: { core: { HARNESS: "pi" } },
+    secretEnv: { core: { OPENROUTER_API_KEY: "MY_OPENROUTER_KEY" } },
+  });
+  const secrets = validatedSecrets(config);
+  const canonical = secrets.find((secret) => secret.name === "OPENROUTER_API_KEY");
+  const alias = secrets.find((secret) => secret.name === "MY_OPENROUTER_KEY");
+  assert.ok(canonical);
+  assert.deepEqual(runtimeSecretNames("core", canonical), []);
+  assert.ok(alias);
+  assert.deepEqual(runtimeSecretNames("core", alias), ["OPENROUTER_API_KEY"]);
 });
 
 test("secretEnv merges onto an existing computed secret instead of duplicating it", () => {

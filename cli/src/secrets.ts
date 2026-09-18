@@ -614,6 +614,20 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
   for (const [service, entries] of Object.entries(config.secretEnv ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
     if (!config.services.includes(service as DeclaredServiceName)) continue;
     for (const [envName, storeName] of Object.entries(entries ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+      if (envName !== storeName) {
+        const workload = serviceHost(service);
+        for (const secret of byName.values()) {
+          if (secret.required) continue;
+          if (secret.name === envName) {
+            secret.services = secret.services.filter((candidate) => serviceHost(candidate) !== workload);
+          }
+          if (secret.aliases) {
+            secret.aliases = secret.aliases.filter(
+              (alias) => serviceHost(alias.service) !== workload || alias.name !== envName,
+            );
+          }
+        }
+      }
       let current = byName.get(storeName);
       if (!current) {
         current = {

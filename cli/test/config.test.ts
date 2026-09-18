@@ -1,5 +1,5 @@
 import { serviceEnvironment } from "../src/backends/aws.ts";
-import { computedSecrets } from "../src/secrets.ts";
+import { computedSecrets, validatedSecrets } from "../src/secrets.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1231,6 +1231,26 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
       "an unset harness is mock, which bills anything",
     );
   });
+});
+
+test("every supported provider and harness combination loads a valid secret contract", () => {
+  for (const [modelProvider, harness] of [
+    ["anthropic", "pi"],
+    ["anthropic", "opencode"],
+    ["anthropic", "claude"],
+    ["anthropic", "mock"],
+    ["openai", "pi"],
+    ["openai", "opencode"],
+    ["openai", "codex"],
+    ["openai", "mock"],
+    ["openrouter", "pi"],
+    ["openrouter", "mock"],
+  ]) {
+    withConfig({ modelProvider, env: { core: { HARNESS: harness } } }, ({ path }) => {
+      const config = loadConfigAt(path).config;
+      assert.doesNotThrow(() => validatedSecrets(config), `${modelProvider}/${harness}`);
+    });
+  }
 });
 
 test("env.core.MODEL_PROVIDER is validated as the provider core will actually use", () => {
