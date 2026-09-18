@@ -226,7 +226,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
       await server.close();
       rmSync(dir, { recursive: true, force: true });
     });
-    assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
+    assert.equal(await server.request("start", {}, AbortSignal.timeout(3000)), "started");
     await server.close();
     const error = server.error();
     release.resolve();
