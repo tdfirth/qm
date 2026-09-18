@@ -12,6 +12,98 @@ const cases = [
   { name: "an unterminated final frame at EOF", text: "before\u2028after", ending: "", fragmented: true },
 ];
 
+test("Codex responses do not wait for ordered notification callbacks", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-notification-concurrency-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ method: "progress", params: 1 }) + "\\n");
+  process.stdout.write(JSON.stringify({ method: "progress", params: 2 }) + "\\n");
+  process.stdout.write(JSON.stringify({ id: message.id, result: { value: "ready" } }) + "\\n");
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const release = Promise.withResolvers<void>();
+  const second = Promise.withResolvers<void>();
+  const started: unknown[] = [];
+  const completed: unknown[] = [];
+  const server = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: async (_method, params) => {
+      started.push(params);
+      if (params === 1) await release.promise;
+      completed.push(params);
+      if (params === 2) second.resolve();
+    },
+    onRequest: async () => ({}),
+  });
+  t.after(async () => {
+    release.resolve();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const result = await server.request(
+    "probe",
+    {},
+    (value): value is { value: string } =>
+      !!value && typeof value === "object" && (value as { value?: unknown }).value === "ready",
+    AbortSignal.timeout(1000),
+  );
+  assert.deepEqual(result, { value: "ready" });
+  assert.deepEqual(started, [1]);
+  assert.deepEqual(completed, []);
+  release.resolve();
+  await second.promise;
+  assert.deepEqual(started, [1, 2]);
+  assert.deepEqual(completed, [1, 2]);
+  assert.equal(server.error(), null);
+});
+
+test("Codex notification failures propagate after an unrelated response settles", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-notification-failure-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ method: "progress" }) + "\\n");
+  process.stdout.write(JSON.stringify({ id: message.id, result: "ready" }) + "\\n");
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const release = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<void>();
+  const server = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: async () => {
+      await release.promise;
+      throw new Error("notification failed");
+    },
+    onRequest: async () => ({}),
+  });
+  server.process.once("close", () => closed.resolve());
+  t.after(async () => {
+    release.resolve();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await server.request("probe", {}, AbortSignal.timeout(1000)), "ready");
+  assert.equal(server.error(), null);
+  release.resolve();
+  await closed.promise;
+  assert.match(server.error()?.message ?? "", /Codex app-server exited/);
+});
+
 test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 3000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-tool-concurrency-"));
   const binary = join(dir, "codex");
@@ -37,6 +129,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   chmodSync(binary, 0o755);
   const release = Promise.withResolvers<void>();
   const firstDone = Promise.withResolvers<void>();
+  const notificationsDone = Promise.withResolvers<void>();
   const calls: number[] = [];
   const notifications: unknown[] = [];
   const replies: unknown[] = [];
@@ -47,6 +140,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
       if (method === "progress") {
         await Promise.resolve();
         notifications.push(params);
+        if (params === 2) notificationsDone.resolve();
       } else {
         replies.push(params);
         if ((params as { id: string }).id === "first") firstDone.resolve();
@@ -70,6 +164,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   });
   assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
   assert.deepEqual(calls, [0, 1, 2]);
+  await notificationsDone.promise;
   assert.deepEqual(notifications, [1, 2]);
   release.resolve();
   await firstDone.promise;
