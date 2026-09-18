@@ -1,13 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -21,6 +15,7 @@ import {
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
 import { buildApp } from "../src/wiring.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
@@ -193,7 +188,7 @@ test("managed groups override Slack membership and historical sessions grant no 
 });
 
 test("capability scope checks follow current shared rosters", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-roster-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("capability-roster-") }));
   await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
   await built.directory.replaceChannels(
     [
@@ -230,7 +225,7 @@ test("capability scope checks follow current shared rosters", async () => {
 });
 
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-transition-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("capability-transition-") }));
   await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
   await built.directory.replaceChannels([{ channelId: "C-public", name: "public" }], []);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
@@ -238,17 +233,11 @@ test("channel capabilities bridge legacy public rosters but still honor deactiva
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
 });
 
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
-
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
-  const server = createInsecureTestServer(built.app, {});
-  const base = await listen(server);
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const built = buildApp(testConfig({ dataDir: tmpDir("projects-lean-") }));
+  const server = serveApp(built.app, {}, "127.0.0.1");
+  t.after(server.close);
 
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -257,7 +246,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     { principalId: "roster-helper", displayName: "Roster Helper", type: "internal" },
   ]);
 
-  const create = await fetch(`${base}/v1/projects`, {
+  const create = await fetch(`${server.base}/v1/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", name: "Launch Cohort" }),
@@ -305,7 +294,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(pendingBeforeJoin.status, "pending_approval");
   const pendingApproval = pendingBeforeJoin.pendingApprovals?.[0];
   assert.ok(pendingApproval);
-  const denied = await fetch(`${base}/v1/projects/${project.id}/members`, {
+  const denied = await fetch(`${server.base}/v1/projects/${project.id}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "member", memberId: "outsider" }),
@@ -313,37 +302,37 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(denied.status, 403);
 
   await new Promise((resolve) => setTimeout(resolve, 2));
-  const added = await fetch(`${base}/v1/projects/${project.id}/members`, {
+  const added = await fetch(`${server.base}/v1/projects/${project.id}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", memberId: "member" }),
   });
   assert.equal(added.status, 200);
-  const memberAdded = await fetch(`${base}/v1/projects/${project.id}/members`, {
+  const memberAdded = await fetch(`${server.base}/v1/projects/${project.id}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "member", memberId: "roster-helper" }),
   });
   assert.equal(memberAdded.status, 200);
-  const memberRemoved = await fetch(`${base}/v1/projects/${project.id}/members/roster-helper`, {
+  const memberRemoved = await fetch(`${server.base}/v1/projects/${project.id}/members/roster-helper`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner" }),
   });
   assert.equal(memberRemoved.status, 200);
-  const renameDenied = await fetch(`${base}/v1/projects/${project.id}`, {
+  const renameDenied = await fetch(`${server.base}/v1/projects/${project.id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "member", name: "Stolen" }),
   });
   assert.equal(renameDenied.status, 403);
-  const renameEmpty = await fetch(`${base}/v1/projects/${project.id}`, {
+  const renameEmpty = await fetch(`${server.base}/v1/projects/${project.id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", name: "   " }),
   });
   assert.equal(renameEmpty.status, 400);
-  const renamed = await fetch(`${base}/v1/projects/${project.id}`, {
+  const renamed = await fetch(`${server.base}/v1/projects/${project.id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", name: "  Launch Renamed " }),
@@ -388,7 +377,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl: deployAcl,
-    deployDir: mkdtempSync(join(tmpdir(), "project-deploy-")),
+    deployDir: tmpDir("project-deploy-"),
     canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),
   });
   const deployment = await deploy.deploy({
@@ -593,7 +582,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(outsiderSessions.every((session) => (session.title ?? null) === globalTitles.get(session.id)));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
 
-  const removed = await fetch(`${base}/v1/projects/${project.id}/members/member`, {
+  const removed = await fetch(`${server.base}/v1/projects/${project.id}/members/member`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner" }),
@@ -644,7 +633,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 });
 
 test("a member added mid-turn sees the thread but never the prior roster's output", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-roster-race-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("project-roster-race-") }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
@@ -716,7 +705,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 });
 
 test("Project turns rebuild the full thread for a member who joined later", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tape-tenure-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("project-tape-tenure-") }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
@@ -753,7 +742,7 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
 });
 
 test("Auto quarantine honors the current Project roster epoch", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("project-auto-race-") }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -840,7 +829,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
 });
 
 test("a member added to a Project inherits the chats that predate them", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-backfill-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("project-backfill-") }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -883,7 +872,7 @@ test("a member added to a Project inherits the chats that predate them", async (
 });
 
 test("leaving a Project still cuts off everything after the member left", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-departure-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("project-departure-") }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -910,7 +899,7 @@ test("leaving a Project still cuts off everything after the member left", async 
   assert.deepEqual(await built.app.listSessions("member"), []);
 });
 test("linking a just-created channel refreshes the surface directory and retries", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("projects-fresh-chan-") }));
   await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
   await built.app.upsertChannels(
     [{ channelId: "C-OLD", name: "old", isPrivate: false }],
@@ -944,10 +933,9 @@ test("linking a just-created channel refreshes the surface directory and retries
 });
 
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
-  const server = createInsecureTestServer(built.app, {});
-  const base = await listen(server);
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const built = buildApp(testConfig({ dataDir: tmpDir("projects-slack-") }));
+  const server = serveApp(built.app, {}, "127.0.0.1");
+  t.after(server.close);
 
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -967,13 +955,13 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   ]);
 
   const put = (id: string, principalId: string, channel: string) =>
-    fetch(`${base}/v1/projects/${id}/slack-channel`, {
+    fetch(`${server.base}/v1/projects/${id}/slack-channel`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ principalId, channel }),
     });
 
-  const create = await fetch(`${base}/v1/projects`, {
+  const create = await fetch(`${server.base}/v1/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", name: "Linked" }),
@@ -982,7 +970,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   const project = ((await create.json()) as { project: { id: string } }).project;
   const groupRef = projectGroupRef(project.id);
   const scope = projectScopeId(project.id);
-  await fetch(`${base}/v1/projects/${project.id}/members`, {
+  await fetch(`${server.base}/v1/projects/${project.id}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "owner", memberId: "member" }),
@@ -1051,13 +1039,13 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(await built.projects.membership(groupRef, "member"), true);
 
   // unlink: project members only; derived members leave with the link
-  const outsiderUnlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
+  const outsiderUnlink = await fetch(`${server.base}/v1/projects/${project.id}/slack-channel`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "outsider" }),
   });
   assert.equal(outsiderUnlink.status, 403);
-  const unlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
+  const unlink = await fetch(`${server.base}/v1/projects/${project.id}/slack-channel`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principalId: "member" }),
@@ -1072,7 +1060,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
 test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "projects-web-only-")),
+      dataDir: tmpDir("projects-web-only-"),
       emailAuthPrincipals: ["dana@acme.com"],
     }),
   );

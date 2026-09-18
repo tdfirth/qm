@@ -1,19 +1,13 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 
 const SECRET = "agent-projects-secret".repeat(2);
 
 describe("agent projects self-API", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi({ signingSecret: SECRET }, () => ({ signingSecret: SECRET }));
   let mineId: string;
   let theirsId: string;
 
@@ -39,7 +33,6 @@ describe("agent projects self-API", async () => {
     });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "One", type: "internal" },
       { principalId: "U2", displayName: "Two", type: "internal" },
@@ -47,14 +40,9 @@ describe("agent projects self-API", async () => {
     ]);
     mineId = (await built.app.createProject("U1", "Mine"))!.id;
     theirsId = (await built.app.createProject("U2", "Theirs"))!.id;
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   it("requires a capability token on every route", async () => {
     assert.equal((await request("GET", "/v1/projects")).status, 401);

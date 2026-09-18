@@ -1,23 +1,16 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
 describe("surface-context pulls", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, post, close } = startApi({ dataDir: tmpDir("surface-context-"), signingSecret: SECRET }, () => ({
+    signingSecret: SECRET,
+  }));
 
   const cap = (overrides: Record<string, unknown> = {}) =>
     mintCapabilityToken(
@@ -31,12 +24,6 @@ describe("surface-context pulls", async () => {
       SECRET,
     );
 
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
   const signedGet = (path: string) =>
@@ -66,15 +53,6 @@ describe("surface-context pulls", async () => {
   };
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "surface-context-")),
-        signingSecret: SECRET,
-      }),
-    );
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "Una", type: "internal" },
       { principalId: "U-member", displayName: "Mia", type: "internal" },
@@ -95,9 +73,7 @@ describe("surface-context pulls", async () => {
     );
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   it("answers a current-conversation pull with the plugin's messages, passing the token's opaque target", async () => {
     const asking = post("/v1/surface-context", { count: 5, match: "Deploy" }, { "x-agent-capability": await cap() });

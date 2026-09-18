@@ -1,15 +1,8 @@
-import { describe, it, before, after } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { serveApp, startApi, tmpDir } from "./support/api.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
@@ -20,31 +13,21 @@ const CAP = "core-only-capability-secret-for-tests-01";
 const PID = "portal-only-identity-secret-for-tests-01";
 
 describe("user-scoped routes require a portal-verified actor when enforcement is on", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ dataDir: tmpDir("pid-gate-") }, (built) => ({
+    capabilitySecret: CAP,
+    portalIdentitySecret: PID,
+    requireSignedPortalIdentity: true,
+    scheduler: built.scheduler,
+    identity: built.identity,
+    sessionShares: built.sessionShares,
+  }));
+  const { built, base, post } = api;
 
   const token = async (p: string, secret = PID) => mintSignedPayload({ p, exp: Date.now() + 60_000 }, secret);
 
-  before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
-    server = createInsecureTestServer(built.app, {
-      capabilitySecret: CAP,
-      portalIdentitySecret: PID,
-      requireSignedPortalIdentity: true,
-      scheduler: built.scheduler,
-      identity: built.identity,
-      sessionShares: built.sessionShares,
-    });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
+  after(api.close);
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-
-  const get = (headers: Record<string, string> = {}) => fetch(`${base}/v1/sessions/nope?viewer=U1`, { headers });
+  const get = (headers: Record<string, string> = {}) => api.get("/v1/sessions/nope?viewer=U1", headers);
 
   it("passes the gate when a valid portal identity matches the requested viewer", async () => {
     assert.equal((await get({ "x-portal-identity": await token("U1") })).status, 404);
@@ -76,17 +59,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
     assert.ok(claimed?.leaseToken);
     await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
-    const strictServer = createServer(built.app, {
-      signingSecret: SOURCE,
-      capabilitySecret: CAP,
-      portalIdentitySecret: PID,
-      production: true,
-    });
-    await new Promise<void>((resolve) => strictServer.listen(0, "127.0.0.1", resolve));
-    const strictBase = `http://127.0.0.1:${(strictServer.address() as AddressInfo).port}`;
+    const strictServer = serveApp(
+      built.app,
+      { signingSecret: SOURCE, capabilitySecret: CAP, portalIdentitySecret: PID, production: true },
+      "127.0.0.1",
+    );
     const read = (identity?: string) => {
       const path = `/v1/runs/${run.id}/events?nonce=${crypto.randomUUID()}`;
-      return fetch(`${strictBase}${path}`, {
+      return fetch(`${strictServer.base}${path}`, {
         headers: {
           ...signedHeaders(SOURCE, "GET", path, ""),
           ...(identity ? { "x-portal-identity": identity } : {}),
@@ -105,28 +85,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.match(body, /owner-only result/);
       assert.match(body, /RUN_FINISHED/);
     } finally {
-      strictServer.closeAllConnections();
-      await new Promise<void>((resolve) => strictServer.close(() => resolve()));
+      strictServer.server.closeAllConnections();
+      await strictServer.close();
     }
   });
 
   it("production implies signed identity on the raw deployment proxy", async () => {
-    const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
-    await new Promise<void>((resolve) => prodServer.listen(0, resolve));
+    const prodServer = serveApp(built.app, { production: true, portalIdentitySecret: PID });
     try {
-      const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;
-      assert.equal((await fetch(`${prodBase}/d/missing/`)).status, 403);
+      assert.equal((await prodServer.get("/d/missing/")).status, 403);
     } finally {
-      await new Promise<void>((resolve) => prodServer.close(() => resolve()));
+      await prodServer.close();
     }
   });
-
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
 
   it("per-user reads bind their caller-named identity field to the portal actor", async () => {
     const alice = await token("U1");

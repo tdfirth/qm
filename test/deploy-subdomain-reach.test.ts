@@ -1,13 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
+import { request as httpRequest } from "node:http";
 import { createHmac } from "node:crypto";
-import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
@@ -56,7 +52,7 @@ function serviceWithProvider(provider: DeployProvider) {
     provider,
     auditLog,
     acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "seam-")),
+    deployDir: tmpDir("seam-"),
   });
   return { deploy, deployStore };
 }
@@ -148,7 +144,7 @@ function appServingUpstream(upstreamPort: number) {
     },
     auditLog,
     acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "subdomain-")),
+    deployDir: tmpDir("subdomain-"),
   });
   const app = createApp({
     deploy,
@@ -181,14 +177,12 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
   audits.push((e) => {
     if (e.action === "deployment.reach_denied") denials.push(e);
   });
-  const upstream = createHttpServer((_req, res) => {
+  const upstream = stubHttp((_req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("UPSTREAM OK");
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = appServingUpstream(upstream.port);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -196,38 +190,39 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
     ...SESSION_DEPS,
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const host = "mysite.apps.example.com";
 
   try {
-    const anon = await httpGet(port, "/", { Host: host });
+    const anon = await httpGet(server.port, "/", { Host: host });
     assert.equal(anon.status, 401, "anonymous ⇒ sign-in required");
 
-    const staleLink = await httpGet(port, "/?access=any-old-token&x=1", { Host: host, Accept: "text/html" });
+    const staleLink = await httpGet(server.port, "/?access=any-old-token&x=1", { Host: host, Accept: "text/html" });
     assert.equal(staleLink.status, 302, "a stale ?access= link is swallowed, not honoured");
     assert.equal(staleLink.headers.location, "/?x=1", "the token leaves the URL; nothing else is lost");
     assert.ok(!String(staleLink.headers["set-cookie"] ?? "").includes("dpl_access"), "no access cookie is minted");
 
-    const staleCookie = await httpGet(port, "/", { Host: host, Cookie: "dpl_access=any-old-token" });
+    const staleCookie = await httpGet(server.port, "/", { Host: host, Cookie: "dpl_access=any-old-token" });
     assert.equal(staleCookie.status, 401, "a dpl_access cookie from an old link grants nothing");
 
-    const owner = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U1")}` });
+    const owner = await httpGet(server.port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U1")}` });
     assert.equal(owner.status, 200, "a signed-in person the ACL allows is proxied");
     assert.equal(owner.body, "UPSTREAM OK");
 
-    const stranger = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U9")}` });
+    const stranger = await httpGet(server.port, "/", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("U9")}`,
+    });
     assert.equal(stranger.status, 403, "a signed-in stranger is denied by the ACL");
 
-    await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U9")}` });
+    await httpGet(server.port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U9")}` });
 
-    const unknownSlug = await httpGet(port, "/", {
+    const unknownSlug = await httpGet(server.port, "/", {
       Host: "nope.apps.example.com",
       Cookie: `portal_session=${mintPortalSession("U1")}`,
     });
@@ -239,22 +234,20 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
       "one row per person+app+hour, filed under the app's OWNER scope; not_found is never audited",
     );
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   }
 });
 
 test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing the throttled deployment", async () => {
   let upstreamHits = 0;
-  const upstream = createHttpServer((_req, res) => {
+  const upstream = stubHttp((_req, res) => {
     upstreamHits++;
     res.writeHead(429, { "retry-after": "1" });
     res.end();
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = appServingUpstream(upstream.port);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -262,40 +255,36 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
     files: [],
     name: "throttled",
   });
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const host = "throttled.apps.example.com";
   const cookie = `portal_session=${mintPortalSession("U1")}`;
 
   try {
-    const first = await httpGet(port, "/", { Host: host, Cookie: cookie });
+    const first = await httpGet(server.port, "/", { Host: host, Cookie: cookie });
     assert.equal(first.status, 429, "the upstream throttle reaches the visitor");
-    const second = await httpGet(port, "/", { Host: host, Cookie: cookie });
+    const second = await httpGet(server.port, "/", { Host: host, Cookie: cookie });
     assert.equal(second.status, 429, "the shield answers throttled too");
     assert.ok(second.headers["retry-after"], "the shield tells clients when to come back");
     assert.equal(upstreamHits, 1, "a throttled deployment is not re-dialed while the shield is up");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   }
 });
 
 test("subdomain ingress: an app's own 429 (with a body) passes through without arming the shield", async () => {
   let upstreamHits = 0;
-  const upstream = createHttpServer((_req, res) => {
+  const upstream = stubHttp((_req, res) => {
     upstreamHits++;
     res.writeHead(429, { "content-type": "application/json", "retry-after": "60" });
     res.end(JSON.stringify({ error: "slow down" }));
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = appServingUpstream(upstream.port);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -303,20 +292,18 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
     files: [],
     name: "ratelimited",
   });
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const host = "ratelimited.apps.example.com";
   const cookie = `portal_session=${mintPortalSession("U1")}`;
 
   try {
-    const first = await httpGet(port, "/", { Host: host, Cookie: cookie });
+    const first = await httpGet(server.port, "/", { Host: host, Cookie: cookie });
     assert.equal(first.status, 429);
-    const second = await httpGet(port, "/", { Host: host, Cookie: cookie });
+    const second = await httpGet(server.port, "/", { Host: host, Cookie: cookie });
     assert.equal(second.status, 429);
     assert.equal(
       second.body,
@@ -325,37 +312,33 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
     );
     assert.equal(upstreamHits, 2, "an app-emitted 429 must not suppress the deployment for other visitors");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   }
 });
 
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
   const app = appServingUpstream(1);
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   try {
-    const r = await httpGet(port, "/nope", { Host: "agent.internal.example.com" });
+    const r = await httpGet(server.port, "/nope", { Host: "agent.internal.example.com" });
     assert.notEqual(r.status, 401, "a normal host must not hit the subdomain gate");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 
 test("subdomain ingress: the gateway vouches for the verified viewer with a per-deployment identity header", async () => {
   const seen: Array<Record<string, string | string[] | undefined>> = [];
-  const upstream = createHttpServer((req, res) => {
+  const upstream = stubHttp((req, res) => {
     seen.push({ ...req.headers });
     res.end("UPSTREAM OK");
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = appServingUpstream(upstream.port);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -364,19 +347,17 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
     name: "idsite",
   });
   const signingSecret = "s".repeat(64);
-  const server = createServer(app, {
+  const server = serveApp(app, {
     signingSecret,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
     ...SESSION_DEPS,
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const host = "idsite.apps.example.com";
 
   try {
-    const res = await httpGet(port, "/", {
+    const res = await httpGet(server.port, "/", {
       Host: host,
       Cookie: `portal_session=${mintPortalSession("U1")}`,
       [PORTAL_IDENTITY_HEADER]: "forged-by-client",
@@ -393,7 +374,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
       "another deployment's key rejects it — no cross-app reuse",
     );
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   }
 });

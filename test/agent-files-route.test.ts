@@ -2,15 +2,11 @@ import "./support/auto-fake-sprites.ts";
 
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 
 const SECRET = "agent-files-secret".repeat(3);
 
@@ -31,9 +27,7 @@ it("detects charset parameters outside quoted parameter values", () => {
 });
 
 describe("agent files self-API", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi({ signingSecret: SECRET }, () => ({ signingSecret: SECRET }));
   let mineId: string;
   let theirsId: string;
   let encodedId: string;
@@ -54,10 +48,6 @@ describe("agent files self-API", async () => {
     fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = fileArtifactId("mine", "out", 0);
     theirsId = fileArtifactId("theirs", "out", 0);
     encodedId = fileArtifactId("encoded", "out", 0);
@@ -104,9 +94,7 @@ describe("agent files self-API", async () => {
     });
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   it("requires a capability token", async () => {
     assert.equal((await get("/v1/files")).status, 401);

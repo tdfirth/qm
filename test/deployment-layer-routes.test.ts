@@ -2,39 +2,25 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "../src/wiring.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
 
 function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Record<string, unknown> = {}) {
-  const built = buildApp(testConfig({ signingSecret: SECRET, ...overrides }));
-  const server = createServer(built.app, {
+  return startApi({ signingSecret: SECRET, ...overrides }, (built) => ({
     signingSecret: SECRET,
     deploymentLayer: built.deploymentLayerStore,
     auditLog: built.auditLog,
     ...serverDeps,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return {
-    base,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-    skills: built.skills,
-    auditLog: built.auditLog,
-    deploymentLayerStore: built.deploymentLayerStore,
-  };
+  }));
 }
 
 function signed(method: string, body: string, ts = Math.floor(Date.now() / 1000)): Record<string, string> {
@@ -63,7 +49,7 @@ test("an empty layer GETs the version-0 shape with a source discriminator under 
 });
 
 test("a baked filesystem layer with no durable record GETs source=filesystem and its live resolved state", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "layer-routes-fs-"));
+  const dir = tmpDir("layer-routes-fs-");
   mkdirSync(join(dir, "tools", "acme"), { recursive: true });
   writeFileSync(join(dir, "tools", "acme", "tool.json"), JSON.stringify({ id: "acme", advertise: "acme CLI (baked)" }));
   const srv = start({ deploymentLayerDir: dir });
@@ -164,7 +150,7 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
     assert.equal(initialPut.status, 200);
     const initialHash = ((await initialPut.json()) as { contentHash: string }).contentHash;
 
-    t.mock.method(srv.skills, "create", async () => {
+    t.mock.method(srv.built.skills, "create", async () => {
       throw new Error("poisoned skill store");
     });
     const failedPut = await fetch(`${srv.base}${PATH}`, {
@@ -177,7 +163,7 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
     assert.equal(failedBody.ok, true);
     assert.equal(failedBody.status, "degraded");
     assert.match(failedBody.message, /poisoned skill store/);
-    const audits = await srv.auditLog.events();
+    const audits = await srv.built.auditLog.events();
     assert.equal(
       audits.filter((event) => event.action === "deployment_layer.updated").length,
       2,
@@ -320,11 +306,11 @@ test("cross-tool credential collisions and unpaired surrogates are 400s", async 
 test("a skill collision racing after validation is accepted degraded and audited", async (t) => {
   const srv = start();
   try {
-    const record = await srv.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup");
-    t.mock.method(srv.deploymentLayerStore, "put", async () => {
+    const record = await srv.built.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup");
+    t.mock.method(srv.built.deploymentLayerStore, "put", async () => {
       throw new DeploymentLayerPersistedError("deployment layer persisted but skills acme collide", record);
     });
-    t.mock.method(srv.deploymentLayerStore, "isApplied", () => false);
+    t.mock.method(srv.built.deploymentLayerStore, "isApplied", () => false);
 
     const put = await fetch(`${srv.base}${PATH}`, { method: "PUT", headers: signed("PUT", bundle), body: bundle });
     const responseText = await put.text();
@@ -334,7 +320,7 @@ test("a skill collision racing after validation is accepted degraded and audited
     assert.equal(body.status, "degraded");
     assert.match(body.message, /persisted but skills acme collide/);
 
-    const events = await srv.auditLog.events();
+    const events = await srv.built.auditLog.events();
     assert.ok(
       events.some((event) => event.action === "deployment_layer.updated" && event.resource === body.contentHash),
     );

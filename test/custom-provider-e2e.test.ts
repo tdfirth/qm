@@ -4,15 +4,8 @@
 // model call leaving QM and hitting the endpoint, edit-without-key, delete.
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, stubHttp, tmpDir } from "./support/api.ts";
 import { oneShot } from "../src/harness/pi-harness.ts";
 import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
@@ -26,7 +19,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---
   const seen: Array<{ path: string; auth: string | undefined; model?: string }> = [];
-  const upstream = createServer((req, res) => {
+  const upstream = stubHttp((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -55,12 +48,10 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
       res.writeHead(404);
       res.end();
     });
-  });
-  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
-  const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
+  }, "127.0.0.1");
+  const upstreamUrl = `${upstream.base}/v1`;
 
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const srv = startApi({ dataDir: tmpDir("qa-custom-") }, (built) => ({
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -68,10 +59,8 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     admin: built.admin,
     auditLog: built.auditLog,
     harnessId: "pi",
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
+  }));
+  const api = (path: string, init?: RequestInit) => fetch(`${srv.base}${path}`, { headers: ADMIN, ...init });
 
   try {
     // 1. empty list
@@ -189,19 +178,18 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(r.status, 404, "second delete 404s");
 
     // 9. non-admin cannot touch any of it
-    r = await fetch(`${base}/v1/admin/custom-providers`, { headers: { "content-type": "application/json" } });
+    r = await srv.get("/v1/admin/custom-providers", { "content-type": "application/json" });
     assert.notEqual(r.status, 200, "unauthenticated read refused");
   } finally {
-    server.close();
-    upstream.close();
+    void srv.close();
+    void upstream.close();
   }
 });
 
 test("QA: openai-responses custom provider serves a real turn through the generated Pi registry", async () => {
   const upstream = await verificationUpstream();
   const upstreamUrl = `${upstream.url}/v1`;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const srv = startApi({ dataDir: tmpDir("qa-responses-") }, (built) => ({
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -209,10 +197,8 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     admin: built.admin,
     auditLog: built.auditLog,
     harnessId: "pi",
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
+  }));
+  const api = (path: string, init?: RequestInit) => fetch(`${srv.base}${path}`, { headers: ADMIN, ...init });
   const spec = {
     name: "Responses Provider",
     protocol: "openai-responses",
@@ -264,14 +250,14 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     assert.equal(saved?.protocol, "openai-responses");
     assert.equal(saved?.hasKey, true);
   } finally {
-    server.close();
+    void srv.close();
     await upstream.close();
   }
 });
 
 test("QA: anthropic-protocol custom provider serves a real turn (correct wire shape + headers)", async () => {
   const seen: Array<{ path: string; apiKeyHeader?: string; version?: string; model?: string }> = [];
-  const upstream = createServer((req, res) => {
+  const upstream = stubHttp((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -309,12 +295,10 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
       res.writeHead(404);
       res.end();
     });
-  });
-  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
-  const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  }, "127.0.0.1");
+  const upstreamUrl = upstream.base;
 
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-ant-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const srv = startApi({ dataDir: tmpDir("qa-ant-") }, (built) => ({
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -322,21 +306,19 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     admin: built.admin,
     auditLog: built.auditLog,
     harnessId: "pi",
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  }));
   try {
-    const r = await fetch(`${base}/v1/admin/custom-providers/antcompat`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({
+    const r = await srv.put(
+      "/v1/admin/custom-providers/antcompat",
+      {
         name: "Ant Compat",
         protocol: "anthropic",
         baseUrl: upstreamUrl,
         apiKey: "sk-ant-qa",
         models: [{ id: "claude-compat", name: "Claude Compat" }],
-      }),
-    });
+      },
+      ADMIN,
+    );
     assert.equal(r.status, 200, "anthropic-protocol registration validates against /v1/models with x-api-key");
     const model = resolveModel("claude-compat");
     assert.ok(model);
@@ -348,8 +330,8 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     assert.equal(call!.model, "claude-compat");
     assert.equal(call!.apiKeyHeader, "sk-ant-qa", "anthropic wire auth uses x-api-key");
   } finally {
-    server.close();
-    upstream.close();
+    void srv.close();
+    void upstream.close();
   }
 });
 

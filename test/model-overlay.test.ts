@@ -1,9 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serveApp, stubHttp } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
@@ -17,12 +16,9 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  server.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
   try {
-    const response = await fetch(`${base}/v1/runtime-config`, {
+    const response = await fetch(`${server.base}/v1/runtime-config`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({
@@ -37,7 +33,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     assert.match(JSON.stringify(body), /model|supported/);
     console.log(`Baseline: unknown model resolution throws; live runtime selection HTTP ${response.status}`);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 
@@ -213,11 +209,9 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
-    fetch(`${base}${path}`, {
+    fetch(`${server.base}${path}`, {
       method,
       headers,
       ...(body === undefined
@@ -315,11 +309,10 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 
-import { createServer } from "node:http";
 import { oneShot, createPiHarness, wantsFastMode } from "../src/harness/pi-harness.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
@@ -327,7 +320,7 @@ import { calculateCost } from "@earendil-works/pi-ai";
 test("Pi serves an overlay via the inherited provider endpoint and metadata drives request limits and pricing", async () => {
   let received: { model?: string; max_tokens?: number } | undefined;
   let authorized = false;
-  const upstream = createServer((req, res) => {
+  const upstream = stubHttp((req, res) => {
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
@@ -357,9 +350,8 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       event("message_stop", {});
       res.end();
     });
-  });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
+  }, "127.0.0.1");
+  setProviderBaseUrls({ anthropic: upstream.base });
   try {
     setModelOverlays([
       validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 10_000 }),
@@ -416,7 +408,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(usage.cost.cacheWrite, 0.0016);
   } finally {
     setProviderBaseUrls({});
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await upstream.close();
   }
 });
 
@@ -469,28 +461,22 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       await registry.refresh();
     },
   };
-  const server = createInsecureTestServer(built.app, deps);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serveApp(built.app, deps, "127.0.0.1");
   try {
-    assert.equal((await fetch(base + "/v1/admin/whoami", { headers: ADMIN })).status, 200);
+    assert.equal((await server.get("/v1/admin/whoami", ADMIN)).status, 200);
     assert.equal(refreshes, 0);
     assert.equal(
-      (await fetch(base + "/v1/admin/model-registry", { headers: { ...ADMIN, "x-admin-actor": "bob@default-org" } }))
-        .status,
+      (await server.get("/v1/admin/model-registry", { ...ADMIN, "x-admin-actor": "bob@default-org" })).status,
       403,
     );
     assert.equal(refreshes, 0);
-    const list = await fetch(base + "/v1/admin/model-registry", { headers: ADMIN });
+    const list = await server.get("/v1/admin/model-registry", ADMIN);
     assert.equal(list.status, 200);
     assert.equal(refreshes, 1);
     assert.match(JSON.stringify(await list.json()), /template is unavailable/);
-    assert.equal(
-      (await fetch(base + "/v1/admin/model-registry/stale", { method: "DELETE", headers: ADMIN })).status,
-      200,
-    );
+    assert.equal((await server.del("/v1/admin/model-registry/stale", ADMIN)).status, 200);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 

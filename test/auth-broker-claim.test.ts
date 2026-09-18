@@ -4,15 +4,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe, type ReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
@@ -29,32 +23,17 @@ function durableStub(): ReplayDedupe {
   };
 }
 
-function start(
-  replayDedupe: ReplayDedupe = durableStub(),
-  brokerSessions?: BrokerSessionStore,
-): {
-  base: string;
-  dedupe: ReplayDedupe;
-  close: () => Promise<void>;
-} {
-  const built: BuiltApp = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")), orgId: "acme" }),
-  );
-  const server = createServer(built.app, {
+const start = (replayDedupe: ReplayDedupe = durableStub(), brokerSessions?: BrokerSessionStore) => ({
+  ...startApi({ dataDir: tmpDir("auth-broker-claim-"), orgId: "acme" }, () => ({
     signingSecret: SECRET,
     replayDedupe,
     brokerSessions,
     requireSignedPortalIdentity: true,
     portalIdentitySecret: SECRET + "identity",
     capabilitySecret: SECRET + "capability",
-  });
-  server.listen(0);
-  return {
-    base: `http://localhost:${(server.address() as AddressInfo).port}`,
-    dedupe: replayDedupe,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-  };
-}
+  })),
+  dedupe: replayDedupe,
+});
 
 async function claim(
   base: string,

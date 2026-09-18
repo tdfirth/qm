@@ -3,37 +3,31 @@ import { installGlobalFakeSprites } from "./support/fake-sprites.ts";
 const fakeSprites = installGlobalFakeSprites();
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { serveApp, startApi } from "./support/api.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
 describe("POST /v1/reach with files", () => {
-  let server: Server;
-  let bare: Server;
-  let base: string;
-  let bareBase: string;
-  let built: BuiltApp;
+  const api = startApi({ signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    sandbox: built.sandbox,
+    blobTransfer: built.blobTransfer,
+    files: built.files,
+    environments: built.environments,
+    auditLog: built.auditLog,
+  }));
+  const { built } = api;
+  const bare = serveApp(built.app, { signingSecret: SECRET });
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
       { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
-
-  const post = (b: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${b}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
 
   const seedFile = async (actorId: string, relPath: string, data: string) => {
     const handle = await built.sandbox.provision([
@@ -45,35 +39,20 @@ describe("POST /v1/reach with files", () => {
 
   before(async () => {
     void fakeSprites;
-    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);
-    server = createServer(built.app, {
-      signingSecret: SECRET,
-      sandbox: built.sandbox,
-      blobTransfer: built.blobTransfer,
-      files: built.files,
-      environments: built.environments,
-      auditLog: built.auditLog,
-    });
-    bare = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    await new Promise<void>((resolve) => bare.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    bareBase = `http://localhost:${(bare.address() as AddressInfo).port}`;
   });
 
   after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => bare.close(() => resolve()));
+    await api.close();
+    await bare.close();
   });
 
   it("composes named workspace files into the delivery as attachments (the silent-drop bug)", async () => {
     await seedFile("U-carol", "reports/report.md", "# hello Alice\n");
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "here's the report", recipient: "Alice", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -97,8 +76,7 @@ describe("POST /v1/reach with files", () => {
 
   it("is all-or-nothing: a missing path refuses the WHOLE call and enqueues nothing", async () => {
     const beforeCount = (await built.app.pendingDeliveries("principal")).length;
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "doomed", recipient: "Alice", files: ["reports/nope.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -118,8 +96,7 @@ describe("POST /v1/reach with files", () => {
   it("rolls back the good file's staging when a mixed list fails — no orphaned blob or artifact behind the 400", async () => {
     await seedFile("U-carol", "reports/kept.md", "the good file\n");
     await built.blobTransfer.sweep(0);
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "mixed", recipient: "Alice", files: ["reports/kept.md", "reports/gone.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -132,8 +109,7 @@ describe("POST /v1/reach with files", () => {
     const owned = await built.files.listOwnedByScopes([scopeId("personal", "U-carol")]);
     assert.ok(!owned.files.some((f) => f.name === "kept.md"), "no orphaned artifact for the good file");
     await seedFile("U-carol", "reports/kept2.md", "also good\n");
-    const res2 = await post(
-      base,
+    const res2 = await api.post(
       "/v1/reach",
       { text: "mixed2", recipient: "Alice", files: ["reports/gone.md", "reports/kept2.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -146,8 +122,7 @@ describe("POST /v1/reach with files", () => {
 
   it("resolves the target BEFORE staging files: a bad recipient refuses with nothing created", async () => {
     await seedFile("U-carol", "reports/orphan.md", "would leak\n");
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "to no one", recipient: "Nobody Realname", files: ["reports/orphan.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -162,16 +137,14 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("rejects a malformed files field instead of ignoring it", async () => {
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "x", recipient: "Alice", files: "reports/report.md" },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
     assert.match(((await res.json()) as any).message, /files must be an array/);
-    const res2 = await post(
-      base,
+    const res2 = await api.post(
       "/v1/reach",
       { text: "x", recipient: "Alice", files: [42] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -180,16 +153,14 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("rejects a path that climbs out of the workspace (.. segments)", async () => {
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "x", recipient: "Alice", files: ["../home-secret.txt"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
     assert.match(((await res.json()) as any).message, /no \.\. path segments/);
-    const res2 = await post(
-      base,
+    const res2 = await api.post(
       "/v1/reach",
       { text: "x", recipient: "Alice", files: ["reports/../../etc/passwd"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -198,8 +169,7 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("rejects files on a react/delete (attachments compose into a text post only)", async () => {
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { react: { ts: "123.456", emoji: "tada" }, channel: "eng", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -209,8 +179,7 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("501s honestly when the server has no sandbox/blob store wired — never a lying 200", async () => {
-    const res = await post(
-      bareBase,
+    const res = await bare.post(
       "/v1/reach",
       { text: "x", recipient: "Alice", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
@@ -220,8 +189,7 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("a plain text-only reach still works unchanged", async () => {
-    const res = await post(
-      base,
+    const res = await api.post(
       "/v1/reach",
       { text: "no files here", recipient: "Alice" },
       { "x-agent-capability": await capDm("U-carol") },

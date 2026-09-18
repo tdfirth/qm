@@ -4,11 +4,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { once } from "node:events";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { startApi, stubHttp } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -17,26 +14,18 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
-  const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    mcpServers: store,
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const srv = startApi(
+    { dataDir: dir },
+    (built) => ({ admin: built.admin, auditLog: built.auditLog, mcpServers: store }),
+    "127.0.0.1",
+  );
   t.after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await srv.close();
     await rm(dir, { recursive: true, force: true });
   });
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers/crm`;
   const put = (body: object, headers = ADMIN) =>
-    fetch(url, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ url: "https://tools.example.com/mcp", validate: false, ...body }),
-    });
+    srv.put("/v1/admin/mcp-servers/crm", { url: "https://tools.example.com/mcp", validate: false, ...body }, headers);
   assert.equal((await put({ credentialScope: "other" })).status, 400);
   assert.equal((await put({ credentialScope: "per-user" })).status, 400);
   assert.equal(
@@ -94,7 +83,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = "operator-token";
   const built = buildApp(testConfig({ dataDir: dir, egressServiceHosts: ["accounts.example.com"] }));
   let calls = 0;
-  const remote = createServer(async (req, res) => {
+  const remote = stubHttp(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const rpc = JSON.parse(Buffer.concat(chunks).toString());
@@ -109,12 +98,10 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
             : { content: [{ type: "text", text: req.headers.authorization }] },
       }),
     );
-  });
-  remote.listen(0, "127.0.0.1");
-  await once(remote, "listening");
+  }, "127.0.0.1");
   t.after(async () => {
     built.mcpToolService.close();
-    await new Promise<void>((resolve) => remote.close(() => resolve()));
+    await remote.close();
     if (previous === undefined) delete process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
     else process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = previous;
     await rm(dir, { recursive: true, force: true });
@@ -122,7 +109,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   await built.mcpServers.put({
     id: "crm",
     name: "CRM",
-    url: `http://127.0.0.1:${(remote.address() as AddressInfo).port}/mcp`,
+    url: `${remote.base}/mcp`,
     auth: "none",
     credentialScope: "per-user",
     credentialHost: "accounts.example.com",

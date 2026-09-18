@@ -2,30 +2,19 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
 
-function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
-  const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
-  const server = signingSecret
-    ? createServer(built.app, { ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  return {
-    base: `http://localhost:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
+function start(signingSecret?: string, publicUrl?: string) {
+  return startApi({ dataDir: tmpDir("wh-") }, (built) => ({
+    ...(publicUrl ? { publicUrl } : {}),
+    webhookReceiver: built.webhookReceiver,
+    ...(signingSecret ? { signingSecret } : {}),
+  }));
 }
 
 function sign(method: string, pathWithQuery: string, body: string): Record<string, string> {

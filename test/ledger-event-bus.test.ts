@@ -2,17 +2,13 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import {
   createMemoryLedgerEventBus,
   createPostgresLedgerEventBus,
   type OwnedLedgerEvent,
 } from "../src/loops/ledger-events.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const PG = process.env.DATABASE_URL;
@@ -71,14 +67,11 @@ test("[postgres] ledger events cross bus instances (pg_notify)", { skip: pgSkip 
 });
 
 test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped with the loop owner", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "ap-ledger-sse-"));
-  const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("ap-ledger-sse-"), orgId: "acme" }));
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
-  core.listen(0);
-  const base = `http://localhost:${(core.address() as AddressInfo).port}`;
+  const core = serveApp(built.app, { webhookReceiver: built.webhookReceiver });
   try {
-    const res = await fetch(`${base}/v1/loop-items/events`, { signal: AbortSignal.timeout(15_000) });
+    const res = await fetch(`${core.base}/v1/loop-items/events`, { signal: AbortSignal.timeout(15_000) });
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
@@ -115,7 +108,7 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
     assert.equal(frame!.op, "ingest");
     assert.equal(frame!.owner, "josh", "the frame carries the loop owner the BFF routes by");
   } finally {
-    await new Promise<void>((r) => core.close(() => r()));
+    await core.close();
     await built.runtime.stop();
   }
 });

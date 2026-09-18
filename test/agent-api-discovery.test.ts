@@ -2,38 +2,21 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-async function start(swarmsEnabled = true) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "agent-apis-")),
-      signingSecret: SECRET,
-      swarmsEnabled,
-    }),
-  );
-  const server = createServer(built.app, {
+const start = (swarmsEnabled = true) =>
+  startApi({ dataDir: tmpDir("agent-apis-"), signingSecret: SECRET, swarmsEnabled }, (built) => ({
     admin: built.admin,
     memory: built.memory,
     auditLog: built.auditLog,
     signingSecret: SECRET,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const capFor = (
   actorId: string,
@@ -64,7 +47,7 @@ const listApis = async (base: string, cap: string) => {
 const paths = (body: any): string[] => body.endpoints.map((e: any) => e.path);
 
 test("discovery for a regular user: base surface + whoami, no admin rows, no memory rows without claims", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { status, body } = await listApis(s.base, await capFor("U1"));
     assert.equal(status, 200);
@@ -94,7 +77,7 @@ test("discovery for a regular user: base surface + whoami, no admin rows, no mem
 });
 
 test("discovery follows the token's memory claims, including the org selector", async () => {
-  const s = await start();
+  const s = start();
   try {
     const U1 = scopeId("personal", "U1");
     const hasOrgSelector = (body: any) => body.endpoints.some((e: any) => e.summary.includes('"scope":"org"'));
@@ -115,7 +98,7 @@ test("discovery follows the token's memory claims, including the org selector", 
 });
 
 test("discovery for an org admin's LIVE turn includes the admin plane (live grant check), with guidance", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { body } = await listApis(s.base, await capFor("admin-alice", { liveActor: true }));
     assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
@@ -133,7 +116,7 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
 });
 
 test("an admin's AUTONOMOUS turn (no liveActor) is shown no admin plane — matching what the gate enforces", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { body } = await listApis(s.base, await capFor("admin-alice"));
     assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
@@ -146,7 +129,7 @@ test("an admin's AUTONOMOUS turn (no liveActor) is shown no admin plane — matc
 });
 
 test("a granted autonomous turn discovers only the unattended read family", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { body } = await listApis(s.base, await capFor("admin-alice", { grants: ["admin.sessions.read"] }));
     const adminPaths = paths(body).filter((path) => path.startsWith("/v1/admin/"));
@@ -165,7 +148,7 @@ test("a granted autonomous turn discovers only the unattended read family", asyn
 });
 
 test("discovery requires a capability token", async () => {
-  const s = await start();
+  const s = start();
   try {
     assert.equal((await fetch(`${s.base}/v1/apis`)).status, 401);
   } finally {
@@ -174,7 +157,7 @@ test("discovery requires a capability token", async () => {
 });
 
 test("discovery advertises the deployment share endpoint, with guidance", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { body } = await listApis(s.base, await capFor("U1"));
     const p = paths(body);
@@ -224,7 +207,7 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
 });
 
 test("discovery includes admin routes for a verified human thread reply", async () => {
-  const s = await start();
+  const s = start();
   try {
     const { body } = await listApis(
       s.base,
@@ -249,7 +232,7 @@ test("discovery includes admin routes for a verified human thread reply", async 
 });
 
 test("disabled swarms are absent from discovery and reject direct API calls", async () => {
-  const { base, built, close } = await start(false);
+  const { base, built, close } = start(false);
   try {
     assert.equal(built.app.swarms, undefined);
     const token = await capFor("U1");

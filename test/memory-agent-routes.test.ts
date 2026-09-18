@@ -1,22 +1,16 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
 describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, post, put, get, close } = startApi(
+    { dataDir: tmpDir("memory-routes-"), signingSecret: SECRET },
+    (built) => ({ signingSecret: SECRET, memory: built.memory }),
+  );
 
   const capFor = async (actorId: string, memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] }) =>
     await mintCapabilityToken(
@@ -29,35 +23,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       SECRET,
     );
 
-  before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "memory-routes-")),
-        signingSecret: SECRET,
-      }),
-    );
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
-
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const put = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
+  after(close);
 
   const U1 = scopeId("personal", "U1");
   const ORG = scopeId("org", "default-org");
@@ -254,9 +220,11 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 });
 
 describe("agent memory: cross-conversation writes are refused", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ dataDir: tmpDir("memory-room-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    memory: built.memory,
+  }));
+  const { built } = api;
 
   const CH_PUBLIC = "C-eng";
   const CH_PRIVATE = "C-secret";
@@ -274,12 +242,6 @@ describe("agent memory: cross-conversation writes are refused", () => {
     );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "memory-room-")),
-        signingSecret: SECRET,
-      }),
-    );
     await built.directory.replace([
       { principalId: "U1", displayName: "Una", type: "internal" },
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
@@ -296,21 +258,11 @@ describe("agent memory: cross-conversation writes are refused", () => {
       { groupId: GROUP, principalId: "U-carol" },
       { groupId: GROUP, principalId: "U-sam" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(api.close);
 
-  const post = (body: unknown, cap: string) =>
-    fetch(`${base}/v1/memory/facts`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify(body),
-    });
+  const post = (body: unknown, cap: string) => api.post("/v1/memory/facts", body, { "x-agent-capability": cap });
 
   it("does not let an internal non-member plant a public channel notebook", async () => {
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
@@ -376,11 +328,11 @@ describe("agent memory: cross-conversation writes are refused", () => {
 
   it("400s a channel target on a non-facts memory verb", async () => {
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
-    const res = await fetch(`${base}/v1/memory/self`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify({ channel: "eng", content: "# Memory\n\n- hijack" }),
-    });
+    const res = await api.put(
+      "/v1/memory/self",
+      { channel: "eng", content: "# Memory\n\n- hijack" },
+      { "x-agent-capability": cap },
+    );
     assert.equal(res.status, 400);
     assert.doesNotMatch(await built.memory.read(scopeId("channel", CH_PUBLIC)), /hijack/);
   });

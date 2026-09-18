@@ -1,20 +1,15 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 
 const SECRET = "reach-thread-secret".repeat(3);
 const TS = "1723497600.123456";
 
 describe("POST /v1/reach with threadTs", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ signingSecret: SECRET }, () => ({ signingSecret: SECRET }));
+  const { built } = api;
 
   const cap = async (actorId: string) =>
     await mintCapabilityToken(
@@ -23,27 +18,17 @@ describe("POST /v1/reach with threadTs", () => {
     );
 
   const post = async (body: unknown, actorId = "U-carol") =>
-    fetch(`${base}/v1/reach`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": await cap(actorId) },
-      body: JSON.stringify(body),
-    });
+    api.post("/v1/reach", body, { "x-agent-capability": await cap(actorId) });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);
     await built.app.upsertChannels([{ channelId: "C-eng", name: "eng" }]);
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(api.close);
 
   it("threads a channel post: the delivery target carries channel:threadTs", async () => {
     const res = await post({ channel: "eng", text: "in the thread", threadTs: TS });

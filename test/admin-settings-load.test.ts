@@ -1,25 +1,16 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { buildApp, serverDeps } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { serverDeps } from "../src/wiring.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 
-function start(overrides: Partial<ServerDeps> = {}) {
-  const config = testConfig();
-  const built = buildApp(config);
-  const deps = { ...serverDeps(config, built), ...overrides };
-  const server = createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { built, deps, base, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
-}
+const start = (overrides: Partial<ServerDeps> = {}) =>
+  startApi({}, (built, config) => ({ ...serverDeps(config, built), ...overrides }));
 
 const scopePath = "/v1/admin/scopes/org%3Adefault-org";
 

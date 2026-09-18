@@ -145,8 +145,7 @@ import "./support/auto-fake-sprites.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { AddressInfo } from "node:net";
+import { serveApp } from "./support/api.ts";
 import { probeModel } from "../src/harness/pi-harness.ts";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";
@@ -160,18 +159,16 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
   const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
-  const path = base + "/v1/admin/model-registry/" + spec.id;
+  const path = server.base + "/v1/admin/model-registry/" + spec.id;
   const put = (body: object, actor = headers["x-admin-actor"]) =>
     fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
   const runtime = async () =>
     (
-      await fetch(
-        base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-        { headers },
+      await server.get(
+        "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
+        headers,
       )
     ).json() as Promise<{
       effective: { modelId: string };
@@ -241,8 +238,8 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     assert.equal(((await missing.json()) as { error: string }).error, "missing_credential");
     assert.equal(upstream.requests.length, calls);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
+    server.server.closeAllConnections();
+    await server.close();
     await upstream.close();
     setProviderBaseUrls({});
   }

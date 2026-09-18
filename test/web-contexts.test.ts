@@ -2,40 +2,24 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import type { ContextSummary } from "../src/api/app.ts";
-import { testConfig } from "./support/test-config.ts";
+import { type Served, startApi, tmpDir } from "./support/api.ts";
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
-  const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { built, base, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+const start = () => startApi({ dataDir: tmpDir("webctx-") });
 
-const contexts = async (base: string, principalId: string): Promise<ContextSummary[]> => {
-  const res = await fetch(`${base}/v1/contexts?principalId=${encodeURIComponent(principalId)}`);
+const contexts = async (srv: Served, principalId: string): Promise<ContextSummary[]> => {
+  const res = await srv.get(`/v1/contexts?principalId=${encodeURIComponent(principalId)}`);
   assert.equal(res.status, 200);
   return ((await res.json()) as { contexts: ContextSummary[] }).contexts;
 };
 
-const webTurn = (base: string, actor: string, conversation: unknown, text = "hi") =>
-  fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ surface: "web", actor: { externalId: actor }, conversation, text }),
-  });
+const webTurn = (srv: Served, actor: string, conversation: unknown, text = "hi") =>
+  srv.post("/v1/turns", { surface: "web", actor: { externalId: actor }, conversation, text });
 
 test("GET /v1/contexts: personal always; public channels and current private memberships", async () => {
   const s = start();
   try {
-    const before = await contexts(s.base, "alice");
+    const before = await contexts(s, "alice");
     assert.equal(before.length, 1);
     assert.equal(before[0]!.scopeId, "personal:alice");
     assert.equal(before[0]!.kind, "personal");
@@ -48,12 +32,12 @@ test("GET /v1/contexts: personal always; public channels and current private mem
       [{ channelId: "C2", principalId: "alice" }],
     );
 
-    const alice = await contexts(s.base, "alice");
+    const alice = await contexts(s, "alice");
     assert.deepEqual(alice.map((c) => c.scopeId).sort(), ["channel:C1", "channel:C2", "personal:alice"]);
     assert.equal(alice[0]!.kind, "personal", "personal sorts first");
     assert.equal(alice.find((c) => c.scopeId === "channel:C2")!.isPrivate, true);
 
-    const bob = await contexts(s.base, "bob");
+    const bob = await contexts(s, "bob");
     assert.deepEqual(
       bob.map((c) => c.scopeId).sort(),
       ["channel:C1", "personal:bob"],
@@ -79,25 +63,19 @@ test("web turns into a shared scope are membership-checked; sessions then count 
       [{ channelId: "C2", principalId: "alice" }],
     );
 
-    const aliceOk = await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" });
+    const aliceOk = await webTurn(s, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" });
     assert.equal(aliceOk.status, 200);
-    const bobNo = await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t1", channelRef: "C2" });
+    const bobNo = await webTurn(s, "bob", { kind: "channel", threadRef: "web:bob:t1", channelRef: "C2" });
     assert.equal(bobNo.status, 403);
-    assert.equal(
-      (await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t2", channelRef: "C1" })).status,
-      200,
-    );
+    assert.equal((await webTurn(s, "bob", { kind: "channel", threadRef: "web:bob:t2", channelRef: "C1" })).status, 200);
 
-    assert.equal(
-      (await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t3", channelRef: "C9" })).status,
-      403,
-    );
-    assert.equal((await webTurn(s.base, "bob", { kind: "group", threadRef: "web:bob:t4" })).status, 403);
+    assert.equal((await webTurn(s, "bob", { kind: "channel", threadRef: "web:bob:t3", channelRef: "C9" })).status, 403);
+    assert.equal((await webTurn(s, "bob", { kind: "group", threadRef: "web:bob:t4" })).status, 403);
 
-    const bob = await contexts(s.base, "bob");
+    const bob = await contexts(s, "bob");
     assert.ok(bob.some((c) => c.scopeId === "channel:C1"));
 
-    const alice = await contexts(s.base, "alice");
+    const alice = await contexts(s, "alice");
     const c2 = alice.find((c) => c.scopeId === "channel:C2")!;
     assert.equal(c2.sessionCount, 1);
     assert.ok((c2.lastActivityAt ?? 0) > 0);
@@ -118,17 +96,13 @@ test("web turns into a shared scope are membership-checked; sessions then count 
 test("a web turn carrying fastMode on a non-fast model is accepted; dispatch masks the flag", async () => {
   const s = start();
   try {
-    const res = await fetch(`${s.base}/v1/turns`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        surface: "web",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef: "web:alice:fast1" },
-        text: "hi",
-        model: "claude-fable-5",
-        fastMode: true,
-      }),
+    const res = await s.post(`/v1/turns`, {
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:fast1" },
+      text: "hi",
+      model: "claude-fable-5",
+      fastMode: true,
     });
     assert.equal(res.status, 200);
   } finally {
@@ -139,28 +113,21 @@ test("a web turn carrying fastMode on a non-fast model is accepted; dispatch mas
 test("prior participation never authorizes a shared scope after directory membership is absent", async () => {
   const s = start();
   try {
-    const slack = await fetch(`${s.base}/v1/turns`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        surface: "slack",
-        actor: { externalId: "alice" },
-        conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
-        text: "hello",
-      }),
+    const slack = await s.post(`/v1/turns`, {
+      surface: "slack",
+      actor: { externalId: "alice" },
+      conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
+      text: "hello",
     });
     assert.equal(slack.status, 200);
 
     assert.equal(
-      (await webTurn(s.base, "alice", { kind: "group", threadRef: "web:alice:g1", channelRef: "G1" })).status,
+      (await webTurn(s, "alice", { kind: "group", threadRef: "web:alice:g1", channelRef: "G1" })).status,
       403,
     );
-    assert.equal(
-      (await webTurn(s.base, "bob", { kind: "group", threadRef: "web:bob:g1", channelRef: "G1" })).status,
-      403,
-    );
+    assert.equal((await webTurn(s, "bob", { kind: "group", threadRef: "web:bob:g1", channelRef: "G1" })).status, 403);
 
-    const alice = await contexts(s.base, "alice");
+    const alice = await contexts(s, "alice");
     assert.equal(
       alice.find((c) => c.scopeId === "group:G1"),
       undefined,
@@ -181,32 +148,32 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
       ],
     );
 
-    assert.equal((await webTurn(s.base, "alice", { kind: "dm", threadRef: "web:alice:p1" })).status, 200);
+    assert.equal((await webTurn(s, "alice", { kind: "dm", threadRef: "web:alice:p1" })).status, 200);
     assert.equal(
-      (await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
+      (await webTurn(s, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
       200,
     );
 
     assert.equal(
-      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
+      (await webTurn(s, "carol", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
       200,
     );
 
-    assert.equal((await webTurn(s.base, "carol", { kind: "dm", threadRef: "web:alice:t1" })).status, 403);
+    assert.equal((await webTurn(s, "carol", { kind: "dm", threadRef: "web:alice:t1" })).status, 403);
     assert.equal(
-      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
+      (await webTurn(s, "carol", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
       403,
     );
     assert.equal(
-      (await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
+      (await webTurn(s, "alice", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
       403,
     );
 
     assert.equal(
-      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:default", channelRef: "C2" })).status,
+      (await webTurn(s, "carol", { kind: "channel", threadRef: "web:alice:default", channelRef: "C2" })).status,
       403,
     );
-    assert.equal((await webTurn(s.base, "alice", { kind: "dm", threadRef: "web:alice:default" })).status, 200);
+    assert.equal((await webTurn(s, "alice", { kind: "dm", threadRef: "web:alice:default" })).status, 200);
   } finally {
     await s.close();
   }
@@ -215,21 +182,17 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
 test("directory push stores the workspace URL; /v1/directory/meta serves it", async () => {
   const s = start();
   try {
-    const before = await fetch(`${s.base}/v1/directory/meta`);
+    const before = await s.get(`/v1/directory/meta`);
     assert.equal(before.status, 200);
     assert.deepEqual(await before.json(), { workspaceUrl: null });
 
-    const push = await fetch(`${s.base}/v1/directory`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        members: [{ principalId: "alice", displayName: "Alice", type: "internal" }],
-        workspaceUrl: "https://acme.slack.com/",
-      }),
+    const push = await s.post(`/v1/directory`, {
+      members: [{ principalId: "alice", displayName: "Alice", type: "internal" }],
+      workspaceUrl: "https://acme.slack.com/",
     });
     assert.equal(push.status, 200);
 
-    const after = (await (await fetch(`${s.base}/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
+    const after = (await (await s.get(`/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
     assert.equal(after.workspaceUrl, "https://acme.slack.com", "stored normalized, trailing slash dropped");
   } finally {
     await s.close();

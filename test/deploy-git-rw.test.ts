@@ -1,15 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
-import { createServer } from "../src/api/server.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -31,7 +28,7 @@ const GIT_ENV = {
 };
 
 function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
-  const deployStore = createDeployStore({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
+  const deployStore = createDeployStore({ git: { repoRoot: tmpDir("git-rw-repo-") } });
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
     deployStore,
@@ -42,7 +39,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
-    deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
+    deployDir: tmpDir("git-rw-deploy-"),
   });
   const identity = createIdentityService();
   const app = createApp({
@@ -52,10 +49,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     sessions: createMemorySessionStore(),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
-  const server: Server = createServer(app, { signingSecret: SECRET, identity, ...urls });
-  server.listen(0);
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { app, deploy, acl, identity, ...serveApp(app, { signingSecret: SECRET, identity, ...urls }, "127.0.0.1") };
 }
 
 async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
@@ -107,7 +101,7 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('v1')" }],
     });
-    const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
+    const work = tmpDir("git-rw-clone-");
     await execFileP("git", ["clone", "--quiet", await gitUrl(f.base, d.id, "read"), work], { env: GIT_ENV });
 
     await writeFile(join(work, "server.js"), "console.log('v2')");
@@ -138,7 +132,7 @@ test("a write token can push, and the push registers a new immutable version", a
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('v1')" }],
     });
-    const work = mkdtempSync(join(tmpdir(), "git-rw-push-"));
+    const work = tmpDir("git-rw-push-");
     await execFileP("git", ["clone", "--quiet", await gitUrl(f.base, d.id, "write"), work], { env: GIT_ENV });
 
     await mkdir(join(work, "sub"), { recursive: true });
@@ -239,7 +233,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
 
 test("git-url endpoint returns a clonable API URL when web and API origins differ", async () => {
   let coreBase = "";
-  const ingress = createHttpServer((req, res) => {
+  const ingress = stubHttp((req, res) => {
     const upstream = httpRequest(
       new URL(req.url ?? "/", coreBase),
       { method: req.method, headers: req.headers },
@@ -250,9 +244,8 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
     );
     upstream.on("error", (error) => res.destroy(error));
     req.pipe(upstream);
-  });
-  ingress.listen(0);
-  const apiBaseUrl = `http://127.0.0.1:${(ingress.address() as AddressInfo).port}`;
+  }, "127.0.0.1");
+  const apiBaseUrl = ingress.base;
   const f = fixture({ apiBaseUrl, publicUrl: "https://web.example" });
   coreBase = f.base;
   try {
@@ -268,11 +261,11 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
     assert.equal(response.status, 200);
     const body = (await response.json()) as { url: string };
     assert.equal(new URL(body.url).origin, apiBaseUrl);
-    const work = mkdtempSync(join(tmpdir(), "git-url-clone-"));
+    const work = tmpDir("git-url-clone-");
     await execFileP("git", ["clone", "--quiet", body.url, work], { env: GIT_ENV });
   } finally {
     await f.close();
-    await new Promise<void>((resolve) => ingress.close(() => resolve()));
+    await ingress.close();
   }
 });
 

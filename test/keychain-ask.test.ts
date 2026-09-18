@@ -2,13 +2,8 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
+import { buildApp } from "../src/wiring.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -623,9 +618,16 @@ test("manifest: requester-side ask ledger + ladder protocol, owner-side asks-wai
 });
 
 describe("/v1/keychain/asks — the consent ladder end to end", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ dataDir: tmpDir("kc-asks-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    keychain: built.keychain,
+    deliveries: built.deliveries,
+    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
+    workspace: built.workspace,
+    auditLog: built.auditLog,
+    credentialUsage: built.credentialUsage,
+  }));
+  const { built } = api;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
@@ -635,13 +637,8 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       destination: { type: "slack", target: "C_INFRA", audienceScopeId: "channel:C_INFRA" },
     });
 
-  const post = (path: string, body: unknown, cap: string) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, cap: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
+  const post = (path: string, body: unknown, cap: string) => api.post(path, body, { "x-agent-capability": cap });
+  const get = (path: string, cap: string) => api.get(path, { "x-agent-capability": cap });
   const waitFor = async <T>(probe: () => Promise<T[]>, ms = 5_000): Promise<T[]> => {
     const start = Date.now();
     for (;;) {
@@ -652,7 +649,6 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
   };
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
@@ -670,21 +666,8 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
       ],
     );
-    server = createServer(built.app, {
-      signingSecret: SECRET,
-      keychain: built.keychain,
-      deliveries: built.deliveries,
-      ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-      workspace: built.workspace,
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
-    });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(api.close);
 
   it("gates creation: personal ownership and directory-verified channel membership", async () => {
     const { credential } = (await (
@@ -1289,7 +1272,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
 test("turn e2e: trigger-fired turns mint `triggered` into the capability token; threadRef is carried", async () => {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "kc-claims-")),
+      dataDir: tmpDir("kc-claims-"),
       signingSecret: SECRET,
       apiBaseUrl: "http://core.test",
     }),

@@ -1,12 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -26,7 +22,7 @@ function externalChannelTurn(surface: string): TurnRequest {
 }
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "esp-")) }));
+  return buildApp(testConfig({ dataDir: tmpDir("esp-") }));
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", () => {
@@ -103,37 +99,35 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(built.app, {
+  const server = serveApp(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
     acl: built.acl,
     serviceCreds: built.serviceCreds,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
   try {
-    const notOrg = await fetch(`${base}/v1/admin/scopes/personal:u1/external-slack-participants`, {
+    const notOrg = await fetch(`${server.base}/v1/admin/scopes/personal:u1/external-slack-participants`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ on: true }),
     });
     assert.equal(notOrg.status, 400);
 
-    const put = await fetch(`${base}/v1/admin/scopes/org:default-org/external-slack-participants`, {
+    const put = await fetch(`${server.base}/v1/admin/scopes/org:default-org/external-slack-participants`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ on: true }),
     });
     assert.equal(put.status, 200);
 
-    const read = await fetch(`${base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const read = await fetch(`${server.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     assert.equal(((await read.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
 
-    const surf = await fetch(`${base}/v1/surface-config`);
+    const surf = await fetch(`${server.base}/v1/surface-config`);
     assert.equal(((await surf.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });

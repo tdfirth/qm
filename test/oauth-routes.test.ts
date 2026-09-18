@@ -2,15 +2,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -27,16 +21,8 @@ function sign(method: string, pathWithQuery: string, body = ""): Record<string, 
   };
 }
 
-function start(
-  fetchImpl: FetchLike,
-  opts: { oauthEnv?: NodeJS.ProcessEnv } = {},
-): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "oauth-routes-")),
-    }),
-  );
-  const server = createServer(built.app, {
+function start(fetchImpl: FetchLike, opts: { oauthEnv?: NodeJS.ProcessEnv } = {}) {
+  return startApi({ dataDir: tmpDir("oauth-routes-") }, (built) => ({
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
@@ -44,10 +30,7 @@ function start(
     auditLog: built.auditLog,
     oauthEnv: opts.oauthEnv ?? oauthEnv,
     oauthFetch: fetchImpl,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }));
 }
 
 test("OAuth start, unsigned callback, status, and revoke are principal-bound", async () => {

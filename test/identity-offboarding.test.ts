@@ -1,25 +1,19 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
 const member = (principalId: string) => ({ principalId, displayName: principalId, type: "internal" as const });
 
 describe("offboarding: directory sync and the /v1/principals routes drive deactivation (§3)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi(
+    { dataDir: tmpDir("offboarding-"), signingSecret: SECRET, emailAuthPrincipals: ["allowed@example.com"] },
+    (built) => ({ signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog }),
+  );
 
   const signedPost = (path: string) => {
     const ts = Math.floor(Date.now() / 1000);
@@ -33,23 +27,8 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     });
   };
 
-  before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "offboarding-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["allowed@example.com"],
-      }),
-    );
-    await built.identity.hydrate();
-    server = createServer(built.app, { signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
-
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  before(() => built.identity.hydrate());
+  after(close);
 
   it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);

@@ -1,33 +1,24 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);
 
-async function fixture(): Promise<{
-  base: string;
-  close: () => Promise<void>;
-  deployment: Deployment;
-}> {
+async function fixture() {
   const deployments = createMemoryMap<Deployment>();
   const archiveStore = createMemoryMap<DeployGitArchive>();
   const writerStore = createDeployStore({
     deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },
+    git: { repoRoot: tmpDir("deploy-git-remote-writer-"), archiveStore },
   });
   const deployment = await writerStore.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -43,16 +34,13 @@ async function fixture(): Promise<{
   await writerStore.setAppliedVersion(deployment.id, 1);
   const readerStore = createDeployStore({
     deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
+    git: { repoRoot: tmpDir("deploy-git-remote-reader-"), archiveStore },
   });
   const app = {
     listDeployments: async () => [deployment],
     deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
-  const server: Server = createServer(app, { signingSecret: SECRET });
-  server.listen(0);
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { base, deployment, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { deployment, ...serveApp(app, { signingSecret: SECRET }, "127.0.0.1") };
 }
 
 async function authedGitUrl(

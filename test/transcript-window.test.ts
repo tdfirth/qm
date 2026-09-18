@@ -2,16 +2,10 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { ENTRY_STRING_BUDGET, TRANSCRIPT_BYTE_BUDGET, windowedTranscript } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
   return {
@@ -168,16 +162,12 @@ test("windowedTranscript: one entry over budget still ships — a window is neve
   assert.equal(w.earlier, 0);
 });
 
-function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "transcript-window-")) }));
-  const server = createInsecureTestServer(built.app, {
+function start() {
+  return startApi({ dataDir: tmpDir("transcript-window-") }, (built) => ({
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }));
 }
 
 test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries", async () => {
@@ -187,43 +177,37 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     const threadRef = "web:U1:window-test";
     let sessionId = "";
     for (const text of ["first turn", "second turn", "third turn"]) {
-      const r = await fetch(`${srv.base}/v1/turns`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surface: "test", actor, conversation: { kind: "dm", threadRef }, text }),
-      });
+      const r = await srv.post("/v1/turns", { surface: "test", actor, conversation: { kind: "dm", threadRef }, text });
       const body = (await r.json()) as { status: string; sessionId?: string };
       assert.equal(body.status, "ok");
       sessionId = body.sessionId!;
     }
 
-    const full = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1`);
+    const full = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1`);
     assert.equal(full.status, 200);
     const fullBody = (await full.json()) as { entries: SessionEntry[]; earlierEntries?: number };
     assert.equal(fullBody.earlierEntries, undefined, "an unwindowed read never reports earlierEntries");
     const userSeqs = fullBody.entries.filter((e) => e.type === "user").map((e) => e.seq);
     assert.equal(userSeqs.length, 3);
 
-    const tail = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=1`);
+    const tail = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=1`);
     assert.equal(tail.status, 200);
     const tailBody = (await tail.json()) as { entries: SessionEntry[]; earlierEntries?: number };
     assert.equal(tailBody.entries[0]!.seq, userSeqs[2], "the window opens on the last turn's user entry");
     assert.equal(tailBody.earlierEntries, userSeqs[2], "everything before the anchor is counted, not shipped");
     assert.equal(tailBody.entries.length + tailBody.earlierEntries!, fullBody.entries.length);
 
-    const since = await fetch(
-      `${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&sinceSeq=${userSeqs[1]}`,
-    );
+    const since = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&sinceSeq=${userSeqs[1]}`);
     const sinceBody = (await since.json()) as { entries: SessionEntry[]; earlierEntries?: number };
     assert.equal(sinceBody.entries[0]!.seq, userSeqs[1], "sinceSeq re-reads from the same boundary");
 
-    const wide = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=999`);
+    const wide = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=999`);
     const wideBody = (await wide.json()) as { entries: SessionEntry[]; earlierEntries?: number };
     assert.equal(wideBody.entries.length, fullBody.entries.length);
     assert.equal(wideBody.earlierEntries, undefined);
 
-    const before = await fetch(
-      `${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&beforeSeq=${userSeqs[2]}&tailTurns=1`,
+    const before = await srv.get(
+      `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&beforeSeq=${userSeqs[2]}&tailTurns=1`,
     );
     assert.equal(before.status, 200);
     const beforeBody = (await before.json()) as { entries: SessionEntry[]; earlierEntries?: number };
@@ -235,23 +219,23 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     assert.equal(beforeBody.earlierEntries, userSeqs[1], "what remains before this page");
 
     const seq = fullBody.entries[0]!.seq;
-    const one = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U1`);
+    const one = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U1`);
     assert.equal(one.status, 200);
     const oneBody = (await one.json()) as { entry: SessionEntry };
     assert.deepEqual(oneBody.entry, fullBody.entries[0], "the whole entry, exactly as stored");
 
-    const missing = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/99999?viewer=U1`);
+    const missing = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}/entries/99999?viewer=U1`);
     assert.equal(missing.status, 404, "a seq that isn't in this session");
-    const stranger = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U2`);
+    const stranger = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U2`);
     assert.equal(stranger.status, 404, "a viewer who cannot see the session cannot see its entries");
-    const noViewer = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}`);
+    const noViewer = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}`);
     assert.equal(noViewer.status, 400, "viewer is required");
 
-    const bad = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=0`);
+    const bad = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=0`);
     assert.equal(bad.status, 400, "tailTurns must be a positive integer");
-    const badSince = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&sinceSeq=-1`);
+    const badSince = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&sinceSeq=-1`);
     assert.equal(badSince.status, 400, "sinceSeq must be non-negative");
-    const badBefore = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&beforeSeq=0`);
+    const badBefore = await srv.get(`/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&beforeSeq=0`);
     assert.equal(badBefore.status, 400, "beforeSeq must be a positive integer");
   } finally {
     await srv.close();

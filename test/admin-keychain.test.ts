@@ -2,35 +2,26 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));
   const keychain = createKeychain({
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
-  const server = createInsecureTestServer(built.app, {
+  const api = startApi({ dataDir: tmpDir("admin-keychain-") }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
     keychain,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, keychain, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }));
+  return { ...api, keychain };
 }
 
 test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non-admin denied; audited", async () => {

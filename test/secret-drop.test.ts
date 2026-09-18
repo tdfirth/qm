@@ -2,13 +2,8 @@ import "./support/auto-fake-sprites.ts";
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
+import { buildApp } from "../src/wiring.ts";
+import { serveApp, startApi, tmpDir } from "./support/api.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -192,18 +187,23 @@ describe("fireDropResolution", () => {
 });
 
 describe("/v1/keychain/drops — mint, form, redeem", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ dataDir: tmpDir("secret-drop-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    keychain: built.keychain,
+    secretDrops: built.secretDrops,
+    deliveries: built.deliveries,
+    workspace: built.workspace,
+    auditLog: built.auditLog,
+    runs: built.runs,
+    signals: built.signals,
+    identity: built.identity,
+  }));
+  const { built, base } = api;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
   const post = (path: string, body: unknown, cap?: string) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(cap ? { "x-agent-capability": cap } : {}) },
-      body: JSON.stringify(body),
-    });
+    api.post(path, body, cap ? { "x-agent-capability": cap } : {});
   let nonce = 0;
   const signed = (method: string, rawPath: string, body: string, owner?: string | null) => {
     const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
@@ -225,32 +225,16 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     );
   const linkToken = (formPath: string) => new URL(formPath, "http://x").searchParams.get("t");
 
-  before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
-    await built.directory.replaceChannels(
+  before(() =>
+    built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [
         { channelId: "C1", principalId: "U_A" },
         { channelId: "C1", principalId: "U_SPEAKER" },
       ],
-    );
-    server = createServer(built.app, {
-      signingSecret: SECRET,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      workspace: built.workspace,
-      auditLog: built.auditLog,
-      runs: built.runs,
-      signals: built.signals,
-      identity: built.identity,
-    });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+    ),
+  );
+  after(api.close);
 
   it("a triggered turn cannot mint a drop", async () => {
     const res = await post(
@@ -590,16 +574,14 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
 describe("/v1/keychain/drops — sibling-aware resume", () => {
   it("first redeem reports its pending sibling; the last redeem fires clean", async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
-    );
+    const built = buildApp(testConfig({ dataDir: tmpDir("secret-drop-sib-"), signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [{ channelId: "C1", principalId: "U_A" }],
     );
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
-    const server = createServer(built.app, {
+    const server = serveApp(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
       secretDrops: built.secretDrops,
@@ -611,19 +593,17 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
         fired?.();
       },
     });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     try {
       const cap = await mintCapabilityToken(
         { actorId: "U_A", scopeId: scopeId("channel", "C1"), threadRef: "th1", exp: Date.now() + CAPABILITY_TTL_MS },
         SECRET,
       );
       const mint = async (service: string) => {
-        const r = await fetch(`${base}/v1/keychain/drops`, {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-agent-capability": cap },
-          body: JSON.stringify({ service, purpose: "the task" }),
-        });
+        const r = await server.post(
+          "/v1/keychain/drops",
+          { service, purpose: "the task" },
+          { "x-agent-capability": cap },
+        );
         const { dropId, formPath } = (await r.json()) as { dropId: string; formPath: string };
         return { dropId, t: new URL(formPath, "http://x").searchParams.get("t")! };
       };
@@ -634,7 +614,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
         });
         const path = `/v1/keychain/drops/${dropId}?t=${encodeURIComponent(t)}&_n=${nonce++}`;
         const body = JSON.stringify({ secret });
-        const r = await fetch(`${base}${path}`, {
+        const r = await fetch(`${server.base}${path}`, {
           method: "POST",
           headers: {
             ...signedRequestHeaders(SECRET, "POST", path, body),
@@ -671,7 +651,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       assert.equal(fires.length, 3, "a failed sibling scan must not cancel the wake");
       assert.equal(fires[2]!.pendingSiblings, undefined, "scan failure degrades to a wake with no sibling note");
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await server.close();
     }
   });
 });

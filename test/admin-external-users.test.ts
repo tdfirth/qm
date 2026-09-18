@@ -2,18 +2,12 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail, type InviteMailer } from "../src/admin/invite-email.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -38,35 +32,26 @@ function stubMailer(fail?: string): { sent: Sent[]; mailer: InviteMailer } {
   };
 }
 
-function start(
+const start = (
   opts: { mailer?: InviteMailer; signed?: boolean; emailAuthDomain?: string; emailAuthPrincipals?: string[] } = {},
-) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-external-users-")),
+) =>
+  startApi(
+    { dataDir: tmpDir("admin-external-users-"), ...(opts.signed ? { signingSecret: SECRET } : {}) },
+    (built) => ({
+      admin: built.admin,
+      sessions: built.sessions,
+      auditLog: built.auditLog,
+      identity: built.identity,
+      directory: built.directory,
+      config: built.config,
+      portalUrl: PORTAL,
+      brandingDefault: { selfLabel: "Acme Bot" },
+      ...(opts.mailer ? { inviteMailer: opts.mailer } : {}),
+      ...(opts.emailAuthDomain ? { emailAuthDomain: opts.emailAuthDomain } : {}),
+      ...(opts.emailAuthPrincipals ? { emailAuthPrincipals: opts.emailAuthPrincipals } : {}),
       ...(opts.signed ? { signingSecret: SECRET } : {}),
     }),
   );
-  const deps = {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    identity: built.identity,
-    directory: built.directory,
-    config: built.config,
-    portalUrl: PORTAL,
-    brandingDefault: { selfLabel: "Acme Bot" },
-    ...(opts.mailer ? { inviteMailer: opts.mailer } : {}),
-    ...(opts.emailAuthDomain ? { emailAuthDomain: opts.emailAuthDomain } : {}),
-    ...(opts.emailAuthPrincipals ? { emailAuthPrincipals: opts.emailAuthPrincipals } : {}),
-  };
-  const server = opts.signed
-    ? createServer(built.app, { ...deps, signingSecret: SECRET })
-    : createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
 
 const invite = (base: string, body: unknown, headers: Record<string, string> = { "x-admin-actor": ALICE }) =>
   fetch(`${base}/v1/admin/external-users`, {

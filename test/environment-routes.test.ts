@@ -1,50 +1,27 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "env-route-test-secret".repeat(3);
 
 describe("environment verbs (list / create / attach, owner-gated)", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, post, get, close } = startApi({ dataDir: tmpDir("env-routes-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    scheduler: built.scheduler,
+  }));
 
   const cap = (actorId: string, scope = scopeId("personal", actorId)) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
 
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
-
-  before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "env-routes-")),
-        signingSecret: SECRET,
-      }),
-    );
-    await built.directory.replaceChannels(
+  before(() =>
+    built.directory.replaceChannels(
       [{ channelId: "C-eng", name: "eng", isPrivate: false }],
       [{ channelId: "C-eng", principalId: "U-owner" }],
-    );
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
-  after(() => server.close());
+    ),
+  );
+  after(close);
 
   it("create names THIS conversation's computer; the actor becomes its owner", async () => {
     const res = await post("/v1/environments", { name: "prod" }, { "x-agent-capability": await cap("U-owner") });

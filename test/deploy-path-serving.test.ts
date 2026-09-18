@@ -1,12 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import type { AddressInfo, Server } from "node:net";
+import { request as httpRequest } from "node:http";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -34,27 +30,25 @@ function httpGet(
 }
 
 async function fixture(
-  deps: Parameters<typeof createInsecureTestServer>[1],
+  deps: Parameters<typeof serveApp>[1],
   upstreamContentType = "text/html; charset=utf-8",
   upstreamHeaders: Record<string, string> = {},
 ) {
-  const upstream = createHttpServer((_req, res) => {
+  const upstream = stubHttp((_req, res) => {
     res.writeHead(200, { "content-type": upstreamContentType, ...upstreamHeaders });
     res.end("UPSTREAM OK");
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
+      apply: async () => ({ host: "127.0.0.1", port: upstream.port }),
       destroy: async () => {},
     },
     auditLog,
     acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "path-serving-")),
+    deployDir: tmpDir("path-serving-"),
   });
   const app = createApp({
     deploy,
@@ -70,14 +64,12 @@ async function fixture(
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, deps);
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
+  const server = serveApp(app, deps);
   const close = async () => {
-    await new Promise<void>((r) => (server as unknown as Server).close(() => r()));
-    await new Promise<void>((r) => upstream.close(() => r()));
+    await server.close();
+    await upstream.close();
   };
-  return { port, close };
+  return { port: server.port, close };
 }
 
 test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal's origin", async () => {

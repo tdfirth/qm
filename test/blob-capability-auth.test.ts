@@ -2,26 +2,18 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { mintCapabilityToken, BLOB_TRANSFER_AUD } from "../src/auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { scopeId } from "../src/types.ts";
 
 const SECRET = "blob-auth-secret".repeat(3);
 
-function start(): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")), signingSecret: SECRET }));
-  const server = createServer(built.app, { signingSecret: SECRET, blobTransfer: built.blobTransfer });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+const start = () =>
+  startApi({ dataDir: tmpDir("blobauth-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    blobTransfer: built.blobTransfer,
+  }));
 
 const tok = (blob: { dir: "read" | "write"; id?: string }) =>
   mintCapabilityToken(

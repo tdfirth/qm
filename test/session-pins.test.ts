@@ -1,13 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
@@ -16,9 +12,8 @@ function dm(externalId: string, text: string, thread: string): TurnRequest {
 }
 
 describe("conversation pins self-API", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ signingSecret: SECRET }, () => ({ signingSecret: SECRET }));
+  const { built } = api;
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
@@ -36,7 +31,7 @@ describe("conversation pins self-API", async () => {
     );
 
   const call = async (method: string, path: string, body?: unknown, token?: string) =>
-    fetch(`${base}${path}`, {
+    fetch(`${api.base}${path}`, {
       method,
       headers: {
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
@@ -46,16 +41,10 @@ describe("conversation pins self-API", async () => {
     });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     sessionId = (await built.app.turn(dm("U1", "remember the launch date is Sept 4", THREAD))).sessionId!;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(api.close);
 
   it("rejects a token not bound to a conversation", async () => {
     const res = await call("POST", "/v1/pins", { text: "note" }, await capFor("U1"));

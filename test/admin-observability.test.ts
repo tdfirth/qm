@@ -2,20 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { serveApp, startApi, tmpDir } from "./support/api.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
-  const built = buildApp(config);
-  const server = createInsecureTestServer(built.app, {
+  return startApi({ dataDir: tmpDir("admin-obs-"), ...overrides }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -26,10 +20,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     config: built.config,
     deliveries: built.deliveries,
     crons: built.crons,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }));
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -1017,7 +1008,7 @@ test("session deep links resolve by id even when the scope filter does not match
 });
 
 test("the Files view is the document store (write-tool artifacts), not the sandbox backup", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-fly-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-obs-fly-") }));
   const scope = "channel:C_FILE_FIXTURE";
   await built.files.put({
     id: "deck-1",
@@ -1029,7 +1020,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     data: Buffer.from("%PDF-1.4 deck"),
     direction: "out",
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = serveApp(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1039,10 +1030,8 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     files: built.files,
     sandboxBackend: "sprites",
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const list = await getJson(base, `/v1/admin/files?scope=${encodeURIComponent(scope)}`);
+    const list = await getJson(server.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}`);
     const names = (list.files as { name: string }[]).map((f) => f.name);
     assert.deepEqual(names, ["slides.pdf"], "the document is listed; the sandbox backup is never flattened into Files");
     const doc = list.files[0] as { mimetype: string; scopeId: string; openable: boolean };
@@ -1050,7 +1039,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     assert.equal(doc.scopeId, scope);
     assert.ok(doc.openable);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
@@ -1088,7 +1077,7 @@ test("the files listing filters by name server-side with q", async () => {
 });
 
 test("a saved document is read and downloaded by artifact id", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-doc-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-obs-doc-") }));
   const scope = "personal:U1";
   await built.files.put({
     id: "csv-1",
@@ -1100,7 +1089,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
     data: Buffer.from("a,b\n1,2"),
     direction: "out",
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = serveApp(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1110,15 +1099,13 @@ test("a saved document is read and downloaded by artifact id", async () => {
     files: built.files,
     sandboxBackend: "sprites",
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const list = await getJson(base, `/v1/admin/files?scope=${encodeURIComponent(scope)}`);
+    const list = await getJson(server.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}`);
     const f = (list.files as { id: string; name: string }[]).find((x) => x.name === "report.csv")!;
     assert.ok(f, "the document is listed for its owning scope");
-    const read = await getJson(base, `/v1/admin/files/read?id=${encodeURIComponent(f.id)}`);
+    const read = await getJson(server.base, `/v1/admin/files/read?id=${encodeURIComponent(f.id)}`);
     assert.equal(read.content, "a,b\n1,2", "content is served from the document store");
-    const download = await get(base, `/v1/admin/files/download?id=${encodeURIComponent(f.id)}`);
+    const download = await get(server.base, `/v1/admin/files/download?id=${encodeURIComponent(f.id)}`);
     assert.equal(download.status, 200);
     assert.match(download.headers.get("content-disposition") ?? "", /report\.csv/);
     assert.equal(
@@ -1127,7 +1114,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
       "bytes are downloadable by id",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
@@ -1148,9 +1135,9 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
 });
 
 test("admin governance reports the sandbox's actual egress enforcement capability", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-capability-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-egress-capability-") }));
   const read = async (declared: "none" | "ip_port" | "domain", effective: "none" | "ip_port" | "domain") => {
-    const server = createInsecureTestServer(built.app, {
+    const server = serveApp(built.app, {
       admin: built.admin,
       config: built.config,
       auditLog: built.auditLog,
@@ -1158,12 +1145,10 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
       egressDeclaredEnforcement: declared,
       egressEnforcement: effective,
     });
-    server.listen(0);
     try {
-      const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-      return (await getJson(base, "/v1/admin/scopes/org:default-org")).egressEnforcement;
+      return (await getJson(server.base, "/v1/admin/scopes/org:default-org")).egressEnforcement;
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await server.close();
     }
   };
   assert.deepEqual(await read("none", "none"), {
@@ -1205,22 +1190,20 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
 });
 
 test("admin governance: base model round-trips per-scope, validates ids", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-model-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-model-") }));
+  const server = serveApp(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putModel = (scope: string, modelId: string, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/base-model`, {
+    fetch(server.base + `/v1/admin/scopes/${encodeURIComponent(scope)}/base-model`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
-    const initial = await getJson(base, "/v1/admin/scopes/org:default-org");
+    const initial = await getJson(server.base, "/v1/admin/scopes/org:default-org");
     assert.equal(initial.baseModel, null, "no override by default");
     assert.ok(initial.baseModelDefault, "the effective default is reported");
     assert.ok(
@@ -1247,14 +1230,14 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     assert.equal(built.config.getBaseModel("org:default-org"), null, "the channel pin does not touch the org default");
 
     assert.equal((await putModel("org:default-org", "claude-opus-4-8", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, "claude-opus-4-8");
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).baseModel, "claude-opus-4-8");
     assert.equal(
       built.config.getBaseModel("org:default-org"),
       "claude-opus-4-8",
       "the store the harness reads sees the change",
     );
 
-    const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/base-model", {
+    const nonString = await fetch(server.base + "/v1/admin/scopes/org%3Adefault-org/base-model", {
       method: "PUT",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId: 123 }),
@@ -1267,30 +1250,28 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     );
 
     assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty modelId clears the override");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, null);
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).baseModel, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
 test("admin governance: people-directory URL round-trips, validates scheme, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-peopledir-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-peopledir-") }));
+  const server = serveApp(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putUrl = (scope: string, url: string, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/people-directory-url`, {
+    fetch(server.base + `/v1/admin/scopes/${encodeURIComponent(scope)}/people-directory-url`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ url }),
     });
   try {
     assert.equal(
-      (await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
+      (await getJson(server.base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
       null,
       "no directory by default",
     );
@@ -1314,7 +1295,7 @@ test("admin governance: people-directory URL round-trips, validates scheme, and 
 
     assert.equal((await putUrl("org:default-org", "https://www.example.com/people", ALICE)).status, 200);
     assert.equal(
-      (await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
+      (await getJson(server.base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
       "https://www.example.com/people",
     );
     assert.equal(
@@ -1323,7 +1304,7 @@ test("admin governance: people-directory URL round-trips, validates scheme, and 
       "the store the resolver reads sees the change",
     );
 
-    const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/people-directory-url", {
+    const nonString = await fetch(server.base + "/v1/admin/scopes/org%3Adefault-org/people-directory-url", {
       method: "PUT",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ url: 123 }),
@@ -1336,29 +1317,31 @@ test("admin governance: people-directory URL round-trips, validates scheme, and 
     );
 
     assert.equal((await putUrl("org:default-org", "", ALICE)).status, 200, "empty url clears it");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl, null);
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
 test("admin governance: browse step limit round-trips, validates, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsesteps-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-browsesteps-") }));
+  const server = serveApp(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putSteps = (scope: string, steps: unknown, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-max-steps`, {
+    fetch(server.base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-max-steps`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ steps }),
     });
   try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null, "no limit by default");
+    assert.equal(
+      (await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseMaxSteps,
+      null,
+      "no limit by default",
+    );
 
     assert.equal(
       (await putSteps("org:default-org", 80, { "x-admin-actor": "nobody@default-org" })).status,
@@ -1371,7 +1354,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
     assert.equal((await putSteps("org:default-org", 501, ALICE)).status, 400, "values past the cap are rejected");
 
     assert.equal((await putSteps("org:default-org", 120, ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, 120);
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, 120);
     assert.equal(
       built.config.getBrowseMaxSteps("org:default-org"),
       120,
@@ -1386,37 +1369,37 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
     assert.equal(built.config.getBrowseMaxSteps("org:default-org"), 90);
 
     assert.equal((await putSteps("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null);
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-oa-")),
+      dataDir: tmpDir("admin-browsemodel-oa-"),
       modelId: "gpt-5.6-sol",
       openaiApiKey: "sk-openai-test",
     }),
   );
-  const server = createInsecureTestServer(built.app, {
+  const server = serveApp(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
     baseModelDefault: "gpt-5.6-sol",
     providerKeys: { anthropic: false, openai: true, openrouter: false },
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putModel = (modelId: unknown) =>
-    fetch(base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
+    fetch(server.base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
       method: "PUT",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions as Array<{ id: string }>;
+    const opts = (await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseModelOptions as Array<{
+      id: string;
+    }>;
     assert.ok(opts.length > 0, "the picker is not empty just because the deployment has no Anthropic key");
     assert.ok(
       opts.every((m) => m.id.startsWith("gpt-")),
@@ -1431,27 +1414,29 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
     assert.equal((await putModel("gpt-5.6-luna")).status, 200);
     assert.equal(built.config.getBrowseModel("org:default-org"), "gpt-5.6-luna");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
 test("admin governance: browse model round-trips, validates, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const built = buildApp(testConfig({ dataDir: tmpDir("admin-browsemodel-") }));
+  const server = serveApp(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putModel = (scope: string, modelId: unknown, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-model`, {
+    fetch(server.base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-model`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null, "no override by default");
+    assert.equal(
+      (await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseModel,
+      null,
+      "no override by default",
+    );
 
     assert.equal(
       (await putModel("org:default-org", "claude-sonnet-4-6", { "x-admin-actor": "nobody@default-org" })).status,
@@ -1480,13 +1465,13 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
     );
 
     assert.equal((await putModel("org:default-org", "claude-sonnet-4-6", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, "claude-sonnet-4-6");
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseModel, "claude-sonnet-4-6");
     assert.equal(
       built.config.getBrowseModel("org:default-org"),
       "claude-sonnet-4-6",
       "the store the orchestrator reads sees the change",
     );
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions;
+    const opts = (await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseModelOptions;
     assert.ok(
       Array.isArray(opts) && opts.some((m: { id: string }) => m.id === "claude-opus-4-8"),
       "the scope read carries the browse model picker options",
@@ -1497,9 +1482,9 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
     );
 
     assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
+    assert.equal((await getJson(server.base, "/v1/admin/scopes/org:default-org")).browseModel, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 
@@ -1592,9 +1577,9 @@ test("admin governance: Auto flagger model and rubric round-trip and reset", asy
 
 test("the Auto flagger test run replays real screenings and reports a flag rate, never their content", async () => {
   const seen: string[] = [];
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-flagtest-")) });
+  const config = testConfig({ dataDir: tmpDir("admin-flagtest-") });
   const built = buildApp(config);
-  const server = createInsecureTestServer(built.app, {
+  const server = serveApp(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1608,10 +1593,8 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
       return strict ? { decision: "strict", reason: `${modelId}:embedded-instructions` } : { decision: "auto" };
     },
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const post = (body: unknown, scope = "org%3Adefault-org") =>
-    fetch(`${base}/v1/admin/scopes/${scope}/auto-flagger/test`, {
+    fetch(`${server.base}/v1/admin/scopes/${scope}/auto-flagger/test`, {
       method: "POST",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -1676,7 +1659,7 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
     );
     assert.equal((await post({}, "channel%3AC1")).status, 400, "the flagger is org-wide");
     assert.equal(
-      (await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/auto-flagger/test`, { method: "POST" })).status,
+      (await fetch(`${server.base}/v1/admin/scopes/org%3Adefault-org/auto-flagger/test`, { method: "POST" })).status,
       403,
       "a non-admin cannot spend model calls here",
     );
@@ -1688,7 +1671,7 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
       "the audit trail records counts, not payloads",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 

@@ -1,13 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { serveApp, startApi } from "./support/api.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -16,9 +12,10 @@ function dm(externalId: string, text: string, thread: string): TurnRequest {
 }
 
 describe("agent conversations self-API", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi({ signingSecret: SECRET }, () => ({
+    signingSecret: SECRET,
+    portalUrl: "https://portal.example/",
+  }));
   let mineId: string;
   let theirsId: string;
 
@@ -38,34 +35,26 @@ describe("agent conversations self-API", async () => {
     });
 
   const spawnWithPortal = async (portalUrl: string | undefined, app: typeof built.app = built.app) => {
-    const configuredServer = createServer(app, { signingSecret: SECRET, ...(portalUrl ? { portalUrl } : {}) });
-    await new Promise<void>((resolve) => configuredServer.listen(0, resolve));
-    const configuredBase = `http://localhost:${(configuredServer.address() as AddressInfo).port}`;
+    const configured = serveApp(app, { signingSecret: SECRET, ...(portalUrl ? { portalUrl } : {}) });
     try {
-      const response = await fetch(`${configuredBase}/v1/conversations`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": await capFor("U1") },
-        body: JSON.stringify({ text: "start from configured portal" }),
-      });
+      const response = await configured.post(
+        "/v1/conversations",
+        { text: "start from configured portal" },
+        { "x-agent-capability": await capFor("U1") },
+      );
       const text = await response.text();
       return { status: response.status, text, body: JSON.parse(text) as { session: { id: string }; webUrl?: string } };
     } finally {
-      await new Promise<void>((resolve) => configuredServer.close(() => resolve()));
+      await configured.close();
     }
   };
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET, portalUrl: "https://portal.example/" });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
     theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   it("spawns a fresh conversation with only the seed text", async () => {
     const token = await capFor("U1");
@@ -167,9 +156,7 @@ describe("agent conversations self-API", async () => {
           ? { status: "refused", reason: "project membership changed; retry from the current project" }
           : built.app.turn(req),
     };
-    const racedServer = createServer(racedApp, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => racedServer.listen(0, resolve));
-    const racedBase = `http://localhost:${(racedServer.address() as AddressInfo).port}`;
+    const raced = serveApp(racedApp, { signingSecret: SECRET });
     try {
       const token = await capFor("U1");
       const listIds = async () => {
@@ -179,11 +166,11 @@ describe("agent conversations self-API", async () => {
       };
       const before = await listIds();
 
-      const res = await fetch(`${racedBase}/v1/conversations`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": token },
-        body: JSON.stringify({ text: "seed that will be refused" }),
-      });
+      const res = await raced.post(
+        "/v1/conversations",
+        { text: "seed that will be refused" },
+        { "x-agent-capability": token },
+      );
       assert.equal(res.status, 409);
       const body = (await res.json()) as { error: string; message: string };
       assert.equal(body.error, "seed_turn_refused");
@@ -191,7 +178,7 @@ describe("agent conversations self-API", async () => {
 
       assert.deepEqual(await listIds(), before, "no orphaned empty session survives the refused seed");
     } finally {
-      await new Promise<void>((resolve) => racedServer.close(() => resolve()));
+      await raced.close();
     }
   });
 

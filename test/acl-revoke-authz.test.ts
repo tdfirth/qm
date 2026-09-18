@@ -2,15 +2,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { scopeId, type Grant } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
@@ -41,12 +35,7 @@ test("org-owned grants have no single owner, so revoke is not owner-gated (same 
 });
 
 test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "revoke-")) }));
-  const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const post = (path: string, body: unknown) =>
-    fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const { built, post, close } = startApi({ dataDir: tmpDir("revoke-") });
   try {
     assert.equal((await post("/v1/grants", grant())).status, 200);
 
@@ -72,6 +61,6 @@ test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async 
     assert.equal(legit.status, 200);
     assert.equal((await built.acl.grantsFor(owner, "redline.md")).length, 0);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await close();
   }
 });

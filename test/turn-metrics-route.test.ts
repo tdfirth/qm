@@ -2,29 +2,23 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { scopeId } from "../src/types.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turn-metrics-")) }));
-const core = createServer(built.app, {
+const built = buildApp(testConfig({ dataDir: tmpDir("turn-metrics-") }));
+const core = serveApp(built.app, {
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
   metrics: built.metrics,
 });
-core.listen(0);
-const coreBase = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 after(async () => {
-  await new Promise<void>((r) => core.close(() => r()));
+  await core.close();
   await built.runtime.stop();
 });
 
@@ -40,7 +34,7 @@ test("POST /v1/turns/:runId/metrics patches the row by runId (source-authed)", a
   });
 
   const raw = JSON.stringify({ deliverMs: 42, slackInflightMs: 7 });
-  const r = await fetch(`${coreBase}${path("run-1")}`, {
+  const r = await fetch(`${core.base}${path("run-1")}`, {
     method: "POST",
     headers: signedHeaders(SECRET, "POST", path("run-1"), raw),
     body: raw,
@@ -56,7 +50,7 @@ test("POST /v1/turns/:runId/metrics patches the row by runId (source-authed)", a
 
 test("POST /v1/turns/:runId/metrics rejects an unsigned request 401", async () => {
   const raw = JSON.stringify({ deliverMs: 1 });
-  const r = await fetch(`${coreBase}${path("run-1")}`, {
+  const r = await fetch(`${core.base}${path("run-1")}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: raw,
@@ -66,7 +60,7 @@ test("POST /v1/turns/:runId/metrics rejects an unsigned request 401", async () =
 
 test("POST /v1/turns/:runId/metrics with no measurable field is rejected 400", async () => {
   const raw = JSON.stringify({});
-  const r = await fetch(`${coreBase}${path("run-1")}`, {
+  const r = await fetch(`${core.base}${path("run-1")}`, {
     method: "POST",
     headers: signedHeaders(SECRET, "POST", path("run-1"), raw),
     body: raw,

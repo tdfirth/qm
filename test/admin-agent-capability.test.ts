@@ -2,12 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -18,48 +12,46 @@ import {
   CONTROL_PLANE_AUD,
   EGRESS_PROXY_AUD,
 } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
 function start(withConfig = true) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
-      signingSecret: SECRET,
-      capabilitySecret: SECRET,
-      apiBaseUrl: "http://core.example.test",
-    }),
-  );
-  void built.directory.replaceChannels(
-    [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
-    [
-      { channelId: "C1", principalId: "admin-alice" },
-      { channelId: "C1", principalId: "U1" },
-    ],
-  );
   const keychain = createKeychain({
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
-  const server = createServer(built.app, {
-    admin: built.admin,
-    memory: built.memory,
-    ...(withConfig ? { config: built.config } : {}),
-    auditLog: built.auditLog,
-    sessions: built.sessions,
-    runs: built.runs,
-    errors: built.errors,
-    keychain,
-    capabilitySecret: SECRET,
-    signingSecret: SECRET,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, keychain, close: () => new Promise<void>((r) => server.close(() => r())) };
+  const api = startApi(
+    {
+      dataDir: tmpDir("admin-agent-cap-"),
+      signingSecret: SECRET,
+      capabilitySecret: SECRET,
+      apiBaseUrl: "http://core.example.test",
+    },
+    (built) => ({
+      admin: built.admin,
+      memory: built.memory,
+      ...(withConfig ? { config: built.config } : {}),
+      auditLog: built.auditLog,
+      sessions: built.sessions,
+      runs: built.runs,
+      errors: built.errors,
+      keychain,
+      capabilitySecret: SECRET,
+      signingSecret: SECRET,
+    }),
+  );
+  void api.built.directory.replaceChannels(
+    [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
+    [
+      { channelId: "C1", principalId: "admin-alice" },
+      { channelId: "C1", principalId: "U1" },
+    ],
+  );
+  return api;
 }
 
 const capFor = async (

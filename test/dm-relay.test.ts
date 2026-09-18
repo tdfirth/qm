@@ -1,26 +1,19 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
 describe("agent → teammate DM: the cron recipient route (§10)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, post, get, close } = startApi({ dataDir: tmpDir("dm-relay-"), signingSecret: SECRET }, () => ({
+    signingSecret: SECRET,
+  }));
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
@@ -38,20 +31,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       SECRET,
     );
 
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dm-relay-")),
-        signingSecret: SECRET,
-      }),
-    );
     await built.app.upsertDirectory([
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
@@ -76,14 +56,9 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       { groupId: "G-jrs", principalId: "U-alice" },
       { groupId: "G-jrs", principalId: "U-sam1" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   it("builds a core-resolved principal destination the agent never authored", async () => {
     const res = await post(
@@ -305,9 +280,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
   });
 
   it("POST /v1/reach sends a teammate DM immediately and creates NO cron row", async () => {
-    const before = (await (
-      await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
-    ).json()) as any;
+    const before = (await (await get("/v1/crons", { "x-agent-capability": await capDm("U-carol") })).json()) as any;
     const res = await post(
       "/v1/reach",
       { text: "ship it 🚀", recipient: "Alice" },
@@ -318,9 +291,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.ok(body.deliveryId, "returns the enqueued delivery id");
     assert.equal(body.recipient.principalId, "U-alice");
     assert.equal(body.recipient.displayName, "Alice");
-    const after = (await (
-      await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
-    ).json()) as any;
+    const after = (await (await get("/v1/crons", { "x-agent-capability": await capDm("U-carol") })).json()) as any;
     assert.equal((after.crons ?? []).length, (before.crons ?? []).length);
     const pending = await built.app.pendingDeliveries("principal");
     const d = pending.find((x) => x.id === body.deliveryId);

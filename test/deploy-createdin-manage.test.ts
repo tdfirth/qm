@@ -1,12 +1,6 @@
-import { mkdtempSync } from "node:fs";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
-import { createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -16,13 +10,14 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
 
 async function fixture() {
-  const deployStore = createDeployStore({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } });
+  const deployStore = createDeployStore({ git: { repoRoot: tmpDir("createdin-repo-") } });
   const acl: AclStore = createAclStore();
   const directory: DirectoryStore = createDirectoryStore();
   const sessions = createMemorySessionStore();
@@ -35,7 +30,7 @@ async function fixture() {
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
-    deployDir: mkdtempSync(join(tmpdir(), "createdin-deploy-")),
+    deployDir: tmpDir("createdin-deploy-"),
     canReadScope: createCanReadScope({ directory }),
     canWriteScope: createCanWriteScope({ directory }),
   });
@@ -46,18 +41,7 @@ async function fixture() {
     sessions,
     identity: createIdentityService(),
   } as unknown as Parameters<typeof createApp>[0]);
-  const server: Server = createServer(app, { signingSecret: SECRET });
-  server.listen(0);
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return {
-    app,
-    deploy,
-    acl,
-    directory,
-    sessions,
-    base,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
+  return { app, deploy, acl, directory, sessions, ...serveApp(app, { signingSecret: SECRET }, "127.0.0.1") };
 }
 
 const capFor = (actorId: string) =>

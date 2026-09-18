@@ -2,19 +2,15 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function credentialLayer(): string {
-  const dir = mkdtempSync(join(tmpdir(), "admin-res-layer-"));
+  const dir = tmpDir("admin-res-layer-");
   mkdirSync(join(dir, "tools/acmecli"), { recursive: true });
   writeFileSync(
     join(dir, "tools/acmecli/tool.json"),
@@ -30,30 +26,23 @@ function credentialLayer(): string {
   return dir;
 }
 
-function start(harnessId = "pi", withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
-      ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
+const start = (harnessId = "pi", withLayer = true) =>
+  startApi(
+    { dataDir: tmpDir("admin-res-"), ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}) },
+    (built) => ({
+      config: built.config,
+      admin: built.admin,
+      auditLog: built.auditLog,
+      sessions: built.sessions,
+      acl: built.acl,
+      serviceCreds: built.serviceCreds,
+      deviceFlowCutover: built.deviceFlowCutover,
+      featureFlags: built.featureFlags,
+      credentialServices: () => built.credentialTools.map((tool) => tool.service),
+      channelPolicy: built.channelPolicy,
+      harnessId,
     }),
   );
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    sessions: built.sessions,
-    acl: built.acl,
-    serviceCreds: built.serviceCreds,
-    deviceFlowCutover: built.deviceFlowCutover,
-    featureFlags: built.featureFlags,
-    credentialServices: () => built.credentialTools.map((tool) => tool.service),
-    channelPolicy: built.channelPolicy,
-    harnessId,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
 
 test("security flags are visible and legacy session taint can be released by an org admin", async () => {
   const srv = start();

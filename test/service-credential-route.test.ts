@@ -2,13 +2,8 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { type TurnRequest } from "../src/types.ts";
 import {
   mintCapabilityToken,
@@ -19,33 +14,25 @@ import {
 } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
-  const acl = wrapAcl?.(built.acl) ?? built.acl;
-  const server = createInsecureTestServer(built.app, {
+const start = (wrapAcl?: (acl: AclStore) => AclStore) =>
+  startApi({ dataDir: tmpDir("svc-cred-route-") }, (built) => ({
     config: built.config,
     serviceCreds: built.serviceCreds,
-    acl,
+    acl: wrapAcl?.(built.acl) ?? built.acl,
     credentialUsage: built.credentialUsage,
     admin: built.admin,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
-function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
-  );
-  const server = createServer(built.app, {
+const startBroker = (brokerFetch: BrokerFetch) =>
+  startApi({ dataDir: tmpDir("svc-cred-broker-"), signingSecret: SECRET }, (built) => ({
     signingSecret: SECRET,
     config: built.config,
     serviceCreds: built.serviceCreds,
@@ -53,17 +40,10 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
     credentialUsage: built.credentialUsage,
     auditLog: built.auditLog,
     brokerFetch,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
-function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
-  );
-  const server = createServer(built.app, {
+const startGitBroker = (gitHttpFetch: GitHttpFetch) =>
+  startApi({ dataDir: tmpDir("svc-cred-git-broker-"), signingSecret: SECRET }, (built) => ({
     signingSecret: SECRET,
     config: built.config,
     serviceCreds: built.serviceCreds,
@@ -71,11 +51,7 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Buil
     credentialUsage: built.credentialUsage,
     auditLog: built.auditLog,
     gitHttpFetch,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const brokerToken = (credentials: string[], aud: string = CREDENTIAL_BROKER_AUD) =>
   mintCapabilityToken(
@@ -1000,11 +976,7 @@ const dm = (text: string): TurnRequest => ({
 
 function buildWithCapture() {
   const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
-      signingSecret: SECRET,
-      apiBaseUrl: "http://core.internal",
-    }),
+    testConfig({ dataDir: tmpDir("svc-cred-stamp-"), signingSecret: SECRET, apiBaseUrl: "http://core.internal" }),
   );
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);

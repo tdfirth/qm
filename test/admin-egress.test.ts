@@ -2,27 +2,16 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = () =>
+  startApi({ dataDir: tmpDir("admin-egress-") }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
     credentialUsage: built.credentialUsage,
     egressAudit: built.egressAudit,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
@@ -240,12 +229,7 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
 test("egress-audit ingest: an oversized or empty batch is rejected", async () => {
   const s = start();
   try {
-    const post = (body: unknown) =>
-      fetch(s.base + "/v1/egress-audit", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    const post = (body: unknown) => s.post("/v1/egress-audit", body);
     assert.equal((await post({ records: [] })).status, 400);
     assert.equal((await post({})).status, 400);
     assert.equal(

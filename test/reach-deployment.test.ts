@@ -1,11 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -28,7 +24,7 @@ function appWithFakeRuntime() {
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
-    deployDir: mkdtempSync(join(tmpdir(), "reach-")),
+    deployDir: tmpDir("reach-"),
   });
   const directory = createDirectoryStore();
   const sessions = createMemorySessionStore();
@@ -231,11 +227,9 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
-  server.listen(0);
+  const server = serveApp(app);
   try {
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const r = await fetch(`${base}/v1/deployments?principalId=U2`);
+    const r = await server.get("/v1/deployments?principalId=U2");
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string }> };
     assert.deepEqual(
@@ -244,7 +238,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     );
     assert.equal(body.deployments[0]!.permission, "read");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 
@@ -268,17 +262,15 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     [{ channelId: "C1", principalId: "U2" }],
   );
   const secret = "deployments-list-secret".repeat(3);
-  const server = createServer(app, {
+  const server = serveApp(app, {
     signingSecret: secret,
     apiBaseUrl: "https://core.test",
     publicUrl: "https://web.test",
   });
-  server.listen(0);
   try {
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const path = "/v1/deployments?principalId=U2";
     const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
-    const r = await fetch(`${base}${path}`, { headers });
+    const r = await server.get(path, headers);
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };
     assert.equal(body.deployments.length, 1);
@@ -292,7 +284,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     const access = await verifyDeployGitAccess(secret, gitUrl.password);
     assert.equal(access?.deploymentId, shared.id);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 

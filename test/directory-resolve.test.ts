@@ -1,14 +1,9 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { createServer } from "../src/api/server.ts";
+import { serveApp, startApi, tmpDir } from "./support/api.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -16,9 +11,10 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "directory-resolve-secret".repeat(3);
 
 describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi({ dataDir: tmpDir("dir-resolve-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    scheduler: built.scheduler,
+  }));
 
   const cap = await mintCapabilityToken(
     { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
@@ -26,10 +22,6 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   );
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-resolve-")), signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
       { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
@@ -38,9 +30,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     ]);
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   const get = (path: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
 
@@ -129,9 +119,10 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
 });
 
 describe("a deployment without the Slack surface (the directory store is never populated)", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, base, close } = startApi(
+    { dataDir: tmpDir("dir-web-only-"), signingSecret: SECRET, emailAuthPrincipals: ["dana@acme.com"] },
+    (built) => ({ signingSecret: SECRET, scheduler: built.scheduler }),
+  );
 
   const cap = await mintCapabilityToken(
     { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
@@ -139,23 +130,11 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["dana@acme.com"],
-      }),
-    );
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
     await built.sessions.addParticipant(session.id, "rex@acme.com");
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(close);
 
   const get = (path: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
   const matchesOf = async (query: string): Promise<Array<{ principalId: string; type: string }>> => {
@@ -219,29 +198,27 @@ describe("qualification membership readiness with signed portal identity enforce
       [{ channelId: "CQA", name: "qa", isPrivate: false }],
       [{ channelId: "CQA", principalId: "qa@example.com" }],
     );
-    const server = createServer(app.app, {
+    const server = serveApp(app.app, {
       signingSecret: SECRET,
       portalIdentitySecret: portalSecret,
       capabilitySecret: "readiness-capability-key-distinct-from-source",
       requireSignedPortalIdentity: true,
       identity: app.identity,
     });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     try {
       const path = "/v1/directory/resolve?q=UQA";
-      const unsigned = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+      const unsigned = await fetch(`${server.base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
       assert.equal(unsigned.status, 401);
       process.env.PORTAL_IDENTITY_SECRET = portalSecret;
-      const core = new CoreClient(base, SECRET);
+      const core = new CoreClient(server.base, SECRET);
       await core.waitForChannelMembership("CQA", "UQA", 5000);
       process.env.PORTAL_IDENTITY_SECRET = SECRET;
       await assert.rejects(core.waitForChannelMembership("CQA", "UQA", 5000), /401.*portal identity required/);
     } finally {
       if (originalPortalSecret === undefined) delete process.env.PORTAL_IDENTITY_SECRET;
       else process.env.PORTAL_IDENTITY_SECRET = originalPortalSecret;
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      server.server.closeAllConnections();
+      await server.close();
     }
   });
 });

@@ -2,34 +2,22 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
 test("the normal server refuses to start without source-auth material", () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-required-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("auth-required-") }));
   assert.throws(() => createServer(built.app), /CORE_SIGNING_SECRET must be at least 32 characters/);
 });
 
-function start(signingSecret?: string): { base: string; close: () => Promise<void> } {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "auth-")),
-    }),
-  );
-  const server = signingSecret ? createServer(built.app, { signingSecret }) : createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+const start = (signingSecret?: string) =>
+  startApi({ dataDir: tmpDir("auth-") }, () => (signingSecret ? { signingSecret } : {}));
 
 function sign(method: string, pathWithQuery: string, body: string): Record<string, string> {
   const ts = Math.floor(Date.now() / 1000);
@@ -164,10 +152,10 @@ test("the explicit insecure test server leaves the boundary open", async () => {
 });
 
 test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")) }));
-  const server = createServer(built.app, { signingSecret: SECRET, blobTransfer: built.blobTransfer });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const { base, close } = startApi({ dataDir: tmpDir("blobauth-") }, (built) => ({
+    signingSecret: SECRET,
+    blobTransfer: built.blobTransfer,
+  }));
   try {
     const body = Buffer.from("payload bytes");
     const sha = createHash("sha256").update(body).digest("hex");
@@ -190,24 +178,18 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     });
     assert.equal(ok.status, 200);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await close();
   }
 });
 
 test("egress-audit ingest requires source auth: unsigned is 401, signed lands — including under portal-identity enforcement", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-egress-")) }));
-  const server = createServer(built.app, {
+  const srv = startApi({ dataDir: tmpDir("auth-egress-") }, (built) => ({
     signingSecret: SECRET,
     egressAudit: built.egressAudit,
     requireSignedPortalIdentity: true,
     capabilitySecret: `${SECRET}-cap`,
     portalIdentitySecret: `${SECRET}-portal`,
-  });
-  server.listen(0);
-  const srv = {
-    base: `http://localhost:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
+  }));
   try {
     const body = JSON.stringify({ records: [{ host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1" }] });
     const unsigned = await fetch(`${srv.base}/v1/egress-audit`, {

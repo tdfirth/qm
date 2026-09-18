@@ -1,13 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createHmac } from "node:crypto";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { request as httpRequest } from "node:http";
+import { createApp, type App } from "../src/api/app.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -63,16 +59,15 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
-    server.listen(0);
+    const server = serveApp({} as App, config);
     try {
-      const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
+      const result = await httpGet(server.port, "/healthz", {
         Host: "app.other.example.com",
         "x-qm-app-host": "1",
       });
       assert.equal(result.status, "deployGateSecret" in config ? 404 : 503);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await server.close();
     }
   }
 });
@@ -94,16 +89,15 @@ function httpGet(
 }
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
-  const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], {
+  const server = serveApp({} as App, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
     deployAppsLoginPath: "/auth/trusted/login",
   });
-  server.listen(0);
   try {
-    const result = await httpGet((server.address() as AddressInfo).port, "/counter?x=1", {
+    const result = await httpGet(server.port, "/counter?x=1", {
       Host: "counter.apps.example.com",
       Accept: "text/html",
     });
@@ -113,7 +107,7 @@ test("app sign-in uses the configured trusted entry and preserves the app return
     assert.equal(redirect.pathname, "/auth/trusted/login");
     assert.equal(redirect.searchParams.get("returnTo"), "https://counter.apps.example.com/counter?x=1&dpl_signin=1");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 
@@ -136,7 +130,7 @@ function httpPost(
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   let upstreamCookie: string | undefined = "unset";
   let upstreamUrl = "";
-  const upstream = createHttpServer((req, res) => {
+  const upstream = stubHttp((req, res) => {
     upstreamCookie = req.headers.cookie as string | undefined;
     upstreamUrl = req.url ?? "";
     res.writeHead(200, {
@@ -145,20 +139,18 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     });
     res.end("UPSTREAM OK");
   });
-  upstream.listen(0);
-  const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
+      apply: async () => ({ host: "127.0.0.1", port: upstream.port }),
       destroy: async () => {},
     },
     auditLog,
     acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "signin-")),
+    deployDir: tmpDir("signin-"),
   });
   const app = createApp({
     deploy,
@@ -178,25 +170,26 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
     deliveries.push(input);
   };
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const host = "mysite.apps.example.com";
 
   try {
-    const browser = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
+    const browser = await httpGet(server.port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
     assert.equal(browser.status, 302, "signed-out browser is bounced to sign-in");
     assert.equal(
       browser.headers.location,
       `${LOGIN_URL}/auth/login?returnTo=${encodeURIComponent("https://mysite.apps.example.com/consultants?x=1&dpl_signin=1")}`,
     );
 
-    const stillSignedOut = await httpGet(port, "/consultants?x=1&dpl_signin=1", { Host: host, Accept: "text/html" });
+    const stillSignedOut = await httpGet(server.port, "/consultants?x=1&dpl_signin=1", {
+      Host: host,
+      Accept: "text/html",
+    });
     assert.equal(
       stillSignedOut.status,
       401,
@@ -204,11 +197,11 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     );
     assert.match(stillSignedOut.body, /Sign-in didn&#39;t reach this app|Sign-in didn't reach this app/);
 
-    const xhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
+    const xhr = await httpGet(server.port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
 
-    const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
+    const backFromLogin = await httpGet(server.port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
@@ -216,7 +209,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(backFromLogin.status, 302, "landing back from sign-in redirects to the clean URL");
     assert.equal(backFromLogin.headers.location, "/consultants?x=1", "the dpl_signin marker leaves the address bar");
 
-    const owner = await httpGet(port, "/consultants?x=1", {
+    const owner = await httpGet(server.port, "/consultants?x=1", {
       Host: host,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
@@ -226,14 +219,14 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(upstreamCookie, undefined, "the portal session cookie never reaches the app");
     assert.equal(upstreamUrl, "/consultants?x=1", "the app sees the clean URL");
     for (const origin of ["https://sibling.apps.example.com", "https://portal.example.com", "null"]) {
-      const denied = await httpPost(port, "/api/update", {
+      const denied = await httpPost(server.port, "/api/update", {
         Host: host,
         Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
         Origin: origin,
       });
       assert.equal(denied.status, 403);
     }
-    const sameApp = await httpPost(port, "/api/update", {
+    const sameApp = await httpPost(server.port, "/api/update", {
       Host: host,
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
       Origin: `https://${host}`,
@@ -241,7 +234,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     });
     assert.equal(sameApp.status, 200);
     for (const site of ["same-site", "cross-site"]) {
-      const denied = await httpPost(port, "/api/update", {
+      const denied = await httpPost(server.port, "/api/update", {
         Host: host,
         Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
         "Sec-Fetch-Site": site,
@@ -255,7 +248,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       "an app cannot set or clear the gateway's cookies on the visitor",
     );
 
-    const stranger = await httpGet(port, "/consultants", {
+    const stranger = await httpGet(server.port, "/consultants", {
       Host: host,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
@@ -264,7 +257,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.match(stranger.body, /hasn&#39;t been shared with you|hasn't been shared with you/);
     assert.match(String(stranger.headers["content-type"]), /text\/html/, "denial is a friendly page, not bare JSON");
 
-    const strangerXhr = await httpGet(port, "/consultants", {
+    const strangerXhr = await httpGet(server.port, "/consultants", {
       Host: host,
       Accept: "application/json",
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
@@ -272,12 +265,12 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(strangerXhr.status, 403, "non-HTML denial stays JSON");
 
     assert.match(stranger.body, /Request access/, "the denial page offers a request-access button");
-    const asked = await httpPost(port, "/__claw__/request-access", {
+    const asked = await httpPost(server.port, "/__claw__/request-access", {
       Host: host,
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
     assert.equal(asked.status, 200, "a denied visitor can ask the owner for access");
-    const again = await httpPost(port, "/__claw__/request-access", {
+    const again = await httpPost(server.port, "/__claw__/request-access", {
       Host: host,
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
@@ -293,17 +286,17 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       onBehalfOf: "mallory@example.com",
     });
 
-    const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
+    const signedOutAsk = await httpPost(server.port, "/__claw__/request-access", { Host: host });
     assert.equal(signedOutAsk.status, 401, "a signed-out visitor cannot send access requests");
 
-    const forged = await httpGet(port, "/consultants", {
+    const forged = await httpGet(server.port, "/consultants", {
       Host: host,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com", 3600, "wrong-secret")}`,
     });
     assert.equal(forged.status, 302, "a forged session is just a signed-out visitor");
 
-    const crafted = await httpGet(port, "//evil.com?dpl_signin=1", {
+    const crafted = await httpGet(server.port, "//evil.com?dpl_signin=1", {
       Host: host,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
@@ -311,8 +304,8 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(crafted.status, 302);
     assert.equal(crafted.headers.location, "/", "a scheme-relative pathname never enters a gateway redirect");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   }
 });
 
@@ -327,7 +320,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     },
     auditLog,
     acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "signin-off-")),
+    deployDir: tmpDir("signin-off-"),
   });
   const app = createApp({
     deploy,
@@ -343,14 +336,12 @@ test("subdomain ingress: without the session config the domain has no door — a
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   try {
-    const r = await httpGet(port, "/", {
+    const r = await httpGet(server.port, "/", {
       Host: "mysite.apps.example.com",
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
@@ -361,6 +352,6 @@ test("subdomain ingress: without the session config the domain has no door — a
       "no session secret ⇒ sign-in cannot work; surface the misconfiguration, not a dead-end bounce",
     );
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });

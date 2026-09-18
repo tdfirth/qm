@@ -2,22 +2,18 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 test("C3 — no catalog host appears in serviceHosts / egressServiceHosts (least privilege)", () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("c3-") }));
   return Promise.all(CATALOG_HOSTS.map((h) => built.connectorTokens.connectorAccessToken(h, "nobody"))).then(
     (tokens) => {
       assert.ok(
@@ -35,19 +31,14 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
   const prior = process.env[envName];
   process.env[envName] = "shared-service-token";
   try {
-    const ok = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-ok-")) }));
+    const ok = buildApp(testConfig({ dataDir: tmpDir("c3-ok-") }));
     assert.equal(
       await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
       null,
       "default wiring must hand out NO shared token for an unconnected catalog host",
     );
 
-    const bad = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "c3-bad-")),
-        egressServiceHosts: [offending],
-      }),
-    );
+    const bad = buildApp(testConfig({ dataDir: tmpDir("c3-bad-"), egressServiceHosts: [offending] }));
     assert.equal(
       await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
       "shared-service-token",
@@ -69,8 +60,7 @@ const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "g
 
 test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
+  const { built, base, close } = startApi({ dataDir: tmpDir("xorg-"), signingSecret: SECRET }, (built) => ({
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
@@ -79,9 +69,7 @@ test("cross-org — the callback rejects sealed state minted for a different org
       exchanged = true;
       return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
     },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  }));
   try {
     const state = await sealOAuthState(
       {
@@ -98,21 +86,18 @@ test("cross-org — the callback rejects sealed state minted for a different org
     assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
     assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await close();
   }
 });
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
+  const { built, base, close } = startApi({ dataDir: tmpDir("empty-"), signingSecret: SECRET }, (built) => ({
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
     oauthEnv,
     oauthFetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  }));
   try {
     const state = await sealOAuthState(
       { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
@@ -127,21 +112,20 @@ test("empty-token guard — an adapter returning no access token fails the conne
       "no dead credential persisted",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await close();
   }
 });
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
+  const { built, base, close } = startApi({ dataDir: tmpDir("status-") }, (built) => ({
+    connectorTokens: built.connectorTokens,
+  }));
   built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const st = (await (await fetch(`${base}/v1/connectors/oauth/status?principalId=U1`)).json()) as {
       providers: Record<string, { connected: boolean }>;
@@ -152,7 +136,7 @@ test("status/selector parity — a personal-only connection reports connected (m
       "status must reflect the personal token the orchestrator would inject in a DM",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await close();
   }
 });
 
@@ -173,7 +157,7 @@ function execScriptsMention(needle: string): boolean {
 }
 
 test("F1/F3 — a DM injects the requester's connector token; a channel injects NONE", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  const built: BuiltApp = buildApp(testConfig({ dataDir: tmpDir("floor-") }));
   built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const gmailExport = `export ${envKey("gmail.googleapis.com")}=`;
 
@@ -202,7 +186,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 }
 
 test("a full-toolset triggered wake materializes the owner's connector token into the exec env", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+  const built: BuiltApp = buildApp(testConfig({ dataDir: tmpDir("wake-conn-") }));
   built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const gmailExport = `export ${envKey("gmail.googleapis.com")}=`;
 
@@ -214,7 +198,7 @@ test("a full-toolset triggered wake materializes the owner's connector token int
 });
 
 test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
+  const built: BuiltApp = buildApp(testConfig({ dataDir: tmpDir("wake-ro-") }));
   built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
 
   fakeSprites.reset();

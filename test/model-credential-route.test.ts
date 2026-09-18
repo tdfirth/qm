@@ -1,14 +1,10 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -19,31 +15,21 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 function start(
   config: Parameters<typeof testConfig>[0] = {},
   modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 }),
-): {
-  base: string;
-  built: BuiltApp;
-  close: () => Promise<void>;
-} {
-  const appConfig = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
-    ...config,
-  });
+) {
+  const appConfig = testConfig({ dataDir: tmpDir("model-credential-route-"), ...config });
   const built = buildApp(appConfig, { modelCredentialFetch });
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    modelCredentialFetch,
-    harnessId: config.harness ?? "pi",
-    ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
-    providerKeys: providerKeysPresent(appConfig),
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
-  server.listen(0);
   return {
-    base: `http://localhost:${(server.address() as AddressInfo).port}`,
     built,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    ...serveApp(built.app, {
+      config: built.config,
+      modelCredentials: built.modelCredentials,
+      modelCredentialFetch,
+      harnessId: config.harness ?? "pi",
+      ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
+      providerKeys: providerKeysPresent(appConfig),
+      admin: built.admin,
+      auditLog: built.auditLog,
+    }),
   };
 }
 

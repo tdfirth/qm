@@ -2,14 +2,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
+import { buildApp } from "../src/wiring.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -1028,15 +1023,23 @@ test("manifest: in the owner's personal scope their own credentials need no gran
 const SECRET = "keychain-route-secret".repeat(3);
 
 describe("/v1/keychain routes (capability-authed)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const api = startApi({ dataDir: tmpDir("kc-routes-"), signingSecret: SECRET }, (built) => ({
+    signingSecret: SECRET,
+    keychain: built.keychain,
+    workspace: built.workspace,
+    auditLog: built.auditLog,
+    credentialUsage: built.credentialUsage,
+    sessions: built.sessions,
+    runs: built.runs,
+    signals: built.signals,
+    identity: built.identity,
+  }));
+  const { built } = api;
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [
         { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
@@ -1063,31 +1066,11 @@ describe("/v1/keychain routes (capability-authed)", () => {
       { groupId: "G_CONN", principalId: "alex@conn" },
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);
-    server = createServer(built.app, {
-      signingSecret: SECRET,
-      keychain: built.keychain,
-      workspace: built.workspace,
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
-      sessions: built.sessions,
-      runs: built.runs,
-      signals: built.signals,
-      identity: built.identity,
-    });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  after(api.close);
 
-  const post = (path: string, body: unknown, cap: string) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, cap: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
+  const post = (path: string, body: unknown, cap: string) => api.post(path, body, { "x-agent-capability": cap });
+  const get = (path: string, cap: string) => api.get(path, { "x-agent-capability": cap });
 
   it("saves to the TOKEN's actor and lists only the caller's own credentials", async () => {
     const res = await post(
@@ -1276,7 +1259,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
   });
 
   it("rejects keychain calls without a capability token (no source-auth fallback identity)", async () => {
-    const res = await fetch(`${base}/v1/keychain/credentials`, { method: "GET" });
+    const res = await api.get("/v1/keychain/credentials");
     assert.notEqual(res.status, 200);
   });
 
@@ -1546,7 +1529,7 @@ function execScriptsMention(needle: string, since = 0): boolean {
 test("turn e2e: prompt lists exact handles and keychain env credentials are never ambient", async () => {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "kc-e2e-")),
+      dataDir: tmpDir("kc-e2e-"),
       signingSecret: SECRET,
       apiBaseUrl: "http://core.test",
     }),

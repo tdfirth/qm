@@ -3,19 +3,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { AddressInfo } from "node:net";
+import { serveApp, startApi, stubHttp } from "./support/api.ts";
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
-  const config = testConfig({ anthropicApiKey: "test-only" });
-  const built = buildApp(config);
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const srv = startApi({ anthropicApiKey: "test-only" }, (built, config) => serverDeps(config, built), "127.0.0.1");
   try {
-    const result = await fetch(
-      `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/lookup`,
-      { method: "POST", headers, body: JSON.stringify({ provider: "anthropic", id: "claude-opus-4-6" }) },
+    const result = await srv.post(
+      "/v1/admin/model-registry/lookup",
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      headers,
     );
     assert.equal(result.status, 200);
     const body = (await result.json()) as { kind: string; spec: { template: string }; missing: string[] };
@@ -23,7 +20,7 @@ test("admin lookup recognizes an existing model without asking for a clone templ
     assert.equal(body.spec.template, "claude-opus-4-6");
     assert.deepEqual(body.missing, []);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await srv.close();
   }
 });
 
@@ -140,11 +137,9 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
       throw Error("lookup must not fetch for builtin");
     },
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const srv = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
   const post = (path: string, body: object, actor = "admin-alice@default-org") =>
-    fetch(base + path, { method: "POST", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
+    srv.post(path, body, { ...headers, "x-admin-actor": actor });
   const identity = { id: "claude-opus-4-6", provider: "anthropic" };
   const enable = "/v1/admin/model-registry/claude-opus-4-6/enable";
   try {
@@ -168,15 +163,15 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     ]);
     assert.deepEqual(await built.config.getRuntimeSelectionDurable("org:default-org"), priorDefault);
     assert.deepEqual(await built.modelRegistry.statuses(), []);
-    const runtime = await fetch(
-      base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-      { headers },
+    const runtime = await srv.get(
+      "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
+      headers,
     );
     const body = (await runtime.json()) as { modelsByHarness: { pi: string[] } };
     assert.ok(body.modelsByHarness.pi.includes("claude-opus-4-6"));
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
+    srv.server.closeAllConnections();
+    await srv.close();
     await upstream.close();
   }
 });
@@ -185,11 +180,9 @@ test("enable rechecks serving credentials and harness policy before mutating the
   let onProbe: () => Promise<void> = async () => {};
   const config = testConfig({ harness: "pi", anthropicApiKey: "test-key" });
   const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
+  const srv = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
   const enable = () =>
-    fetch(url, { method: "POST", headers, body: JSON.stringify({ provider: "anthropic", verify: true }) });
+    srv.post("/v1/admin/model-registry/claude-opus-4-6/enable", { provider: "anthropic", verify: true }, headers);
   const org = "org:default-org";
   try {
     onProbe = async () => {
@@ -208,8 +201,8 @@ test("enable rechecks serving credentials and harness policy before mutating the
     };
     assert.equal((await enable()).status, 400);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
+    srv.server.closeAllConnections();
+    await srv.close();
   }
 });
 
@@ -224,12 +217,10 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
     assert.equal(modelLookupInput.safeParse(body).success, false);
 });
 
-import { createServer } from "node:http";
-
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";
   let sinkRequests = 0;
-  const server = createServer((req, res) => {
+  const server = stubHttp((req, res) => {
     if (req.url === "/sink") {
       sinkRequests++;
       res.end("unexpected");
@@ -250,9 +241,8 @@ test("real metadata transport authenticates only the configured endpoint and ref
         max_tokens: 32000,
       }),
     );
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+  }, "127.0.0.1");
+  setProviderBaseUrls({ anthropic: server.base });
   try {
     const value = await lookupModel({ provider: "anthropic", id: "live-metadata-model" }, credentials());
     assert.equal(value.spec.name, "Exact network record");
@@ -264,7 +254,7 @@ test("real metadata transport authenticates only the configured endpoint and ref
     assert.equal(redirect.source, "Manual entry");
     assert.equal(redirect.spec.name, undefined);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
+    server.server.closeAllConnections();
+    await server.close();
   }
 });

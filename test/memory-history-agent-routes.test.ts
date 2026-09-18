@@ -1,24 +1,45 @@
-import { after, before, describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { MemoryRevision, MemoryService } from "../src/memory/memory-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "memory-history-route-secret".repeat(3);
 
 describe("agent memory history and restore", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
-  let memory: MemoryService;
+  const built = buildApp(testConfig({ dataDir: tmpDir("memory-history-routes-"), signingSecret: SECRET }));
+  const revisions = new Map<ScopeId, MemoryRevision[]>();
+  const memory: MemoryService = {
+    ...built.memory,
+    async replace(scope, content, author) {
+      await built.memory.replace(scope, content, author);
+      const history = revisions.get(scope) ?? [];
+      history.push({
+        revision: String(history.length + 1),
+        content: await built.memory.read(scope),
+        operation: "replace",
+        ...(author ? { author } : {}),
+        at: Date.now(),
+      });
+      revisions.set(scope, history);
+    },
+    async history(scope, limit = 30) {
+      return (revisions.get(scope) ?? []).toReversed().slice(0, limit);
+    },
+    async restore(scope, revision, expectedRevision, author) {
+      const history = revisions.get(scope) ?? [];
+      if (String(history.length) !== expectedRevision) return false;
+      const target = history.find((entry) => entry.revision === revision);
+      if (!target) return false;
+      await this.replace(scope, target.content, author);
+      return true;
+    },
+  };
+  const server = serveApp(built.app, { signingSecret: SECRET, memory });
+  after(server.close);
 
   const capFor = (actorId: string, write: ScopeId, orgWrite?: ScopeId) =>
     mintCapabilityToken(
@@ -31,60 +52,10 @@ describe("agent memory history and restore", () => {
       },
       SECRET,
     );
-  const get = (path: string, token?: string) =>
-    fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });
+  const get = (path: string, token?: string) => server.get(path, token ? { "x-agent-capability": token } : {});
   const post = (path: string, body: unknown, token?: string) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { "x-agent-capability": token } : {}) },
-      body: JSON.stringify(body),
-    });
-  const put = (path: string, body: unknown, token: string) =>
-    fetch(`${base}${path}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": token },
-      body: JSON.stringify(body),
-    });
-
-  before(async () => {
-    built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-history-routes-")), signingSecret: SECRET }),
-    );
-    const revisions = new Map<ScopeId, MemoryRevision[]>();
-    memory = {
-      ...built.memory,
-      async replace(scope, content, author) {
-        await built.memory.replace(scope, content, author);
-        const history = revisions.get(scope) ?? [];
-        history.push({
-          revision: String(history.length + 1),
-          content: await built.memory.read(scope),
-          operation: "replace",
-          ...(author ? { author } : {}),
-          at: Date.now(),
-        });
-        revisions.set(scope, history);
-      },
-      async history(scope, limit = 30) {
-        return (revisions.get(scope) ?? []).toReversed().slice(0, limit);
-      },
-      async restore(scope, revision, expectedRevision, author) {
-        const history = revisions.get(scope) ?? [];
-        if (String(history.length) !== expectedRevision) return false;
-        const target = history.find((entry) => entry.revision === revision);
-        if (!target) return false;
-        await this.replace(scope, target.content, author);
-        return true;
-      },
-    };
-    server = createServer(built.app, { signingSecret: SECRET, memory });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
-
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+    server.post(path, body, token ? { "x-agent-capability": token } : {});
+  const put = (path: string, body: unknown, token: string) => server.put(path, body, { "x-agent-capability": token });
 
   it("lists versions after writes and restores a prior version", async () => {
     const mine = scopeId("personal", "U1");

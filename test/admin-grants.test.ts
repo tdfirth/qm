@@ -2,25 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = (dataDir = tmpDir("admin-grants-")) =>
+  startApi({ dataDir }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const ALICE = "admin-alice@default-org";
 const BOB = "admin-bob@default-org";
@@ -214,18 +203,8 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
 });
 
 test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; a runtime promotion is NOT durable", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "admin-grants-mem-"));
-  const boot = () => {
-    const built = buildApp(testConfig({ dataDir }));
-    const server = createInsecureTestServer(built.app, {
-      admin: built.admin,
-      sessions: built.sessions,
-      auditLog: built.auditLog,
-    });
-    server.listen(0);
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
-  };
+  const dataDir = tmpDir("admin-grants-mem-");
+  const boot = () => start(dataDir);
   const b1 = boot();
   try {
     assert.equal(

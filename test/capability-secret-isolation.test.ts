@@ -1,22 +1,20 @@
-import { describe, it, before, after } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
 
 describe("capability tokens verify under the core-only capability secret, not the shared source-auth secret", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { get, close } = startApi({ dataDir: tmpDir("cap-iso-"), signingSecret: SOURCE }, (built) => ({
+    signingSecret: SOURCE,
+    capabilitySecret: CAP,
+    scheduler: built.scheduler,
+  }));
 
   const cap = async (secret: string) =>
     mintCapabilityToken(
@@ -24,18 +22,9 @@ describe("capability tokens verify under the core-only capability secret, not th
       secret,
     );
 
-  before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-iso-")), signingSecret: SOURCE }));
-    server = createServer(built.app, { signingSecret: SOURCE, capabilitySecret: CAP, scheduler: built.scheduler });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  });
+  after(close);
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-
-  const apis = (token: string) => fetch(`${base}/v1/apis`, { headers: { "x-agent-capability": token } });
+  const apis = (token: string) => get("/v1/apis", { "x-agent-capability": token });
 
   it("accepts a capability signed with the capability secret", async () => {
     assert.equal((await apis(await cap(CAP))).status, 200);
@@ -47,10 +36,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 });
 
 describe("createServer refuses to boot enforcement that a surface could bypass", () => {
-  let built: BuiltApp;
-  before(() => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-failclosed-")), signingSecret: SOURCE }));
-  });
+  const built = buildApp(testConfig({ dataDir: tmpDir("cap-failclosed-"), signingSecret: SOURCE }));
 
   const boot = (extra: Record<string, unknown>) =>
     createServer(built.app, {

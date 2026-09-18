@@ -2,19 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp() {
-  const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
-  const config: Config = testConfig({ dataDir });
+  const config: Config = testConfig({ dataDir: tmpDir("ap-title-") });
   return buildApp(config);
 }
 
@@ -76,16 +71,10 @@ test("a rejected title answer is recorded with the rule that rejected it before 
 
 test("POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected", async () => {
   const { app, errors, config, admin, auditLog } = freshApp();
-  const server = createInsecureTestServer(app, { config, admin, auditLog });
-  server.listen(0);
+  const server = serveApp(app, { config, admin, auditLog });
   try {
     const turn = await app.turn(dm("Simulate reply-shaped title", "web:U1:title-route"));
-    const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/v1/sessions/${turn.sessionId!}/title`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1" }),
-    });
+    const res = await server.post(`/v1/sessions/${turn.sessionId!}/title`, { principalId: "U1" });
 
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { title: "Simulate reply-shaped title" });
@@ -94,7 +83,7 @@ test("POST /v1/sessions/:id/title answers 200 with the fallback title and record
       .map((error) => error.code);
     assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener"]);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.close();
   }
 });
 

@@ -1,16 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "../src/wiring.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi } from "./support/api.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
@@ -21,17 +18,15 @@ async function fixture(secret: string | undefined = controlSecret) {
   await store.register({ instanceId: "instance-a", deploymentId: "cohort-a", taskArn: "task-a" });
   await store.register({ instanceId: "instance-b", deploymentId: "cohort-b", taskArn: "task-b" });
   await store.admit("instance-a", 0, true);
-  const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const server = createServer(built.app, {
+  const api = startApi({ signingSecret: sourceSecret }, () => ({
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,
     backgroundOwnership: { store, instanceId: "instance-b", deploymentId: "cohort-b" },
     deploymentControlSecret: secret,
-  });
-  server.listen(0);
-  const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
+  }));
+  const url = `${api.base}${path}`;
   let nonce = 0;
   const request = async (method: string, body?: unknown, overrides: Record<string, string> = {}) => {
     const raw = body === undefined ? "" : JSON.stringify(body);
@@ -48,7 +43,7 @@ async function fixture(secret: string | undefined = controlSecret) {
       ...(raw ? { body: raw } : {}),
     });
   };
-  return { store, request, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  return { store, request, close: api.close };
 }
 
 const transition = () => ({

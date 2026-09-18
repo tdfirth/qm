@@ -1,12 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { request as httpRequest, type RequestListener } from "node:http";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -16,6 +11,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -36,7 +32,7 @@ function appServingUpstream(upstreamPort: number) {
     acl,
     canReadScope: createCanReadScope({ directory }),
     canWriteScope: createCanWriteScope({ directory }),
-    deployDir: mkdtempSync(join(tmpdir(), "app-shell-")),
+    deployDir: tmpDir("app-shell-"),
   });
   const app = createApp({
     deploy,
@@ -65,18 +61,15 @@ function httpGet(
   });
 }
 
-async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServer>[1]) {
-  const upstream = createHttpServer(
+async function widgetFixture(upstreamHandler?: RequestListener) {
+  const upstream = stubHttp(
     upstreamHandler ??
       ((_req, res) => {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end("<html><body>APP</body></html>");
       }),
   );
-  upstream.listen(0);
-  await new Promise((r) => upstream.once("listening", r));
-  const upstreamPort = (upstream.address() as AddressInfo).port;
-  const { app, directory } = appServingUpstream(upstreamPort);
+  const { app, directory } = appServingUpstream(upstream.port);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -86,19 +79,17 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     createdInScope: scopeId("channel", "CBUILT"),
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,
     deployAppsSessionSecret: "portal-session-secret",
   });
-  server.listen(0);
-  const port = (server.address() as AddressInfo).port;
   const close = async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await server.close();
+    await upstream.close();
   };
-  return { app, directory, port, close };
+  return { app, directory, port: server.port, close };
 }
 
 const HOST = "mysite.apps.example.com";

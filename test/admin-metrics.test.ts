@@ -2,28 +2,17 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-metrics-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = () =>
+  startApi({ dataDir: tmpDir("admin-metrics-") }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
     metrics: built.metrics,
     runs: built.runs,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>

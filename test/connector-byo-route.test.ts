@@ -2,21 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = (socketAppId = "A-ACME", managed = false) =>
+  startApi({ dataDir: tmpDir("byo-route-") }, (built) => ({
     oauthStateSecret: "byo-route-oauth-state-secret",
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
@@ -50,11 +43,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const putConnector = (base: string, b: object) =>
   fetch(`${base}/v1/admin/scopes/org:default-org/connectors`, {

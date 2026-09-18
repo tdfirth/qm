@@ -1,22 +1,17 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
 describe("capability-token control plane (crons + webhooks + SOUL)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+  const { built, post, get, patch, del, close } = startApi(
+    { dataDir: tmpDir("cap-routes-"), signingSecret: SECRET },
+    (built) => ({ signingSecret: SECRET, scheduler: built.scheduler, config: built.config, admin: built.admin }),
+    "127.0.0.1",
+  );
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     await mintCapabilityToken(
@@ -57,46 +52,14 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       SECRET,
     );
 
-  before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "cap-routes-")),
-        signingSecret: SECRET,
-      }),
-    );
-    await built.directory.replaceChannels(
+  before(() =>
+    built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    server = createServer(built.app, {
-      signingSecret: SECRET,
-      scheduler: built.scheduler,
-      config: built.config,
-      admin: built.admin,
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
+    ),
+  );
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
-  const patch = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const del = (path: string, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, { method: "DELETE", headers });
+  after(close);
 
   const MEMBERS = [
     { id: "U1", type: "internal" as const },

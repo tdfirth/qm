@@ -2,41 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import type { BuiltApp } from "../src/wiring.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { type Api, startApi, tmpDir } from "./support/api.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 
-function start() {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "skills-http-")),
-      orgId: "acme",
-      seedSkills: false,
-    }),
-  );
-  const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return {
-    base,
-    skills: built.skills,
-    directory: built.directory,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
-}
+const start = () => startApi({ dataDir: tmpDir("skills-http-"), orgId: "acme", seedSkills: false });
 
-async function publish(
-  skills: ReturnType<typeof buildApp>["skills"],
-  scope: ScopeId,
-  name: string,
-  description: string,
-) {
+async function publish(skills: BuiltApp["skills"], scope: ScopeId, name: string, description: string) {
   const sk = await skills.create({
     scopeId: scope,
     manifest: { name, description, requiredCapabilities: [], body: `# ${name}` },
@@ -61,8 +34,8 @@ interface SkillView {
 test("GET /v1/skills returns metadata only; authorized detail fetch returns the body", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
-    await publish(srv.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
+    await publish(srv.built.skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
 
     const res = await fetch(`${srv.base}/v1/skills?principalId=${encodeURIComponent("U1")}`);
     assert.equal(res.status, 200);
@@ -88,14 +61,14 @@ test("GET /v1/skills returns metadata only; authorized detail fetch returns the 
 test("GET /v1/skills marks a private-channel skill editable for a member and not for a non-member", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceChannels(
+    await srv.built.directory.replaceChannels(
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [
         { channelId: "C9", principalId: "avery" },
         { channelId: "C9", principalId: "jordan" },
       ],
     );
-    await publish(srv.skills, scopeId("channel", "C9"), "team-thing", "shared in the channel");
+    await publish(srv.built.skills, scopeId("channel", "C9"), "team-thing", "shared in the channel");
 
     const forJordan = (await (await fetch(`${srv.base}/v1/skills?principalId=jordan`)).json()) as {
       skills: SkillView[];
@@ -121,7 +94,7 @@ test("GET /v1/skills marks a private-channel skill editable for a member and not
 test("PUT /v1/skills/:id edits an owned personal skill in place and keeps it live", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
     const before = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     const id = before.skills.find((s) => s.name === "make-digest")!.id;
 
@@ -144,13 +117,13 @@ test("PUT /v1/skills/:id edits an owned personal skill in place and keeps it liv
 test("PUT /v1/skills/:id refuses to edit a skill the caller doesn't own", async () => {
   const srv = start();
   try {
-    const sk = await srv.skills.create({
+    const sk = await srv.built.skills.create({
       scopeId: scopeId("personal", "U2"),
       manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
       createdBy: "U2",
     });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    await srv.built.skills.review(sk.id, "reviewer-1", []);
+    await srv.built.skills.publish(sk.id);
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
@@ -166,7 +139,7 @@ test("PUT /v1/skills/:id refuses to edit a skill the caller doesn't own", async 
 test("DELETE /v1/skills/:id archives an owned personal skill", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
     const before = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     const id = before.skills.find((s) => s.name === "make-digest")!.id;
 
@@ -177,7 +150,7 @@ test("DELETE /v1/skills/:id archives an owned personal skill", async () => {
     });
     assert.equal(res.status, 200);
 
-    assert.equal((await srv.skills.get(id))?.status, "archived", "record remains as a reversible tombstone");
+    assert.equal((await srv.built.skills.get(id))?.status, "archived", "record remains as a reversible tombstone");
     const after = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     assert.equal(
       after.skills.find((s) => s.name === "make-digest")?.status,
@@ -192,7 +165,7 @@ test("DELETE /v1/skills/:id archives an owned personal skill", async () => {
 test("an archived skill can be restored by its manager", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("personal", "U1"), "recover-me", "recoverable");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "recover-me", "recoverable");
     const listed = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     const id = listed.skills.find((skill) => skill.name === "recover-me")!.id;
     await fetch(`${srv.base}/v1/skills/${id}`, {
@@ -206,7 +179,7 @@ test("an archived skill can be restored by its manager", async () => {
       body: JSON.stringify({ principalId: "U1" }),
     });
     assert.equal(restored.status, 200);
-    assert.equal((await srv.skills.get(id))?.status, "published");
+    assert.equal((await srv.built.skills.get(id))?.status, "published");
   } finally {
     await srv.close();
   }
@@ -215,7 +188,7 @@ test("an archived skill can be restored by its manager", async () => {
 test("an archived skill name can be reused for a replacement", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("personal", "U1"), "replace-me", "old version");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "replace-me", "old version");
     const listed = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     const oldId = listed.skills.find((skill) => skill.name === "replace-me")!.id;
     await fetch(`${srv.base}/v1/skills/${oldId}`, {
@@ -237,7 +210,7 @@ test("an archived skill name can be reused for a replacement", async () => {
     assert.equal(replacement.status, 201);
     const created = (await replacement.json()) as { skill: SkillView };
     assert.notEqual(created.skill.id, oldId);
-    assert.equal(await srv.skills.get(oldId), null, "the reused name retires its archived tombstone");
+    assert.equal(await srv.built.skills.get(oldId), null, "the reused name retires its archived tombstone");
   } finally {
     await srv.close();
   }
@@ -246,13 +219,13 @@ test("an archived skill name can be reused for a replacement", async () => {
 test("DELETE /v1/skills/:id refuses a skill the caller doesn't own with 403", async () => {
   const srv = start();
   try {
-    const sk = await srv.skills.create({
+    const sk = await srv.built.skills.create({
       scopeId: scopeId("personal", "U2"),
       manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
       createdBy: "U2",
     });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    await srv.built.skills.review(sk.id, "reviewer-1", []);
+    await srv.built.skills.publish(sk.id);
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "DELETE",
@@ -260,7 +233,7 @@ test("DELETE /v1/skills/:id refuses a skill the caller doesn't own with 403", as
       body: JSON.stringify({ principalId: "U1" }),
     });
     assert.equal(res.status, 403);
-    assert.ok(await srv.skills.get(sk.id), "the other owner's skill is untouched");
+    assert.ok(await srv.built.skills.get(sk.id), "the other owner's skill is untouched");
   } finally {
     await srv.close();
   }
@@ -293,8 +266,8 @@ test("GET /v1/skills without principalId is a 400", async () => {
 test("GET /v1/skills surfaces the shadowed flag when a personal skill overrides an org one", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "notes", "org notes");
-    await publish(srv.skills, scopeId("personal", "U1"), "notes", "U1 notes");
+    await publish(srv.built.skills, scopeId("org", "default-org"), "notes", "org notes");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "notes", "U1 notes");
 
     const res = await fetch(`${srv.base}/v1/skills?principalId=U1`);
     const body = (await res.json()) as { skills: Array<{ name: string; scope: string; shadowed: boolean }> };
@@ -310,8 +283,8 @@ test("GET /v1/skills surfaces the shadowed flag when a personal skill overrides 
 test("GET /v1/skills can include every active scope variant without changing the default projection", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "notes", "org notes");
-    await publish(srv.skills, scopeId("personal", "U1"), "notes", "personal notes");
+    await publish(srv.built.skills, scopeId("org", "default-org"), "notes", "org notes");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "notes", "personal notes");
 
     const normal = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
     assert.equal(normal.skills.filter((skill) => skill.name === "notes").length, 1);
@@ -367,7 +340,7 @@ test("POST /v1/skills creates a personal skill that is then visible and editable
 test("POST /v1/skills rejects a duplicate name in the caller's personal scope with 409", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("personal", "U1"), "watch-ci", "first one");
+    await publish(srv.built.skills, scopeId("personal", "U1"), "watch-ci", "first one");
     const res = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -417,46 +390,29 @@ test("a personal skill of the same name does NOT collide across principals", asy
   }
 });
 
-async function startSecure() {
-  const SECRET = "skills-http-cap-secret".repeat(3);
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "skills-http-cap-")),
-      orgId: "acme",
-      seedSkills: false,
-      signingSecret: SECRET,
-    }),
+const SECRET = "skills-http-cap-secret".repeat(3);
+const startSecure = () =>
+  startApi({ dataDir: tmpDir("skills-http-cap-"), orgId: "acme", seedSkills: false, signingSecret: SECRET }, () => ({
+    signingSecret: SECRET,
+  }));
+const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
+  mintCapabilityToken(
+    {
+      actorId,
+      scopeId: scope,
+      aud: CONTROL_PLANE_AUD,
+      ...(liveActor ? { liveActor: true } : {}),
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    SECRET,
   );
-  const server = createServer(built.app, { signingSecret: SECRET });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scope,
-        aud: CONTROL_PLANE_AUD,
-        ...(liveActor ? { liveActor: true } : {}),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
-    );
-  return {
-    base,
-    cap,
-    skills: built.skills,
-    directory: built.directory,
-    sessions: built.sessions,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
-}
 
 test("POST /v1/skills via a capability token authors as the token's own principal (body principalId ignored)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const res = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("U1") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("U1") },
       body: JSON.stringify({
         principalId: "U2",
         name: "watch-ci",
@@ -466,7 +422,7 @@ test("POST /v1/skills via a capability token authors as the token's own principa
     });
     assert.equal(res.status, 201);
 
-    const all = await srv.skills.list();
+    const all = await srv.built.skills.list();
     const watch = all.find((sk) => sk.manifest.name === "watch-ci");
     assert.ok(watch, "the skill was created");
     assert.equal(
@@ -480,9 +436,9 @@ test("POST /v1/skills via a capability token authors as the token's own principa
 });
 
 test("POST /v1/skills via a capability token from a private-channel scope homes the skill there, authored by the actor", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    await srv.directory.replaceChannels(
+    await srv.built.directory.replaceChannels(
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [
         { channelId: "C9", principalId: "avery" },
@@ -493,12 +449,12 @@ test("POST /v1/skills via a capability token from a private-channel scope homes 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("avery", scopeId("channel", "C9")),
+        "x-agent-capability": await cap("avery", scopeId("channel", "C9")),
       },
       body: JSON.stringify({ name: "team-thing", description: "d", body: "# b" }),
     });
     assert.equal(res.status, 201);
-    const all = await srv.skills.list();
+    const all = await srv.built.skills.list();
     const sk = all.find((s) => s.manifest.name === "team-thing");
     assert.ok(sk, "the skill was created");
     assert.equal(sk!.scopeId, scopeId("channel", "C9"), "homed in the channel, not avery's personal scope");
@@ -510,7 +466,7 @@ test("POST /v1/skills via a capability token from a private-channel scope homes 
 });
 
 test("POST /v1/skills with a signing secret set rejects an unauthenticated (unsigned, no-token) request", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const res = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
@@ -524,23 +480,23 @@ test("POST /v1/skills with a signing secret set rejects an unauthenticated (unsi
 });
 
 test("PUT /v1/skills/:id via a capability token edits the token-actor's own skill (body principalId ignored)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const sk = await srv.skills.create({
+    const sk = await srv.built.skills.create({
       scopeId: scopeId("personal", "U1"),
       manifest: { name: "make-digest", description: "v1", requiredCapabilities: [], body: "# v1" },
       createdBy: "U1",
     });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    await srv.built.skills.review(sk.id, "reviewer-1", []);
+    await srv.built.skills.publish(sk.id);
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("U1") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("U1") },
       body: JSON.stringify({ principalId: "U2", description: "v2", body: "# v2" }),
     });
     assert.equal(res.status, 200);
-    const after = await srv.skills.get(sk.id);
+    const after = await srv.built.skills.get(sk.id);
     assert.equal(after!.manifest.body, "# v2");
   } finally {
     await srv.close();
@@ -548,30 +504,30 @@ test("PUT /v1/skills/:id via a capability token edits the token-actor's own skil
 });
 
 test("PUT /v1/skills/:id via a capability token cannot edit another scope's skill (404)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const sk = await srv.skills.create({
+    const sk = await srv.built.skills.create({
       scopeId: scopeId("personal", "U2"),
       manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
       createdBy: "U2",
     });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    await srv.built.skills.review(sk.id, "reviewer-1", []);
+    await srv.built.skills.publish(sk.id);
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("U1") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("U1") },
       body: JSON.stringify({ description: "hijacked" }),
     });
     assert.equal(res.status, 404);
-    assert.equal((await srv.skills.get(sk.id))!.manifest.description, "theirs");
+    assert.equal((await srv.built.skills.get(sk.id))!.manifest.description, "theirs");
   } finally {
     await srv.close();
   }
 });
 
-async function seedChannelSkill(srv: Awaited<ReturnType<typeof startSecure>>) {
-  await srv.directory.replaceChannels(
+async function seedChannelSkill(srv: Api) {
+  await srv.built.directory.replaceChannels(
     [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
     [
       { channelId: "C9", principalId: "avery" },
@@ -582,7 +538,7 @@ async function seedChannelSkill(srv: Awaited<ReturnType<typeof startSecure>>) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-agent-capability": await srv.cap("avery", scopeId("channel", "C9")),
+      "x-agent-capability": await cap("avery", scopeId("channel", "C9")),
     },
     body: JSON.stringify({ name: "team-thing", description: "v1", body: "# v1" }),
   });
@@ -591,19 +547,19 @@ async function seedChannelSkill(srv: Awaited<ReturnType<typeof startSecure>>) {
 }
 
 test("PUT /v1/skills/:id lets a DIFFERENT member of the home channel edit it, preserving provenance and staying live", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
     const res = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("jordan", scopeId("channel", "C9")),
+        "x-agent-capability": await cap("jordan", scopeId("channel", "C9")),
       },
       body: JSON.stringify({ body: "# v2 by jordan" }),
     });
     assert.equal(res.status, 200);
-    const after = await srv.skills.get(id);
+    const after = await srv.built.skills.get(id);
     assert.equal(after!.manifest.body, "# v2 by jordan");
     assert.equal(after!.createdBy, "avery", "edit by a member never rewrites provenance");
     assert.equal(after!.status, "published", "a membership-managed edit re-publishes — no org review needed");
@@ -613,80 +569,80 @@ test("PUT /v1/skills/:id lets a DIFFERENT member of the home channel edit it, pr
 });
 
 test("PUT /v1/skills/:id from a member's own DM (not the channel) still edits — management follows membership, not the turn's scope", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
     const res = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("jordan") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("jordan") },
       body: JSON.stringify({ description: "from jordan's DM" }),
     });
     assert.equal(res.status, 200);
-    assert.equal((await srv.skills.get(id))!.manifest.description, "from jordan's DM");
+    assert.equal((await srv.built.skills.get(id))!.manifest.description, "from jordan's DM");
   } finally {
     await srv.close();
   }
 });
 
 test("PUT/DELETE /v1/skills/:id refuse a NON-member of the home channel (404/403)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("mallory") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("mallory") },
       body: JSON.stringify({ description: "hijacked" }),
     });
     assert.equal(edit.status, 404);
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": await srv.cap("mallory") },
+      headers: { "x-agent-capability": await cap("mallory") },
     });
     assert.equal(del.status, 403);
-    assert.ok(await srv.skills.get(id), "the channel's skill is untouched by a non-member");
-    assert.equal((await srv.skills.get(id))!.manifest.description, "v1");
+    assert.ok(await srv.built.skills.get(id), "the channel's skill is untouched by a non-member");
+    assert.equal((await srv.built.skills.get(id))!.manifest.description, "v1");
   } finally {
     await srv.close();
   }
 });
 
 test("DELETE /v1/skills/:id lets any member of the home channel archive it", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
     const res = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": await srv.cap("jordan") },
+      headers: { "x-agent-capability": await cap("jordan") },
     });
     assert.equal(res.status, 200);
-    assert.equal((await srv.skills.get(id))?.status, "archived");
+    assert.equal((await srv.built.skills.get(id))?.status, "archived");
   } finally {
     await srv.close();
   }
 });
 
 test("an author who LEAVES a private channel loses inline CRUD on its skill (membership, not authorship, decides)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    await srv.directory.replaceChannels(
+    await srv.built.directory.replaceChannels(
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "jordan" }],
     );
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("avery") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("avery") },
       body: JSON.stringify({ description: "ex-member edit" }),
     });
     assert.equal(edit.status, 404, "an ex-member author cannot edit a private-channel skill");
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": await srv.cap("avery") },
+      headers: { "x-agent-capability": await cap("avery") },
     });
     assert.equal(del.status, 403, "an ex-member author cannot delete it either");
     const k = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("jordan") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("jordan") },
       body: JSON.stringify({ description: "still managed by the remaining member" }),
     });
     assert.equal(k.status, 200);
@@ -696,31 +652,36 @@ test("an author who LEAVES a private channel loses inline CRUD on its skill (mem
 });
 
 test("management tracks CURRENT directory membership, not a stale session — a session-only non-member cannot edit", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const sess = await srv.sessions.getOrCreateByThread("C9:t1", "channel", scopeId("channel", "C9"), "avery-jordan");
-    await srv.sessions.addParticipant(sess.id, "dana");
+    const sess = await srv.built.sessions.getOrCreateByThread(
+      "C9:t1",
+      "channel",
+      scopeId("channel", "C9"),
+      "avery-jordan",
+    );
+    await srv.built.sessions.addParticipant(sess.id, "dana");
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("dana") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("dana") },
       body: JSON.stringify({ description: "stale-session edit" }),
     });
     assert.equal(edit.status, 404, "a session-only non-member cannot manage — management reads current membership");
-    assert.equal((await srv.skills.get(id))!.manifest.description, "v1", "untouched");
+    assert.equal((await srv.built.skills.get(id))!.manifest.description, "v1", "untouched");
   } finally {
     await srv.close();
   }
 });
 
 test("a shared-scope skill cannot be created/edited/deleted by an automated trigger (no liveActor)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    await srv.directory.replaceChannels(
+    await srv.built.directory.replaceChannels(
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );
-    const triggerTok = await srv.cap("avery", scopeId("channel", "C9"), false);
+    const triggerTok = await cap("avery", scopeId("channel", "C9"), false);
     const create = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": triggerTok },
@@ -728,7 +689,7 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
     });
     assert.equal(create.status, 403, "an automated trigger cannot create a shared skill");
     assert.equal(
-      (await srv.skills.list()).find((s) => s.manifest.name === "auto-thing"),
+      (await srv.built.skills.list()).find((s) => s.manifest.name === "auto-thing"),
       undefined,
     );
 
@@ -744,9 +705,9 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
       headers: { "x-agent-capability": triggerTok },
     });
     assert.equal(del.status, 403);
-    assert.ok(await srv.skills.get(id), "the shared skill survives an automated trigger");
+    assert.ok(await srv.built.skills.get(id), "the shared skill survives an automated trigger");
 
-    const personalTrigger = await srv.cap("solo", scopeId("personal", "solo"), false);
+    const personalTrigger = await cap("solo", scopeId("personal", "solo"), false);
     const own = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
@@ -759,10 +720,10 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
 });
 
 test("a PERSONAL-scope trigger (no liveActor) cannot edit or delete a skill homed in a private channel it is a member of", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const personalTrigger = await srv.cap("avery", scopeId("personal", "avery"), false);
+    const personalTrigger = await cap("avery", scopeId("personal", "avery"), false);
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
@@ -774,7 +735,7 @@ test("a PERSONAL-scope trigger (no liveActor) cannot edit or delete a skill home
       headers: { "x-agent-capability": personalTrigger },
     });
     assert.equal(del.status, 403, "a personal-scope trigger cannot delete a shared skill");
-    const survivor = await srv.skills.get(id);
+    const survivor = await srv.built.skills.get(id);
     assert.ok(survivor, "the shared skill survives the personal-scope trigger");
     assert.equal(survivor!.manifest.body, "# v1", "and its body is untouched");
   } finally {
@@ -783,61 +744,61 @@ test("a PERSONAL-scope trigger (no liveActor) cannot edit or delete a skill home
 });
 
 test("a LIVE member of a private channel may edit + delete its skill from their own DM (personal token, liveActor)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const liveJordan = await srv.cap("jordan");
+    const liveJordan = await cap("jordan");
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-agent-capability": liveJordan },
       body: JSON.stringify({ description: "edited live by a member" }),
     });
     assert.equal(edit.status, 200, "a live member may edit the shared skill");
-    assert.equal((await srv.skills.get(id))!.manifest.description, "edited live by a member");
+    assert.equal((await srv.built.skills.get(id))!.manifest.description, "edited live by a member");
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
       headers: { "x-agent-capability": liveJordan },
     });
     assert.equal(del.status, 200, "and delete it");
-    assert.equal((await srv.skills.get(id))?.status, "archived");
+    assert.equal((await srv.built.skills.get(id))?.status, "archived");
   } finally {
     await srv.close();
   }
 });
 
 test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'S OWN personal skill", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const sk = await srv.skills.create({
+    const sk = await srv.built.skills.create({
       scopeId: scopeId("personal", "solo"),
       manifest: { name: "solo-skill", description: "v1", requiredCapabilities: [], body: "# v1" },
       createdBy: "solo",
     });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
-    const personalTrigger = await srv.cap("solo", scopeId("personal", "solo"), false);
+    await srv.built.skills.review(sk.id, "reviewer-1", []);
+    await srv.built.skills.publish(sk.id);
+    const personalTrigger = await cap("solo", scopeId("personal", "solo"), false);
     const edit = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
       body: JSON.stringify({ body: "# v2 by the owner's trigger" }),
     });
     assert.equal(edit.status, 200, "an owner's trigger may edit its own personal skill");
-    assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# v2 by the owner's trigger");
+    assert.equal((await srv.built.skills.get(sk.id))!.manifest.body, "# v2 by the owner's trigger");
     const del = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "DELETE",
       headers: { "x-agent-capability": personalTrigger },
     });
     assert.equal(del.status, 200, "and delete it");
-    assert.equal((await srv.skills.get(sk.id))?.status, "archived");
+    assert.equal((await srv.built.skills.get(sk.id))?.status, "archived");
   } finally {
     await srv.close();
   }
 });
 
 test("a group-DM skill is editable by any group member (the group-DM analog of a private channel)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    await srv.directory.replaceGroups([
+    await srv.built.directory.replaceGroups([
       { groupId: "G7", principalId: "ann" },
       { groupId: "G7", principalId: "bob" },
     ]);
@@ -845,38 +806,38 @@ test("a group-DM skill is editable by any group member (the group-DM analog of a
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("ann", scopeId("group", "G7")),
+        "x-agent-capability": await cap("ann", scopeId("group", "G7")),
       },
       body: JSON.stringify({ name: "grouped", description: "v1", body: "# v1" }),
     });
     assert.equal(created.status, 201);
     const id = ((await created.json()) as { skill: { id: string } }).skill.id;
-    assert.equal((await srv.skills.get(id))!.scopeId, scopeId("group", "G7"));
+    assert.equal((await srv.built.skills.get(id))!.scopeId, scopeId("group", "G7"));
 
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("bob") },
+      headers: { "content-type": "application/json", "x-agent-capability": await cap("bob") },
       body: JSON.stringify({ body: "# v2 by bob" }),
     });
     assert.equal(edit.status, 200);
-    assert.equal((await srv.skills.get(id))!.manifest.body, "# v2 by bob");
+    assert.equal((await srv.built.skills.get(id))!.manifest.body, "# v2 by bob");
   } finally {
     await srv.close();
   }
 });
 
 test("POST /v1/skills refuses to home a skill directly in an org or team scope (promotion path only)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     for (const home of [scopeId("org", "default-org"), scopeId("team", "T1")]) {
       const res = await fetch(`${srv.base}/v1/skills`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("author", home) },
+        headers: { "content-type": "application/json", "x-agent-capability": await cap("author", home) },
         body: JSON.stringify({ name: `wide-${home}`, description: "d", body: "# b" }),
       });
       assert.equal(res.status, 403, `${home}: must refuse inline create into a promotion-gated scope`);
       assert.equal(
-        (await srv.skills.list()).find((s) => s.manifest.name === `wide-${home}`),
+        (await srv.built.skills.list()).find((s) => s.manifest.name === `wide-${home}`),
         undefined,
         `${home}: nothing created`,
       );
@@ -889,11 +850,11 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
 test("GET /v1/skills shows a group-DM skill to a member known only via directory membership", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceGroups([
+    await srv.built.directory.replaceGroups([
       { groupId: "G7", principalId: "ann" },
       { groupId: "G7", principalId: "bob" },
     ]);
-    await publish(srv.skills, scopeId("group", "G7"), "grouped", "shared in the group DM");
+    await publish(srv.built.skills, scopeId("group", "G7"), "grouped", "shared in the group DM");
     const forBob = (await (await fetch(`${srv.base}/v1/skills?principalId=bob`)).json()) as { skills: SkillView[] };
     const g = forBob.skills.find((s) => s.name === "grouped");
     assert.ok(g, "the group skill shows up for a directory-only group member");
@@ -909,33 +870,33 @@ test("GET /v1/skills shows a group-DM skill to a member known only via directory
 });
 
 test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (promotion/admin only)", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
     for (const home of [scopeId("org", "default-org"), scopeId("team", "T1")]) {
-      const sk = await srv.skills.create({
+      const sk = await srv.built.skills.create({
         scopeId: home,
         manifest: { name: `wide-${home.replace(":", "-")}`, description: "v1", requiredCapabilities: [], body: "# v1" },
         createdBy: "author",
       });
-      await srv.skills.review(sk.id, "reviewer-1", []);
-      await srv.skills.publish(sk.id);
+      await srv.built.skills.review(sk.id, "reviewer-1", []);
+      await srv.built.skills.publish(sk.id);
 
       const edit = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("author") },
+        headers: { "content-type": "application/json", "x-agent-capability": await cap("author") },
         body: JSON.stringify({ description: "inline edit" }),
       });
       assert.equal(edit.status, 404, `${home}: author cannot inline-edit a wide-scope skill`);
-      const after = await srv.skills.get(sk.id);
+      const after = await srv.built.skills.get(sk.id);
       assert.equal(after!.manifest.description, "v1", `${home}: untouched`);
       assert.equal(after!.status, "published", `${home}: still published, not silently demoted`);
 
       const del = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
         method: "DELETE",
-        headers: { "x-agent-capability": await srv.cap("author") },
+        headers: { "x-agent-capability": await cap("author") },
       });
       assert.equal(del.status, 403, `${home}: author cannot inline-delete a wide-scope skill`);
-      assert.ok(await srv.skills.get(sk.id), `${home}: the org/team copy survives`);
+      assert.ok(await srv.built.skills.get(sk.id), `${home}: the org/team copy survives`);
     }
   } finally {
     await srv.close();
@@ -943,9 +904,9 @@ test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (p
 });
 
 test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member cannot edit it", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    await srv.directory.replaceChannels(
+    await srv.built.directory.replaceChannels(
       [{ channelId: "CPUB", name: "general", isPrivate: false }],
       ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
     );
@@ -953,7 +914,7 @@ test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("owner", scopeId("channel", "CPUB")),
+        "x-agent-capability": await cap("owner", scopeId("channel", "CPUB")),
       },
       body: JSON.stringify({ name: "pub-skill", description: "v1", body: "# v1" }),
     });
@@ -964,7 +925,7 @@ test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member 
       method: "PUT",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("rando", scopeId("channel", "CPUB")),
+        "x-agent-capability": await cap("rando", scopeId("channel", "CPUB")),
       },
       body: JSON.stringify({ description: "hijacked" }),
     });
@@ -973,26 +934,26 @@ test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member 
       method: "PUT",
       headers: {
         "content-type": "application/json",
-        "x-agent-capability": await srv.cap("owner", scopeId("channel", "CPUB")),
+        "x-agent-capability": await cap("owner", scopeId("channel", "CPUB")),
       },
       body: JSON.stringify({ description: "owner edit" }),
     });
     assert.equal(own.status, 200);
-    assert.equal((await srv.skills.get(id))!.manifest.description, "owner edit");
+    assert.equal((await srv.built.skills.get(id))!.manifest.description, "owner edit");
   } finally {
     await srv.close();
   }
 });
 
 test("DELETE /v1/skills/:id via a capability token archives the token-actor's own skill; cannot cross scopes", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const mine = await srv.skills.create({
+    const mine = await srv.built.skills.create({
       scopeId: scopeId("personal", "U1"),
       manifest: { name: "mine", description: "d", requiredCapabilities: [], body: "# mine" },
       createdBy: "U1",
     });
-    const theirs = await srv.skills.create({
+    const theirs = await srv.built.skills.create({
       scopeId: scopeId("personal", "U2"),
       manifest: { name: "theirs", description: "d", requiredCapabilities: [], body: "# theirs" },
       createdBy: "U2",
@@ -1000,26 +961,26 @@ test("DELETE /v1/skills/:id via a capability token archives the token-actor's ow
 
     const cross = await fetch(`${srv.base}/v1/skills/${theirs.id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": await srv.cap("U1") },
+      headers: { "x-agent-capability": await cap("U1") },
     });
     assert.equal(cross.status, 403);
-    assert.ok(await srv.skills.get(theirs.id), "another principal's skill survives");
+    assert.ok(await srv.built.skills.get(theirs.id), "another principal's skill survives");
 
     const own = await fetch(`${srv.base}/v1/skills/${mine.id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": await srv.cap("U1") },
+      headers: { "x-agent-capability": await cap("U1") },
     });
     assert.equal(own.status, 200);
-    assert.equal((await srv.skills.get(mine.id))?.status, "archived");
+    assert.equal((await srv.built.skills.get(mine.id))?.status, "archived");
   } finally {
     await srv.close();
   }
 });
 
 test("a capability token reads and restores its archived skill without losing identity, files, or version", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const created = await srv.skills.create({
+    const created = await srv.built.skills.create({
       scopeId: scopeId("personal", "U1"),
       manifest: {
         name: "recover-me",
@@ -1030,10 +991,10 @@ test("a capability token reads and restores its archived skill without losing id
       },
       createdBy: "U1",
     });
-    await srv.skills.review(created.id, "reviewer-1", []);
-    await srv.skills.publish(created.id);
-    const before = (await srv.skills.get(created.id))!;
-    const token = await srv.cap("U1");
+    await srv.built.skills.review(created.id, "reviewer-1", []);
+    await srv.built.skills.publish(created.id);
+    const before = (await srv.built.skills.get(created.id))!;
+    const token = await cap("U1");
 
     const archived = await fetch(`${srv.base}/v1/skills/${created.id}`, {
       method: "DELETE",
@@ -1059,7 +1020,7 @@ test("a capability token reads and restores its archived skill without losing id
       headers: { "x-agent-capability": token },
     });
     assert.equal(restored.status, 200);
-    const after = (await srv.skills.get(created.id))!;
+    const after = (await srv.built.skills.get(created.id))!;
     assert.equal(after.id, before.id);
     assert.equal(after.version, before.version);
     assert.deepEqual(after.manifest.files, before.manifest.files);
@@ -1070,18 +1031,18 @@ test("a capability token reads and restores its archived skill without losing id
 });
 
 test("skill detail and restore capability calls hide other principals' skills and require identity", async () => {
-  const srv = await startSecure();
+  const srv = startSecure();
   try {
-    const skill = await srv.skills.create({
+    const skill = await srv.built.skills.create({
       scopeId: scopeId("personal", "U2"),
       manifest: { name: "private", description: "theirs", requiredCapabilities: [], body: "# private" },
       createdBy: "U2",
     });
-    await srv.skills.review(skill.id, "reviewer-1", []);
-    await srv.skills.publish(skill.id);
-    await srv.skills.archive(skill.id);
+    await srv.built.skills.review(skill.id, "reviewer-1", []);
+    await srv.built.skills.publish(skill.id);
+    await srv.built.skills.archive(skill.id);
 
-    const headers = { "x-agent-capability": await srv.cap("U1") };
+    const headers = { "x-agent-capability": await cap("U1") };
     assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}`, { headers })).status, 404);
     assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}/restore`, { method: "POST", headers })).status, 404);
     assert.equal((await fetch(`${srv.base}/v1/skills/${skill.id}?principalId=U2`)).status, 401);
@@ -1095,7 +1056,7 @@ test("skill detail and restore capability calls hide other principals' skills an
       ).status,
       401,
     );
-    assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+    assert.equal((await srv.built.skills.get(skill.id))?.status, "archived");
   } finally {
     await srv.close();
   }

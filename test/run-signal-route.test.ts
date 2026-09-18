@@ -3,38 +3,30 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
+import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
-core.listen(0);
-const corePort = (core.address() as AddressInfo).port;
-const coreBase = `http://localhost:${corePort}`;
+const built = buildApp(testConfig({ dataDir: tmpDir("run-signal-") }));
+const core = serveApp(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
+const coreBase = core.base;
 
 process.env.CORE_API_URL = coreBase;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
+const web = stubHttp(handler);
+const webBase = web.base;
 
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
-  await new Promise<void>((r) => core.close(() => r()));
+  await web.close();
+  await core.close();
   await built.runtime.stop();
 });
 

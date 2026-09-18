@@ -2,23 +2,17 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, runs: built.runs, sessions: built.sessions });
-core.listen(0);
-const base = `http://localhost:${(core.address() as AddressInfo).port}`;
+const built = buildApp(testConfig({ dataDir: tmpDir("turns-union-") }));
+const core = serveApp(built.app, { signingSecret: SECRET, runs: built.runs, sessions: built.sessions });
 
 after(async () => {
-  await new Promise<void>((r) => core.close(() => r()));
+  await core.close();
   await built.runtime.stop();
 });
 
@@ -39,7 +33,7 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
     skipMemory: true,
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -71,7 +65,7 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
     unattendedGrants: ["admin.sessions.read"],
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -100,7 +94,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
     origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -122,7 +116,7 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
     origin: { kind: "human" },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -143,7 +137,7 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
     origin: { kind: "automation", screenData: "external event" },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -165,7 +159,7 @@ test("POST /v1/turns preserves legacy screen data omitted from a matching typed 
     origin: { kind: "automation" },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -187,7 +181,7 @@ test("POST /v1/turns rejects conflicting typed and legacy automation screen data
     origin: { kind: "automation", screenData: "benign replacement" },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -213,7 +207,7 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
       ...extra,
     });
   const post = async (body: string): Promise<{ runId: string }> => {
-    const r = await fetch(`${base}/v1/turns`, {
+    const r = await fetch(`${core.base}/v1/turns`, {
       method: "POST",
       headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
       body,
@@ -237,7 +231,7 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
       redeliveryKey: "slack:B1:C-rd:1.0",
     });
   const post = async (body: string): Promise<{ http: number; runId?: string }> => {
-    const r = await fetch(`${base}/v1/turns`, {
+    const r = await fetch(`${core.base}/v1/turns`, {
       method: "POST",
       headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
       body,
@@ -264,7 +258,7 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
     async: true,
     idempotencyKey: "slack:B1:C1:1.0",
   });
-  const r = await fetch(`${base}/v1/turns`, {
+  const r = await fetch(`${core.base}/v1/turns`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
@@ -282,7 +276,7 @@ test("POST /v1/crons (raw source-auth) rejects runAs:scopeShared", async () => {
     ownerScopeId: "channel:C-PUBLIC",
     runAs: "scopeShared",
   });
-  const r = await fetch(`${base}/v1/crons`, {
+  const r = await fetch(`${core.base}/v1/crons`, {
     method: "POST",
     headers: { ...signedHeaders(SECRET, "POST", "/v1/crons", body), "content-type": "application/json" },
     body,

@@ -2,12 +2,6 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import {
@@ -16,27 +10,13 @@ import {
   OAUTH_CONSENT_AUD,
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { type Served, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-function start(
-  fetchImpl: FetchLike,
-  opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
-): { base: string; built: BuiltApp; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
-  void built.directory.replaceChannels(
-    [
-      { channelId: "C1", name: "consent", isPrivate: false },
-      { channelId: "C9", name: "connectors", isPrivate: false },
-    ],
-    [
-      { channelId: "C1", principalId: "U1" },
-      { channelId: "C9", principalId: "U1" },
-    ],
-  );
-  const server = createServer(built.app, {
+function start(fetchImpl: FetchLike, opts: { portalUrl?: string } = { portalUrl: "http://callback.test" }) {
+  const api = startApi({ dataDir: tmpDir("consent-"), signingSecret: SECRET }, (built) => ({
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
@@ -47,10 +27,18 @@ function start(
     oauthFetch: fetchImpl,
     publicUrl: "http://callback.test",
     ...(opts.portalUrl ? { portalUrl: opts.portalUrl } : {}),
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }));
+  void api.built.directory.replaceChannels(
+    [
+      { channelId: "C1", name: "consent", isPrivate: false },
+      { channelId: "C9", name: "connectors", isPrivate: false },
+    ],
+    [
+      { channelId: "C1", principalId: "U1" },
+      { channelId: "C9", principalId: "U1" },
+    ],
+  );
+  return api;
 }
 
 const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
@@ -83,13 +71,8 @@ function redeem(base: string, path: string, clicker?: string): Promise<Response>
   return fetch(`${base}${path}`, { headers });
 }
 
-async function mint(base: string, cap: string, body: Record<string, unknown>): Promise<Response> {
-  return fetch(`${base}/v1/connectors/oauth/consent/mint`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-agent-capability": cap },
-    body: JSON.stringify(body),
-  });
-}
+const mint = (srv: Served, cap: string, body: Record<string, unknown>) =>
+  srv.post("/v1/connectors/oauth/consent/mint", body, { "x-agent-capability": cap });
 
 test("mint → intended teammate redeems → callback connects them; the link is then single-use", async () => {
   let exchanged = 0;
@@ -105,7 +88,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
   };
   const srv = start(fetchImpl);
   try {
-    const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
+    const mintRes = await mint(srv, await consentTok("U1"), { provider: "google" });
     assert.equal(mintRes.status, 200);
     const { connectPath, connectUrl } = (await mintRes.json()) as { connectPath: string; connectUrl: string };
     assert.match(connectPath, /^\/connect\/redeem\//);
@@ -152,7 +135,7 @@ test("redeem refuses without a verified clicker (the portal's session gate)", as
     throw new Error("must not exchange");
   });
   try {
-    const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
+    const mintRes = await mint(srv, await consentTok("U1"), { provider: "google" });
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
     const res = await redeem(srv.base, coreRedeemPath(connectPath));
     assert.equal(res.status, 401);
@@ -170,7 +153,7 @@ test("a wrong-recipient click is refused, leaves the link usable, and reports wh
   const srv = start(fetchImpl, { portalUrl: "http://callback.test" });
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C1" });
-    const mintRes = await mint(srv.base, cap, { provider: "google", intendedPrincipalId: "U1" });
+    const mintRes = await mint(srv, cap, { provider: "google", intendedPrincipalId: "U1" });
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
 
     const wrong = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U2")).json()) as {
@@ -209,7 +192,7 @@ test("connecting from a channel never re-grants a previously private connector",
   const srv = start(fetchImpl);
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C9" });
-    const mintRes = await mint(srv.base, cap, { provider: "google" });
+    const mintRes = await mint(srv, cap, { provider: "google" });
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
     const decision = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U1")).json()) as {
       status: string;
@@ -233,7 +216,7 @@ test("mint refuses naming anyone but the actor, and points at the self-connect p
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C1" });
     for (const who of ["U2", "outsider@x"]) {
-      const res = await mint(srv.base, cap, { provider: "google", intendedPrincipalId: who });
+      const res = await mint(srv, cap, { provider: "google", intendedPrincipalId: who });
       assert.equal(res.status, 400);
       const body = (await res.json()) as { message: string };
       assert.match(body.message, /\/connect\/google\/self-connect/);
@@ -251,7 +234,7 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
   });
   const srv = start(fetchImpl, {});
   try {
-    const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
+    const mintRes = await mint(srv, await consentTok("U1"), { provider: "google" });
     assert.equal(mintRes.status, 200);
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
     const decision = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U1")).json()) as {
@@ -330,7 +313,7 @@ test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", as
     throw new Error("must not exchange");
   });
   try {
-    const res = await mint(srv.base, await consentTok("U1"), { provider: "github" });
+    const res = await mint(srv, await consentTok("U1"), { provider: "github" });
     assert.equal(res.status, 501);
     const body = (await res.json()) as { error: string };
     assert.equal(body.error, "oauth_not_configured");

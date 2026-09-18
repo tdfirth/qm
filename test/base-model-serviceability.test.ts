@@ -2,22 +2,15 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), harness: "pi", ...overrides });
-  const built = buildApp(config);
-  const server = createInsecureTestServer(built.app, {
+const start = (overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) =>
+  startApi({ dataDir: tmpDir("base-model-svc-"), harness: "pi", ...overrides }, (built, config) => ({
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
@@ -26,11 +19,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: 
     harnessId: "pi",
     baseModelDefault: defaultModelForHarness("pi", configuredModelForHarness(config, "pi"), baseModelProviders(config)),
     providerKeys: providerKeysPresent(config),
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 async function effectiveModel(base: string): Promise<string> {
   const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);

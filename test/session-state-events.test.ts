@@ -2,20 +2,15 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 function freshApp() {
-  const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
-  return buildApp(testConfig({ dataDir, orgId: "acme" }));
+  return buildApp(testConfig({ dataDir: tmpDir("ap-state-"), orgId: "acme" }));
 }
 
 const actor = { externalId: "U1", orgId: "acme" };
@@ -153,11 +148,9 @@ test("a shed event for an unknown thread still reaches subscribers, just without
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
   const built = freshApp();
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
-  core.listen(0);
-  const base = `http://localhost:${(core.address() as AddressInfo).port}`;
+  const core = serveApp(built.app, { webhookReceiver: built.webhookReceiver });
   try {
-    const res = await fetch(`${base}/v1/session-state/events`, { signal: AbortSignal.timeout(15_000) });
+    const res = await fetch(`${core.base}/v1/session-state/events`, { signal: AbortSignal.timeout(15_000) });
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
@@ -188,7 +181,7 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
       ["working", "awaiting_approval"],
     );
   } finally {
-    await new Promise<void>((r) => core.close(() => r()));
+    await core.close();
     await built.runtime.stop();
   }
 });

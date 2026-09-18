@@ -1,14 +1,10 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createCoreSearch, type SearchBackend } from "../src/search/core-search.ts";
 import { createIntersectionBackend } from "../src/search/backends.ts";
-import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
@@ -57,7 +53,12 @@ test("intersection backend requires visibility to every principal", async () => 
 });
 test("POST /v1/search derives principals from capability and shared scopes fail closed", async () => {
   const secret = "search-route-secret".repeat(3);
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-")), signingSecret: secret }));
+  const srv = startApi(
+    { dataDir: tmpDir("search-"), signingSecret: secret },
+    (built) => ({ signingSecret: secret, auditLog: built.auditLog }),
+    "127.0.0.1",
+  );
+  const { built } = srv;
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "private", isPrivate: true },
@@ -72,9 +73,6 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
-  const server = createServer(built.app, { signingSecret: secret, auditLog: built.auditLog });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const token = async (members?: typeof principals) =>
     mintCapabilityToken(
       {
@@ -85,12 +83,7 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
       },
       secret,
     );
-  const post = async (cap: string) =>
-    fetch(`${base}/v1/search`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": cap },
-      body: JSON.stringify({ query: "pelican" }),
-    });
+  const post = async (cap: string) => srv.post("/v1/search", { query: "pelican" }, { "x-agent-capability": cap });
   try {
     const ok = await post(await token(principals));
     assert.equal(ok.status, 200);
@@ -110,12 +103,12 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     assert.match(events[0]!.detail ?? "", /"principals":\["alice@example.com","bob@example.com"\]/);
     assert.doesNotMatch(events[0]!.detail ?? "", /pelican/, "query text is not copied into the audit log");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await srv.close();
   }
 });
 
 test("file backend applies the principal visibility intersection to real file rows", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-files-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("search-files-") }));
   const id = "0123456789abcdef0123456789abcdef";
   await built.files.put({
     id,
@@ -143,7 +136,7 @@ test("file backend applies the principal visibility intersection to real file ro
 });
 
 test("slack backend intersects private-channel visibility across all principals", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-slack-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("search-slack-") }));
   await built.directory.replaceChannels(
     [
       { channelId: "C-SHARED", name: "shared", isPrivate: true },
@@ -168,7 +161,7 @@ test("slack backend intersects private-channel visibility across all principals"
 });
 
 test("file search retains common artifact identities when viewers own different copies", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-copies-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("search-copies-") }));
   const project = scopeId("group", "search-copy-project");
   const ids = ["shared-copy-alice", "shared-copy-bob"];
   for (const [index, author] of principals.entries()) {
@@ -215,7 +208,7 @@ test("file search retains common artifact identities when viewers own different 
 });
 
 test("file search still reaches shared artifacts outside the first document page", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-shared-pages-")) }));
+  const built = buildApp(testConfig({ dataDir: tmpDir("search-shared-pages-") }));
   const ownerScopeId = scopeId("personal", "carol@example.com");
   for (let n = 0; n < 205; n++) {
     const id = "shared-search-" + n;

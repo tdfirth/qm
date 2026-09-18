@@ -1,13 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -18,29 +12,20 @@ const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
 function start(enabled = true) {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
-      orgId: "default-org",
-      ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
+  return startApi(
+    { dataDir: tmpDir("trusted-admin-"), orgId: "default-org", ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}) },
+    (built) => ({
+      signingSecret,
+      capabilitySecret: "capability-secret".repeat(3),
+      portalIdentitySecret: identitySecret,
+      requireSignedPortalIdentity: true,
+      replayDedupe: { ...createMemoryReplayDedupe(), durable: true },
+      admin: built.admin,
+      identity: built.identity,
+      auditLog: built.auditLog,
     }),
+    "127.0.0.1",
   );
-  const server = createServer(built.app, {
-    signingSecret,
-    capabilitySecret: "capability-secret".repeat(3),
-    portalIdentitySecret: identitySecret,
-    requireSignedPortalIdentity: true,
-    replayDedupe: { ...createMemoryReplayDedupe(), durable: true },
-    admin: built.admin,
-    identity: built.identity,
-    auditLog: built.auditLog,
-  });
-  server.listen(0);
-  return {
-    built,
-    base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-  };
 }
 function claims(overrides: Record<string, unknown> = {}) {
   return {

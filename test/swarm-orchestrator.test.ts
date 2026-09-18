@@ -7,13 +7,11 @@ import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 
 const screenedPayloads: string[] = [];
@@ -48,6 +46,7 @@ mock.module("../src/harness/mock-harness.ts", {
   },
 });
 const { buildApp } = await import("../src/wiring.ts");
+const { serveApp } = await import("./support/api.ts");
 test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
@@ -229,9 +228,7 @@ for (const storage of ["memory", "postgres"] as const) {
       }
       let built = buildApp(config);
       const { serverDeps } = await import("../src/wiring.ts");
-      let server = createServer(built.app, serverDeps(config, built));
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-      let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      let server = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
       let rootId = "";
       const childIds = new Set<string>();
       const issued: Array<{ sessionId: string; attempt: number }> = [];
@@ -264,7 +261,7 @@ for (const storage of ["memory", "postgres"] as const) {
               audience: [rootId],
               text: "http-worker-result",
             };
-        const response = await fetch(`${base}/v1/swarm`, {
+        const response = await fetch(`${server.base}/v1/swarm`, {
           method: "POST",
           headers: { "x-agent-capability": token, "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -272,7 +269,7 @@ for (const storage of ["memory", "postgres"] as const) {
         assert.equal(response.status, 202, await response.text());
         if (!root) {
           const headers = { "x-agent-capability": token, "content-type": "application/json" };
-          const inspected = await fetch(`${base}/v1/swarm`, { headers });
+          const inspected = await fetch(`${server.base}/v1/swarm`, { headers });
           const view = (await inspected.json()) as {
             self: { id: string };
             peers: unknown[];
@@ -287,21 +284,25 @@ for (const storage of ["memory", "postgres"] as const) {
             { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
             { action: "send", requestId: "all", audience: "all", notify: false, text: "http-shared-note" },
           ]) {
-            const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
+            const sent = await fetch(`${server.base}/v1/swarm`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(message),
+            });
             assert.equal(sent.status, 202, await sent.text());
           }
           for (const invalid of [
             { action: "send", requestId: "forged", audience: [view.self.id, "forged-peer"], text: "must reject" },
             { action: "spawn", requestId: "reconfigure", settings: { turnMs: 10 }, text: "must reject" },
           ]) {
-            const rejected = await fetch(`${base}/v1/swarm`, {
+            const rejected = await fetch(`${server.base}/v1/swarm`, {
               method: "POST",
               headers,
               body: JSON.stringify(invalid),
             });
             assert.equal(rejected.status, 400);
           }
-          const history = await fetch(`${base}/v1/swarm?read=1`, { headers });
+          const history = await fetch(`${server.base}/v1/swarm?read=1`, { headers });
           assert.match(await history.text(), /http-shared-note/);
         }
       };
@@ -314,7 +315,7 @@ for (const storage of ["memory", "postgres"] as const) {
           conversation: { kind: "dm", threadRef: "http-swarm-root" },
           text: "http-swarm-root",
         });
-        const rootResponse = await fetch(`${base}/v1/turns`, {
+        const rootResponse = await fetch(`${server.base}/v1/turns`, {
           method: "POST",
           headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
             "content-type": "application/json",
@@ -325,12 +326,10 @@ for (const storage of ["memory", "postgres"] as const) {
         const root = (await rootResponse.json()) as { status: string };
         assert.equal(root.status, "ok", JSON.stringify(root));
         if (storage === "postgres") {
-          await new Promise<void>((resolve) => server.close(() => resolve()));
+          await server.close();
           await built.runtime.stop();
           built = buildApp(config);
-          server = createServer(built.app, serverDeps(config, built));
-          await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-          base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+          server = serveApp(built.app, serverDeps(config, built), "127.0.0.1");
         }
         await built.app.swarms!.sweep();
         const workers = (await built.runs.list()).filter((run) => run.request.swarm);
@@ -381,7 +380,7 @@ for (const storage of ["memory", "postgres"] as const) {
         const stopPath = `/v1/runs/${cancelRunId}/signal`;
         const stopBody = JSON.stringify({ kind: "abort" });
         const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
-        const stopped = await fetch(`${base}${stopPath}`, {
+        const stopped = await fetch(`${server.base}${stopPath}`, {
           method: "POST",
           headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {
             "content-type": "application/json",
@@ -411,7 +410,7 @@ for (const storage of ["memory", "postgres"] as const) {
         assert.equal(revokedExecuted, false);
       } finally {
         exerciseTurn = undefined;
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await server.close();
         await built.runtime.stop();
         await cleanupDatabase();
       }

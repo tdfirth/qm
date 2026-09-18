@@ -2,15 +2,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { computeRetention } from "../src/admin/retention.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -61,17 +55,12 @@ test("computeRetention: empty input yields zeros, never NaN", () => {
   assert.deepEqual(report.totals, { users: 0, sessions: 0 });
 });
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-ret-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = () =>
+  startApi({ dataDir: tmpDir("admin-ret-") }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });

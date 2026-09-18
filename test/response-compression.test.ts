@@ -1,21 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createServer as createHttpServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { AddressInfo } from "node:net";
+import { request as httpRequest, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { gzipAccepted, sendBuffered, sendJson } from "../src/api/http.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, stubHttp, tmpDir } from "./support/api.ts";
 
 interface RawResponse {
   status: number;
@@ -36,20 +24,12 @@ function get(base: string, path: string, headers: Record<string, string>): Promi
   });
 }
 
-function listen(server: Server): { base: string; close: () => Promise<void> } {
-  server.listen(0);
-  return {
-    base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  };
-}
+const listen = (handler: RequestListener) => stubHttp(handler, "127.0.0.1");
 
 const bigBody = { rows: Array.from({ length: 200 }, (_, i) => ({ id: `row-${i}`, label: "a repetitive label" })) };
 const bigJson = JSON.stringify(bigBody);
 
-function jsonEcho(): { base: string; close: () => Promise<void> } {
-  return listen(createHttpServer((req, res) => sendJson(res, 200, req.url === "/small" ? { ok: true } : bigBody)));
-}
+const jsonEcho = () => listen((req, res) => sendJson(res, 200, req.url === "/small" ? { ok: true } : bigBody));
 
 test("a client that accepts gzip gets a gzipped body that decodes to the identical bytes", async () => {
   const s = jsonEcho();
@@ -76,10 +56,8 @@ test("a compressed response declares the length of the bytes on the wire, not of
 });
 
 test("a caller's own content-length never survives onto a compressed body", { timeout: 5_000 }, async () => {
-  const s = listen(
-    createHttpServer((_req, res) =>
-      sendBuffered(res, 200, { "content-type": "application/json", "content-length": String(bigJson.length) }, bigJson),
-    ),
+  const s = listen((_req, res) =>
+    sendBuffered(res, 200, { "content-type": "application/json", "content-length": String(bigJson.length) }, bigJson),
   );
   try {
     const r = await get(s.base, "/", { "accept-encoding": "gzip" });
@@ -125,12 +103,10 @@ test("a payload below the minimum size is not worth compressing", async () => {
 });
 
 test("a handler that fails after a large send still answers coherently instead of shipping an empty gzip", async () => {
-  const s = listen(
-    createHttpServer((_req, res) => {
-      sendJson(res, 200, bigBody);
-      if (!res.headersSent) sendJson(res, 500, { error: "internal_error" });
-    }),
-  );
+  const s = listen((_req, res) => {
+    sendJson(res, 200, bigBody);
+    if (!res.headersSent) sendJson(res, 500, { error: "internal_error" });
+  });
   try {
     const r = await get(s.base, "/", { "accept-encoding": "gzip" });
     assert.equal(r.status, 500);
@@ -143,14 +119,12 @@ test("a handler that fails after a large send still answers coherently instead o
 
 test("a client that vanishes mid-compression leaves the server serving the next request", async () => {
   let abandoned: ServerResponse | undefined;
-  const s = listen(
-    createHttpServer((_req, res) => {
-      sendJson(res, 200, bigBody);
-      if (abandoned) return;
-      abandoned = res;
-      res.destroy();
-    }),
-  );
+  const s = listen((_req, res) => {
+    sendJson(res, 200, bigBody);
+    if (abandoned) return;
+    abandoned = res;
+    res.destroy();
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       const req = httpRequest(s.base, { headers: { "accept-encoding": "gzip" }, agent: false }, () => resolve());
@@ -169,14 +143,12 @@ test(
   "a competing response that has claimed the head is never overwritten by a late compression",
   { timeout: 5_000 },
   async () => {
-    const s = listen(
-      createHttpServer((_req, res) => {
-        sendJson(res, 200, bigBody);
-        res.writeHead(500, { "content-type": "text/plain" });
-        res.write("interloper");
-        setTimeout(() => res.end(), 100);
-      }),
-    );
+    const s = listen((_req, res) => {
+      sendJson(res, 200, bigBody);
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.write("interloper");
+      setTimeout(() => res.end(), 100);
+    });
     try {
       const r = await get(s.base, "/", { "accept-encoding": "gzip" });
       assert.equal(r.status, 500);
@@ -189,8 +161,7 @@ test(
 );
 
 test("the core API server compresses a response written through Fastify's hijacked reply", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "compression-")) }));
-  const s = listen(createInsecureTestServer(built.app));
+  const s = startApi({ dataDir: tmpDir("compression-") }, () => ({}), "127.0.0.1");
   try {
     const path = `/v1/${"x".repeat(1200)}`;
     const packed = await get(s.base, path, { "accept-encoding": "gzip" });

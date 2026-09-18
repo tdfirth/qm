@@ -1,11 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { serveApp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -24,7 +20,7 @@ function svc() {
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
-    deployDir: mkdtempSync(join(tmpdir(), "rn-")),
+    deployDir: tmpDir("rn-"),
   });
   return { deploy, deployStore };
 }
@@ -66,19 +62,12 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
   const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
-  const server = createInsecureTestServer(app, {
+  const server = serveApp(app, {
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
-  const post = (path: string, body: unknown) =>
-    fetch(base + path, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-portal-identity": identity },
-      body: JSON.stringify(body),
-    });
+  const post = (path: string, body: unknown) => server.post(path, body, { "x-portal-identity": identity });
   try {
     const d = await make(s.deploy, "my-app");
     const dn = await post(`/v1/deployments/${d.id}/display-name`, { displayName: "Pretty" });
@@ -92,7 +81,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
     assert.equal(rnBody.deployment.name, "new-slug");
     assert.equal(rnBody.deployment.displayName, "Pretty");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await server.close();
   }
 });
 

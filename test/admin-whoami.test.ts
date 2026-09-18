@@ -2,29 +2,16 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "../src/wiring.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
-function start(withAdmin = true, signingSecret?: string) {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
-  const deps = {
+const start = (withAdmin = true, signingSecret?: string) =>
+  startApi({ dataDir: tmpDir("admin-whoami-") }, (built) => ({
     ...(withAdmin ? { admin: built.admin } : {}),
     auditLog: built.auditLog,
-  };
-  const server = signingSecret
-    ? createServer(built.app, { ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+    ...(signingSecret ? { signingSecret } : {}),
+  }));
 
 const whoami = (base: string, actor?: string): Promise<any> =>
   fetch(`${base}/v1/admin/whoami`, { headers: actor ? { "x-admin-actor": actor } : {} });

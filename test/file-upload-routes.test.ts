@@ -1,10 +1,8 @@
 import "./support/auto-fake-sprites.ts";
-import { after, before, test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
 import { buildApp } from "../src/wiring.ts";
-import { createServer } from "../src/api/server.ts";
+import { serveApp } from "./support/api.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
 import type { FileUpload } from "../src/files/file-upload-store.ts";
@@ -28,8 +26,6 @@ const upload: FileUpload = {
   expiresAt: Date.now() + 60_000,
   createdAt: Date.now(),
 };
-let server: Server;
-let base: string;
 let calls = 0;
 const fake: DirectFileUploads = {
   async begin() {
@@ -57,22 +53,16 @@ const fake: DirectFileUploads = {
 const token = (actorId: string, scope = personal) =>
   mintCapabilityToken({ actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 }, secret);
 const call = async (path: string, cap?: string, method = "GET", body?: unknown) =>
-  fetch(base + path, {
+  fetch(server.base + path, {
     method,
     headers: { ...(cap ? { "x-agent-capability": cap } : {}), "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-before(async () => {
-  const built = buildApp(testConfig({ signingSecret: secret }));
-  built.app.belongsToScope = async () => true;
-  built.app.authorizesCapabilityScope = async () => true;
-  server = createServer(built.app, { signingSecret: secret, fileUploads: fake, filesDirectUploadsEnabled: true });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  base = `http://localhost:${(server.address() as AddressInfo).port}`;
-});
-after(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-});
+const built = buildApp(testConfig({ signingSecret: secret }));
+built.app.belongsToScope = async () => true;
+built.app.authorizesCapabilityScope = async () => true;
+const server = serveApp(built.app, { signingSecret: secret, fileUploads: fake, filesDirectUploadsEnabled: true });
+after(server.close);
 
 test("direct upload routes require authenticated actor", async () => {
   assert.equal((await call("/v1/files/uploads", undefined, "POST", {})).status, 401);
@@ -122,7 +112,7 @@ test("disabled initiation preserves existing session recovery", async () => {
   const built = buildApp(testConfig({ signingSecret: secret }));
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
-  const recovery = createServer(built.app, {
+  const recovery = serveApp(built.app, {
     signingSecret: secret,
     fileUploads: {
       ...fake,
@@ -131,8 +121,6 @@ test("disabled initiation preserves existing session recovery", async () => {
       },
     },
   });
-  await new Promise<void>((resolve) => recovery.listen(0, resolve));
-  const origin = `http://localhost:${(recovery.address() as AddressInfo).port}`;
   const cap = await token("U1");
   try {
     for (const [method, path, expected] of [
@@ -143,10 +131,10 @@ test("disabled initiation preserves existing session recovery", async () => {
       ["POST", `/v1/files/uploads/${upload.id}/complete`, 200],
       ["DELETE", `/v1/files/uploads/${upload.id}`, 200],
     ] as const) {
-      const response = await fetch(origin + path, { method, headers: { "x-agent-capability": cap } });
+      const response = await fetch(recovery.base + path, { method, headers: { "x-agent-capability": cap } });
       assert.equal(response.status, expected, `${method} ${path}`);
     }
   } finally {
-    await new Promise<void>((resolve) => recovery.close(() => resolve()));
+    await recovery.close();
   }
 });

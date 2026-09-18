@@ -2,15 +2,9 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
+import { startApi, tmpDir } from "./support/api.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -61,18 +55,13 @@ test("computeUsers includes a grant-holder who has never participated", () => {
   assert.equal(rows[0]!.admin.isAdmin, true);
 });
 
-function start() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
-  const server = createInsecureTestServer(built.app, {
+const start = () =>
+  startApi({ dataDir: tmpDir("admin-users-") }, (built) => ({
     admin: built.admin,
     sessions: built.sessions,
     memory: built.memory,
     auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
-}
+  }));
 
 test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied; audited", async () => {
   const s = start();
@@ -240,21 +229,16 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
 });
 
 test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty query → []; non-admin denied", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")),
-      emailAuthPrincipals: ["new@example.com"],
+  const { built, base, close } = startApi(
+    { dataDir: tmpDir("admin-dir-"), emailAuthPrincipals: ["new@example.com"] },
+    (built) => ({
+      admin: built.admin,
+      sessions: built.sessions,
+      memory: built.memory,
+      auditLog: built.auditLog,
+      directory: built.directory,
     }),
   );
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    memory: built.memory,
-    auditLog: built.auditLog,
-    directory: built.directory,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     await built.directory.replace([
       { principalId: "dana@example.com", displayName: "Dana Example", type: "internal" },
@@ -290,7 +274,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     });
     assert.equal(denied.status, 403);
   } finally {
-    await new Promise<void>((res) => server.close(() => res()));
+    await close();
   }
 });
 
