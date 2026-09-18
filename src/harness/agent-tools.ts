@@ -435,7 +435,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .map((c) => c.text ?? "")
         .join("\n");
       let result = capResultText(t, maxToolResultChars);
-      let resultTruncated = result !== t;
+      const resultTruncated = result !== t;
+      if (resultTruncated) {
+        const firstText = ret.content.findIndex((part) => part.type === "text");
+        (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content
+          .map((part, index) => (index === firstText ? { type: "text", text: result } : part))
+          .filter((part, index) => part.type !== "text" || index === firstText);
+      }
       let persistedSummary = summary;
       const tool = String(summary.tool ?? "");
       const provenance = screenAs?.provenance ?? toolResultProvenance(originalTool);
@@ -487,7 +493,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
         } else if (screen.outcome === "unscreened") {
           if (!result.startsWith(UNSCREENED_PREFIX)) {
-            result = `${unscreenedNotice("tool output")}\n${t}`;
+            result = `${unscreenedNotice("tool output")}\n${result}`;
             (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
               { type: "text", text: result },
               ...ret.content.filter((c) => c.type !== "text"),
@@ -529,18 +535,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result += `\n\n${text}`;
         delivered.push(message.id);
       }
-      const assembled = ret.content
+      result = ret.content
         .filter((part) => part.type === "text")
         .map((part) => part.text ?? "")
         .join("\n");
-      result = capResultText(assembled, maxToolResultChars);
-      if (result !== assembled) {
-        resultTruncated = true;
-        const firstText = ret.content.findIndex((part) => part.type === "text");
-        (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content
-          .map((part, index) => (index === firstText ? { type: "text", text: result } : part))
-          .filter((part, index) => part.type !== "text" || index === firstText);
-      }
       await log(
         "tool_result",
         {
