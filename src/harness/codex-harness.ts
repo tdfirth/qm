@@ -156,6 +156,10 @@ type StartingRuntime = {
 };
 const CODEX_START_TIMEOUT_MS = 30_000;
 
+function removeCodexJail(path: string): void {
+  rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+}
+
 const CODEX_NON_RETRYABLE_PATTERN =
   /\b(?:401|402|403)\b|unauthoriz|forbidden|invalid[_ -]?api[_ -]?key|incorrect api key|authentication (?:error|failed)|missing bearer|missing (?:api key|credentials)|not logged in|codex login|insufficient[_ -]?quota|exceeded your current quota|billing|credit(?: balance| limit)|out of credits|credits_depleted|must be verified|model[_ -]?not[_ -]?found|does not exist or you do not have access|unsupported[_ -]?model/i;
 
@@ -684,7 +688,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         active.delete(threadId);
       }
       await stale.server.close().catch(() => undefined);
-      rmSync(stale.jail, { recursive: true, force: true });
+      removeCodexJail(stale.jail);
     }
     let startup = starting;
     if (startup?.abort.signal.aborted) {
@@ -707,7 +711,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           if (startupAbort.signal.aborted) throw new Error("Codex app-server startup cancelled");
         } catch (error) {
           await server?.close().catch(() => undefined);
-          rmSync(jail, { recursive: true, force: true });
+          removeCodexJail(jail);
           throw error;
         }
         let startTimer: NodeJS.Timeout | undefined;
@@ -729,7 +733,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           ]);
         } catch (error) {
           await server.close().catch(() => undefined);
-          rmSync(jail, { recursive: true, force: true });
+          removeCodexJail(jail);
           throw error;
         } finally {
           if (startTimer) clearTimeout(startTimer);
@@ -747,16 +751,16 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               active.delete(threadId);
             }
             if (!currentRuntime) {
-              rmSync(jail, { recursive: true, force: true });
+              removeCodexJail(jail);
               return;
             }
             runtime = null;
             runtimeCleanupRequested = false;
-            if (!closeAbort.signal.aborted) rmSync(jail, { recursive: true, force: true });
+            if (!closeAbort.signal.aborted) removeCodexJail(jail);
           })().catch((error) => {
             swallow("codex: provider close cleanup", error);
             try {
-              rmSync(jail, { recursive: true, force: true });
+              removeCodexJail(jail);
             } catch (cleanupError) {
               swallow("codex: provider close jail cleanup", cleanupError);
             }
@@ -806,7 +810,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     runtimeCleanupRequested = false;
     if (runtime === current) runtime = null;
     await current.server.close().catch(() => undefined);
-    rmSync(current.jail, { recursive: true, force: true });
+    removeCodexJail(current.jail);
   };
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
@@ -856,7 +860,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (current) {
           ephemeralServers.delete(current.server);
           await current.server.close().catch(() => undefined);
-          rmSync(current.jail, { recursive: true, force: true });
+          removeCodexJail(current.jail);
         }
       } finally {
         releaseSpawnSlot?.();
@@ -908,7 +912,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         }
         rt = ephemeral;
       } catch (error) {
-        if (!ephemeral) rmSync(jail, { recursive: true, force: true });
+        if (!ephemeral) removeCodexJail(jail);
         await closeEphemeral();
         finishSetup();
         if (error === setupCancelled) return { reply: "", stopped: true };
@@ -1461,7 +1465,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         }
         if (current) {
           await current.server.close();
-          rmSync(current.jail, { recursive: true, force: true });
+          removeCodexJail(current.jail);
           if (runtime === current) runtime = null;
         }
       },
