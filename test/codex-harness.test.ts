@@ -33,6 +33,7 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
+import type { TaskStore } from "../src/tasks/task-store.ts";
 import { CodexAppServer, redactCodexDiagnostics } from "../src/harness/codex-app-server.ts";
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
 import { readCodexOAuthAuthFile } from "../src/harness/codex-auth.ts";
@@ -112,6 +113,35 @@ rl.on("line", (line) => {
     return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
   }
   if (msg.method === "turn/interrupt" || msg.method === "turn/steer") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function delayedChildRoutingCodexBinary(dir: string): string {
+  const path = join(dir, "delayed-child-routing-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "parent" } } });
+  if (msg.method === "turn/start") {
+    send({ method: "item/started", params: { threadId: "parent", item: { type: "collabAgentToolCall", id: "spawn", tool: "spawnAgent", receiverThreadIds: ["child"], prompt: "run child tool" } } });
+    send({ id: "child-tool", method: "item/tool/call", params: { threadId: "child", turnId: "child-turn", callId: "child-call", tool: "execute", arguments: { command: "true" } } });
+    return send({ id: msg.id, result: { turn: { id: "parent-turn", status: "inProgress", items: [] } } });
+  }
+  if (msg.id === "child-tool") {
+    if (msg.error) return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "failed", error: { message: msg.error.message }, items: [] } } });
+    return send({ method: "turn/completed", params: { threadId: "parent", turn: { id: "parent-turn", status: "completed", items: [{ type: "agentMessage", text: "CHILD-OK", phase: "final_answer" }] } } });
+  }
+  if (msg.method === "turn/interrupt") return send({ id: msg.id, result: {} });
 });
 `,
   );
@@ -498,6 +528,55 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   assert.deepEqual(
     (await tasks.list()).map(({ title, status }) => ({ title, status })),
     [{ title: "return ALPHA", status: "completed" }],
+  );
+});
+
+test("Codex child tool routing waits for durable task registration", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-child-routing-"));
+  const storedTasks = createMemoryTaskStore();
+  const registrationStarted = Promise.withResolvers<void>();
+  const releaseRegistration = Promise.withResolvers<void>();
+  const tasks: TaskStore = {
+    ...storedTasks,
+    async create(input) {
+      registrationStarted.resolve();
+      await releaseRegistration.promise;
+      return storedTasks.create(input);
+    },
+  };
+  const harness = createCodexHarness({
+    binaryPath: delayedChildRoutingCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    tasks,
+    turnWallClockMs: 2_000,
+  });
+  t.after(async () => {
+    releaseRegistration.resolve();
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "child-routing" } as Session,
+    input: "route child",
+    systemPrompt: "test",
+    history: [],
+    tools: {
+      execute: async () => ({ stdout: "child-ok", stderr: "", code: 0, timedOut: false }),
+    } as unknown as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => ({ ...entry, sessionId: "child-routing", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  await registrationStarted.promise;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  releaseRegistration.resolve();
+  const result = await turn;
+  assert.equal(result.reply, "CHILD-OK");
+  assert.deepEqual(
+    (await tasks.list()).map(({ title, status }) => ({ title, status })),
+    [{ title: "run child tool", status: "failed" }],
   );
 });
 

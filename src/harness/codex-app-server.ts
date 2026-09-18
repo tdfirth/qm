@@ -305,7 +305,12 @@ export class CodexAppServer {
         .catch((error) => this.failTransport(error));
       return;
     }
-    void this.respond(message.id, message.method, message.params).catch((error) => this.failTransport(error));
+    const id = message.id;
+    const method = message.method;
+    const notificationBarrier = this.notificationTail;
+    void notificationBarrier
+      .then(() => this.respond(id, method, message.params))
+      .catch((error) => this.failTransport(error));
   }
 
   private async respond(id: JsonRpcId, method: string, params: unknown): Promise<void> {
