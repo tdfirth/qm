@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { capMinter, serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -32,12 +33,8 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19998 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(19998),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: tmpDir("git-rw-deploy-"),
   });

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -13,12 +14,8 @@ function svc() {
   const acl = createAclStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 20000 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(20000),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: tmpDir("rn-"),
   });

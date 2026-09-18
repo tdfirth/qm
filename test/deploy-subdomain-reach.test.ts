@@ -4,6 +4,7 @@ import { request as httpRequest } from "node:http";
 import { createHmac } from "node:crypto";
 import { createApp } from "../src/api/app.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
@@ -137,11 +138,7 @@ function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(upstreamPort),
     auditLog,
     acl: createAclStore(),
     deployDir: tmpDir("subdomain-"),

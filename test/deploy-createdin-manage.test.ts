@@ -11,6 +11,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { capMinter, serveApp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -23,12 +24,8 @@ async function fixture() {
   const sessions = createMemorySessionStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19997 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(19997),
+    auditLog: nullAuditLog(),
     acl,
     deployDir: tmpDir("createdin-deploy-"),
     canReadScope: createCanReadScope({ directory }),

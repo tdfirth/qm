@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { createApp, type App } from "../src/api/app.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -13,7 +14,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { portalSessionSub } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 
-const auditLog = { record() {}, events: async () => [], tail: async () => [] };
+const auditLog = nullAuditLog();
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 
@@ -143,11 +144,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstream.port }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(upstream.port),
     auditLog,
     acl: createAclStore(),
     deployDir: tmpDir("signin-"),
@@ -313,11 +310,7 @@ test("subdomain ingress: without the session config the domain has no door — a
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 1 }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(1),
     auditLog,
     acl: createAclStore(),
     deployDir: tmpDir("signin-off-"),

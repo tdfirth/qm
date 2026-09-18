@@ -12,8 +12,9 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 
-const auditLog = { record() {}, events: async () => [], tail: async () => [] };
+const auditLog = nullAuditLog();
 const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
 
@@ -23,11 +24,7 @@ function appServingUpstream(upstreamPort: number) {
   const directory = createDirectoryStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(upstreamPort),
     auditLog,
     acl,
     canReadScope: createCanReadScope({ directory }),

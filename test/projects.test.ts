@@ -17,6 +17,7 @@ import {
 import { buildApp } from "../src/wiring.ts";
 import { serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 import { turnRequest } from "./support/turns.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
@@ -374,12 +375,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   const deployAcl = createAclStore();
   const deploy = createDeployService({
     deployStore: createDeployStore(),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19999 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    provider: fakeDeployProvider(19999),
+    auditLog: nullAuditLog(),
     acl: deployAcl,
     deployDir: tmpDir("project-deploy-"),
     canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),

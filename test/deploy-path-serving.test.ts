@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
 import { createApp } from "../src/api/app.ts";
 import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { fakeDeployProvider, nullAuditLog } from "./support/fakes.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -11,7 +12,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 
-const auditLog = { record() {}, events: async () => [], tail: async () => [] };
+const auditLog = nullAuditLog();
 
 function httpGet(
   port: number,
@@ -41,11 +42,7 @@ async function fixture(
   const deployStore = createDeployStore();
   const deploy = createDeployService({
     deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: upstream.port }),
-      destroy: async () => {},
-    },
+    provider: fakeDeployProvider(upstream.port),
     auditLog,
     acl: createAclStore(),
     deployDir: tmpDir("path-serving-"),
