@@ -3,7 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { capMinter, type Served, startApi, tmpDir } from "./support/api.ts";
-import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../src/auth/capability-token.ts";
 
 const SECRET = "test-capability-secret";
 
@@ -19,8 +19,8 @@ function start() {
   );
 }
 
-const token = (claims: Record<string, unknown>): Promise<string> =>
-  capMinter(SECRET, { aud: CONTROL_PLANE_AUD })("alice@default-org", "group:C123", claims as never);
+const token = (claims: Partial<CapabilityClaims>): Promise<string> =>
+  capMinter(SECRET, { aud: CONTROL_PLANE_AUD })("alice@default-org", "group:C123", claims);
 
 const put = (srv: Served, cap: string) =>
   srv.put("/v1/runtime-config", { harnessId: "pi", modelId: "claude-sonnet-5" }, { "x-agent-capability": cap });

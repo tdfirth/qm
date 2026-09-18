@@ -1,7 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { waitFor } from "./support/settle.ts";
@@ -13,10 +13,10 @@ describe("surface-context pulls", async () => {
     signingSecret: SECRET,
   }));
 
-  const cap = (overrides: Record<string, unknown> = {}) =>
+  const cap = (overrides: Partial<CapabilityClaims> = {}) =>
     capMinter(SECRET, {
       destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
-    })("U1", scopeId("channel", "C9"), overrides as never);
+    })("U1", scopeId("channel", "C9"), overrides);
 
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
