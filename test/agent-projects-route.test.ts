@@ -1,8 +1,8 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { startApi } from "./support/api.ts";
+import { capMinter, startApi } from "./support/api.ts";
 
 const SECRET = "agent-projects-secret".repeat(2);
 
@@ -11,16 +11,7 @@ describe("agent projects self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
-    );
+  const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
 
   const request = async (method: string, path: string, body?: unknown, token?: string) =>
     fetch(`${base}${path}`, {

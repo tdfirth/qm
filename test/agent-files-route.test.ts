@@ -4,9 +4,9 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { startApi } from "./support/api.ts";
+import { capMinter, startApi } from "./support/api.ts";
 
 const SECRET = "agent-files-secret".repeat(3);
 
@@ -33,16 +33,7 @@ describe("agent files self-API", async () => {
   let encodedId: string;
   let binaryId: string;
 
-  const capFor = (actorId: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
-    );
+  const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
 
   const get = async (path: string, token?: string) =>
     fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });

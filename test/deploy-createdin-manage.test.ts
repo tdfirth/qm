@@ -8,9 +8,9 @@ import { createDirectoryStore, type DirectoryStore } from "../src/directory/dire
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { serveApp, tmpDir } from "./support/api.ts";
+import { capMinter, serveApp, tmpDir } from "./support/api.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -44,17 +44,7 @@ async function fixture() {
   return { app, deploy, acl, directory, sessions, ...serveApp(app, { signingSecret: SECRET }, "127.0.0.1") };
 }
 
-const capFor = (actorId: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
+const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD, liveActor: true });
 
 const gitPerm = async (base: string, id: string, actor: string): Promise<{ status: number; permission?: string }> => {
   const r = await fetch(`${base}/v1/deployments/${encodeURIComponent(id)}/git-url`, {

@@ -2,12 +2,10 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
-import { startApi } from "./support/api.ts";
+import { capMinter, startApi } from "./support/api.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
@@ -64,10 +62,7 @@ test("ownership controls require both source and distinct deployment credentials
     for (const credentials of invalidCredentials) {
       assert.equal((await srv.request("POST", transition(), credentials)).status, 401);
     }
-    const capability = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      "capability-only-secret".repeat(3),
-    );
+    const capability = await capMinter("capability-only-secret".repeat(3))("U1");
     for (const method of ["GET", "POST"]) {
       const response = await srv.request(method, method === "POST" ? transition() : undefined, {
         "x-agent-capability": capability,

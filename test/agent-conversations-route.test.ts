@@ -2,8 +2,8 @@ import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { serveApp, startApi } from "./support/api.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { capMinter, serveApp, startApi } from "./support/api.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -19,11 +19,9 @@ describe("agent conversations self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
+  const mint = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
   const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
-      SECRET,
-    );
+    mint(actorId, scope, { liveActor: live });
 
   const get = async (path: string, token?: string) =>
     fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });

@@ -6,8 +6,7 @@ import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { serveApp, startApi } from "./support/api.ts";
+import { capMinter, serveApp, startApi } from "./support/api.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -23,11 +22,7 @@ describe("POST /v1/reach with files", () => {
   const { built } = api;
   const bare = serveApp(built.app, { signingSecret: SECRET });
 
-  const capDm = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+  const capDm = capMinter(SECRET);
 
   const seedFile = async (actorId: string, relPath: string, data: string) => {
     const handle = await built.sandbox.provision([

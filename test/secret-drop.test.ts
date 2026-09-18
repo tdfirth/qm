@@ -3,20 +3,14 @@ import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
-import { serveApp, startApi, tmpDir } from "./support/api.ts";
+import { capMinter, serveApp, startApi, tmpDir } from "./support/api.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import {
-  mintCapabilityToken,
-  verifyCapabilityToken,
-  CAPABILITY_TTL_MS,
-  SECRET_DROP_AUD,
-  type CapabilityClaims,
-} from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken, SECRET_DROP_AUD } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -200,8 +194,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   }));
   const { built, base } = api;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+  const capFor = capMinter(SECRET);
   const post = (path: string, body: unknown, cap?: string) =>
     api.post(path, body, cap ? { "x-agent-capability": cap } : {});
   let nonce = 0;
@@ -504,16 +497,11 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("an expired link token is refused even while the record lives", async () => {
     const { dropId } = await mintFor("U_A", "expiredtoken");
-    const stale = await mintCapabilityToken(
-      {
-        actorId: "U_A",
-        scopeId: scopeId("channel", "C1"),
-        aud: SECRET_DROP_AUD,
-        drop: dropId,
-        exp: Date.now() - 1_000,
-      },
-      SECRET,
-    );
+    const stale = await capFor("U_A", scopeId("channel", "C1"), {
+      aud: SECRET_DROP_AUD,
+      drop: dropId,
+      exp: Date.now() - 1_000,
+    });
     assert.equal((await getForm(dropId, "U_A", stale)).status, 404);
     assert.equal((await redeem(dropId, { secret: "x" }, "U_A", stale)).status, 404);
   });
@@ -594,10 +582,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       },
     });
     try {
-      const cap = await mintCapabilityToken(
-        { actorId: "U_A", scopeId: scopeId("channel", "C1"), threadRef: "th1", exp: Date.now() + CAPABILITY_TTL_MS },
-        SECRET,
-      );
+      const cap = await capMinter(SECRET)("U_A", scopeId("channel", "C1"), { threadRef: "th1" });
       const mint = async (service: string) => {
         const r = await server.post(
           "/v1/keychain/drops",

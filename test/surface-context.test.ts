@@ -1,9 +1,9 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -13,16 +13,9 @@ describe("surface-context pulls", async () => {
   }));
 
   const cap = (overrides: Record<string, unknown> = {}) =>
-    mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: scopeId("channel", "C9"),
-        destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...overrides,
-      },
-      SECRET,
-    );
+    capMinter(SECRET, {
+      destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
+    })("U1", scopeId("channel", "C9"), overrides as never);
 
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;

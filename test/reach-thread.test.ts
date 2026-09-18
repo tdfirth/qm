@@ -1,8 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { startApi } from "./support/api.ts";
+import { capMinter, startApi } from "./support/api.ts";
 
 const SECRET = "reach-thread-secret".repeat(3);
 const TS = "1723497600.123456";
@@ -11,11 +9,7 @@ describe("POST /v1/reach with threadTs", () => {
   const api = startApi({ signingSecret: SECRET }, () => ({ signingSecret: SECRET }));
   const { built } = api;
 
-  const cap = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+  const cap = capMinter(SECRET);
 
   const post = async (body: unknown, actorId = "U-carol") =>
     api.post("/v1/reach", body, { "x-agent-capability": await cap(actorId) });

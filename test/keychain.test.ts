@@ -4,7 +4,7 @@ import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { buildApp } from "../src/wiring.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -15,7 +15,6 @@ import {
 import { createMemoryMap, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -1036,8 +1035,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
   }));
   const { built } = api;
 
-  const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+  const capFor = capMinter(SECRET);
 
   before(async () => {
     await built.directory.replaceChannels(

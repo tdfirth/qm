@@ -1,9 +1,8 @@
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { type Served, serveApp, startApi } from "./support/api.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { capMinter, type Served, serveApp, startApi } from "./support/api.ts";
 import { createBrowserSessionStore, type StoredBrowserSession } from "../src/connectors/browser-session-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
@@ -26,11 +25,7 @@ describe("POST /v1/emoji", async () => {
   }));
   const bare = serveApp(api.built.app, { signingSecret: SECRET });
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+  const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
 
   before(async () => {
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));

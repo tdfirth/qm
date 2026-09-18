@@ -6,9 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { scopeId } from "../src/types.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
@@ -339,10 +337,7 @@ test("a VALID capability token is rejected on the deployment-layer routes (sourc
 
   const srv = start();
   try {
-    const cap = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const cap = await capMinter(SECRET)("U1");
     const get = await fetch(`${srv.base}${PATH}`, { headers: { "x-agent-capability": cap } });
     assert.equal(get.status, 403);
     const put = await fetch(`${srv.base}${PATH}`, {

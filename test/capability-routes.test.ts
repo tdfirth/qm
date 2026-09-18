@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -314,10 +314,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("creates a destination-less cron when the token carries no destination (nullable)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const noDest = await capMinter(SECRET)("U9");
     const res = await post(
       "/v1/crons",
       { schedule: { everyMs: 60_000 }, action: "nightly workspace cleanup" },
@@ -430,7 +427,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         .status,
       401,
     );
-    const expired = await mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 }, SECRET);
+    const expired = await capMinter(SECRET)("U1", undefined, { exp: Date.now() - 1 });
     assert.equal(
       (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, { "x-agent-capability": expired }))
         .status,
@@ -804,10 +801,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("registers a destination-less webhook when the token carries no destination (side-effect-only)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const noDest = await capMinter(SECRET)("U9");
     const res = await post(
       "/v1/webhooks",
       { action: "mirror the event to a file", verification: { scheme: "hmac-sha256", secret: "side-effect-secret" } },

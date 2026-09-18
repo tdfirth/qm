@@ -5,8 +5,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
@@ -15,21 +14,9 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     signingSecret: SECRET,
   }));
 
-  const capDm = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
-  const capChannel = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("channel", "C"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
-  const capGroup = async (actorId: string, groupId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("group", groupId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+  const capDm = capMinter(SECRET);
+  const capChannel = (actorId: string) => capDm(actorId, scopeId("channel", "C"));
+  const capGroup = (actorId: string, groupId: string) => capDm(actorId, scopeId("group", groupId));
 
   before(async () => {
     await built.app.upsertDirectory([

@@ -1,9 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { startApi } from "./support/api.ts";
+import type { TurnRequest } from "../src/types.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { capMinter, startApi } from "./support/api.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
@@ -17,18 +17,8 @@ describe("conversation pins self-API", async () => {
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
-  const capFor = (actorId: string, threadRef?: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        liveActor: true,
-        ...(threadRef ? { threadRef } : {}),
-      },
-      SECRET,
-    );
+  const mint = capMinter(SECRET, { aud: CONTROL_PLANE_AUD, liveActor: true });
+  const capFor = (actorId: string, threadRef?: string) => mint(actorId, undefined, threadRef ? { threadRef } : {});
 
   const call = async (method: string, path: string, body?: unknown, token?: string) =>
     fetch(`${api.base}${path}`, {

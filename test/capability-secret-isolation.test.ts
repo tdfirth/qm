@@ -2,8 +2,8 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
-import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
@@ -16,11 +16,7 @@ describe("capability tokens verify under the core-only capability secret, not th
     scheduler: built.scheduler,
   }));
 
-  const cap = async (secret: string) =>
-    mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
-    );
+  const cap = (secret: string) => capMinter(secret, { aud: CONTROL_PLANE_AUD })("U1");
 
   after(close);
 

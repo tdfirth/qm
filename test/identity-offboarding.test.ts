@@ -1,9 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { scopeId } from "../src/types.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -85,10 +83,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
-    const cap = await mintCapabilityToken(
-      { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const cap = await capMinter(SECRET)("U-stay");
     const res = await fetch(`${base}/v1/principals/U-stay/deactivate`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },

@@ -4,8 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BuiltApp } from "../src/wiring.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { type Api, startApi, tmpDir } from "./support/api.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { type Api, capMinter, startApi, tmpDir } from "./support/api.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 
 const start = () => startApi({ dataDir: tmpDir("skills-http-"), orgId: "acme", seedSkills: false });
 
@@ -395,17 +395,9 @@ const startSecure = () =>
   startApi({ dataDir: tmpDir("skills-http-cap-"), orgId: "acme", seedSkills: false, signingSecret: SECRET }, () => ({
     signingSecret: SECRET,
   }));
+const mint = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
 const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scope,
-      aud: CONTROL_PLANE_AUD,
-      ...(liveActor ? { liveActor: true } : {}),
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
+  mint(actorId, scope, liveActor ? { liveActor: true } : {});
 
 test("POST /v1/skills via a capability token authors as the token's own principal (body principalId ignored)", async () => {
   const srv = startSecure();

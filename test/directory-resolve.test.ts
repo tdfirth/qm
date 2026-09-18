@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { serveApp, startApi, tmpDir } from "./support/api.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { capMinter, serveApp, startApi, tmpDir } from "./support/api.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -16,10 +15,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     scheduler: built.scheduler,
   }));
 
-  const cap = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
+  const cap = await capMinter(SECRET)("U1");
 
   before(async () => {
     await built.app.upsertDirectory([
@@ -124,10 +120,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     (built) => ({ signingSecret: SECRET, scheduler: built.scheduler }),
   );
 
-  const cap = await mintCapabilityToken(
-    { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
+  const cap = await capMinter(SECRET)("dana@acme.com");
 
   before(async () => {
     const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");

@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail, type InviteMailer } from "../src/admin/invite-email.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -64,17 +64,7 @@ const revoke = (base: string, email: string, headers: Record<string, string> = {
 const roster = async (base: string, headers: Record<string, string> = { "x-admin-actor": ALICE }): Promise<any> =>
   (await fetch(`${base}/v1/admin/users`, { headers })).json();
 
-const capFor = (actorId: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
+const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD, liveActor: true });
 
 test("inviting an external user stores the record, lists it as active, audits, and reports the missing mailer", async () => {
   const s = start();

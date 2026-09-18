@@ -4,13 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import {
-  mintCapabilityToken,
-  CAPABILITY_TTL_MS,
-  OAUTH_CONSENT_AUD,
-  CONTROL_PLANE_AUD,
-} from "../src/auth/capability-token.ts";
-import { type Served, startApi, tmpDir } from "./support/api.ts";
+import { OAUTH_CONSENT_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { capMinter, type Served, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
@@ -41,22 +36,9 @@ function start(fetchImpl: FetchLike, opts: { portalUrl?: string } = { portalUrl:
   return api;
 }
 
-const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
-  return await mintCapabilityToken(
-    {
-      actorId,
-      scopeId: opts.scopeId ?? `personal:${actorId}`,
-      aud: OAUTH_CONSENT_AUD,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
-};
-const controlTok = async (actorId: string) =>
-  await mintCapabilityToken(
-    { actorId, scopeId: `personal:${actorId}`, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
+const consentTok = (actorId: string, opts: { scopeId?: string } = {}) =>
+  capMinter(SECRET, { aud: OAUTH_CONSENT_AUD })(actorId, opts.scopeId);
+const controlTok = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
 
 const coreRedeemPath = (connectPath: string): string =>
   connectPath.replace(/^\/connect\/redeem\//, "/v1/connectors/oauth/consent/redeem/");
@@ -273,10 +255,7 @@ test("the consent-mint route rejects a control-plane / aud-less / missing token 
       ).status,
       403,
     );
-    const audless = await mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const audless = await capMinter(SECRET)("U1");
     assert.equal(
       (await fetch(`${srv.base}/v1/connectors/oauth/consent/mint`, { method: "POST", headers: headers(audless), body }))
         .status,

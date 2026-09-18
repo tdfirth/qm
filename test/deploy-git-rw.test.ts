@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
-import { serveApp, stubHttp, tmpDir } from "./support/api.ts";
+import { capMinter, serveApp, stubHttp, tmpDir } from "./support/api.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
@@ -14,7 +14,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access-token.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 
 const execFileP = promisify(execFile);
@@ -80,17 +80,7 @@ async function pushStatus(url: string): Promise<number> {
   ).status;
 }
 
-const capFor = (actorId: string, scope?: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scope ?? scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
+const capFor = capMinter(SECRET, { aud: CONTROL_PLANE_AUD, liveActor: true });
 
 test("a read token can clone but cannot push (403 on receive-pack)", async () => {
   const f = fixture();

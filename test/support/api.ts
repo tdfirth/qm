@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { App } from "../../src/api/app.ts";
 import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
+import { CAPABILITY_TTL_MS, mintCapabilityToken, type CapabilityClaims } from "../../src/auth/capability-token.ts";
 import type { Config } from "../../src/config.ts";
+import { scopeId, type ScopeId } from "../../src/types.ts";
 import { buildApp, type BuiltApp } from "../../src/wiring.ts";
 import { testConfig } from "./test-config.ts";
 
@@ -73,4 +75,12 @@ export function startApi(
   const config = testConfig(overrides);
   const built = buildApp(config);
   return { built, ...serveApp(built.app, deps(built, config), host) };
+}
+
+export function capMinter(secret: string, defaults: Partial<CapabilityClaims> = {}) {
+  return (actorId: string, scope: ScopeId = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
+    mintCapabilityToken(
+      { actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...defaults, ...extra },
+      secret,
+    );
 }

@@ -5,16 +5,10 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { buildApp } from "../src/wiring.ts";
 import { type TurnRequest } from "../src/types.ts";
-import {
-  mintCapabilityToken,
-  verifyCapabilityToken,
-  CAPABILITY_TTL_MS,
-  CONTROL_PLANE_AUD,
-  CREDENTIAL_BROKER_AUD,
-} from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken, CONTROL_PLANE_AUD, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 
@@ -54,10 +48,7 @@ const startGitBroker = (gitHttpFetch: GitHttpFetch) =>
   }));
 
 const brokerToken = (credentials: string[], aud: string = CREDENTIAL_BROKER_AUD) =>
-  mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud, credentials, exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
+  capMinter(SECRET)("U1", "personal:U1", { aud, credentials });
 
 const putCred = (base: string, b: object, headers = ADMIN) =>
   fetch(`${base}/v1/admin/scopes/org:default-org/service-credentials`, {

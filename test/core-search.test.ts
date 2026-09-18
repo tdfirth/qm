@@ -4,9 +4,8 @@ import assert from "node:assert/strict";
 import { createCoreSearch, type SearchBackend } from "../src/search/core-search.ts";
 import { createIntersectionBackend } from "../src/search/backends.ts";
 import { buildApp } from "../src/wiring.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
-import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
 const principals = [
@@ -73,16 +72,8 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
-  const token = async (members?: typeof principals) =>
-    mintCapabilityToken(
-      {
-        actorId: principals[0]!.id,
-        scopeId: scopeId("channel", "C1"),
-        ...(members ? { members } : {}),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      secret,
-    );
+  const token = (members?: typeof principals) =>
+    capMinter(secret)(principals[0]!.id, scopeId("channel", "C1"), members ? { members } : {});
   const post = async (cap: string) => srv.post("/v1/search", { query: "pelican" }, { "x-agent-capability": cap });
   try {
     const ok = await post(await token(principals));

@@ -1,8 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 
 const SECRET = "env-route-test-secret".repeat(3);
 
@@ -12,8 +11,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
     scheduler: built.scheduler,
   }));
 
-  const cap = (actorId: string, scope = scopeId("personal", actorId)) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
+  const cap = capMinter(SECRET);
 
   before(() =>
     built.directory.replaceChannels(
@@ -42,10 +40,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
   });
 
   it("the owner attaches another conversation freely", async () => {
-    const channelCap = await mintCapabilityToken(
-      { actorId: "U-owner", scopeId: scopeId("channel", "C-eng"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const channelCap = await cap("U-owner", scopeId("channel", "C-eng"));
     const res = await post("/v1/environments/attach", { name: "prod" }, { "x-agent-capability": channelCap });
     assert.equal(res.status, 200);
     const list = (await (await get("/v1/environments", { "x-agent-capability": await cap("U-owner") })).json()) as any;

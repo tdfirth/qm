@@ -2,12 +2,11 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
-import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { buildApp } from "../src/wiring.ts";
-import { serveApp, tmpDir } from "./support/api.ts";
+import { capMinter, serveApp, tmpDir } from "./support/api.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 
@@ -26,18 +25,9 @@ function claims(actorId: string): CapabilityClaims {
   return { actorId, scopeId: `personal:${actorId}`, exp: Date.now() + 60_000 };
 }
 
-async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scopeVersion?: string): Promise<string> {
-  return await mintCapabilityToken(
-    {
-      actorId,
-      scopeId,
-      ...(scopeVersion ? { scopeVersion } : {}),
-      aud: CONTROL_PLANE_AUD,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
-  );
-}
+const mint = capMinter(SECRET, { aud: CONTROL_PLANE_AUD });
+const token = (actorId: string, scopeId: CapabilityClaims["scopeId"], scopeVersion?: string) =>
+  mint(actorId, scopeId, scopeVersion ? { scopeVersion } : {});
 
 test("Project trigger access follows current membership while Slack-group owner access is unchanged", async (t) => {
   const built = buildApp(testConfig({ dataDir: tmpDir("project-trigger-auth-") }));

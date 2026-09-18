@@ -3,7 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
-import { startApi, tmpDir } from "./support/api.ts";
+import { capMinter, startApi, tmpDir } from "./support/api.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -22,7 +22,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -629,8 +629,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
   }));
   const { built } = api;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+  const capFor = capMinter(SECRET);
   const bobInInfra = () =>
     capFor("U_BOB", "channel:C_INFRA", {
       threadRef: "ch:C_INFRA-thread",
