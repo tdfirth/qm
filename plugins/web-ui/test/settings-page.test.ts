@@ -44,7 +44,11 @@ test("the identity menu closes on an outside click and on Escape", () => {
 
 test("theme choice persists under the key the boot path reads, and system tracks the OS", () => {
   assert.match(settings, /const THEME_KEY = "theme";/);
-  assert.match(settings, /localStorage\.removeItem\(THEME_KEY\)/, "system is stored as the absence of a choice");
+  assert.match(
+    settings,
+    /localStorage\.setItem\(THEME_KEY, choice\)/,
+    "explicit personal choices override the organization default",
+  );
   assert.match(settings, /matchMedia\("\(prefers-color-scheme: dark\)"\)/);
   assert.match(settings, /classList\.toggle\("dark", dark\)/);
   assert.match(

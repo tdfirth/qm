@@ -1062,7 +1062,11 @@ export function createKeychain(deps: {
     },
 
     async listGrants(filter) {
-      return (await deps.grants.all()).filter(
+      const grants =
+        filter.ownerId === undefined
+          ? await deps.grants.all()
+          : await deps.grants.select({ where: byOwners([filter.ownerId]) });
+      return grants.filter(
         (g) =>
           (filter.ownerId === undefined || samePerson(g.ownerId, filter.ownerId)) &&
           (filter.audienceScopeId === undefined || g.audienceScopeId === filter.audienceScopeId),

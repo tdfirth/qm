@@ -1128,13 +1128,6 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
     ? baseModel!
     : defaultModelForHarness(harnessId, deps.baseModelDefault);
-  const resolvedBranding = {
-    ...(branding.orgName ? { orgName: branding.orgName } : {}),
-    ...(branding.accent ? { accent: branding.accent } : {}),
-    ...(branding.mark ? { mark: branding.mark } : {}),
-    ...(branding.markUrl ? { markUrl: branding.markUrl } : {}),
-    ...(branding.selfLabel ? { selfLabel: branding.selfLabel } : {}),
-  };
   return sendJson(res, 200, {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
@@ -1149,7 +1142,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
       ),
     }),
     externalSlackParticipants,
-    ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
+    ...(Object.keys(branding).length ? { branding } : {}),
   });
 }
 

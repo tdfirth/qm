@@ -1,3 +1,6 @@
+import { buildGovernanceUI } from "./governance-bundle.ts";
+import { stripTypeScriptTypes } from "node:module";
+import { isBrandTheme } from "../../chassis/src/theme-import.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -32,6 +35,17 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
 
 const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
   .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
+  .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
+  .replace(
+    /\(?"__THEME_IMPORT__"\)?;/,
+    () =>
+      "const themeTools = (() => {" +
+      stripTypeScriptTypes(readFileSync(new URL("../../chassis/src/theme-import.ts", import.meta.url), "utf8")).replace(
+        /^export /gm,
+        "",
+      ) +
+      "; return {importTheme, themeTokens, adminThemeVars, isPalette, isBrandTheme}; })();",
+  )
   .replace(
     "<style data-admin-components></style>",
     () =>
@@ -39,6 +53,10 @@ const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..
       readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/admin-components.css"), "utf8") +
       "</style>",
   );
+const THEME_PALETTES = Buffer.from(
+  JSON.stringify(JSON.parse(readFileSync(new URL("../../chassis/themes/palettes.json", import.meta.url), "utf8"))),
+);
+const THEME_PALETTES_GZIP = gzipSync(THEME_PALETTES);
 const BRAND_MARK = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/brand-mark.svg"));
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/i)?.[1] ?? "";
 const ADMIN_CSP = [
@@ -62,6 +80,7 @@ async function fetchBrand(): Promise<OrgBranding> {
   if (!r.ok) throw new Error(`surface-config ${r.status}`);
   const b = ((await r.json()) as { branding?: Record<string, unknown> }).branding;
   return {
+    ...(isBrandTheme(b?.theme) ? { theme: b.theme } : {}),
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
     ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
@@ -76,7 +95,7 @@ async function refreshBrandNow(): Promise<void> {
 type Shell = { key: string; html: string; gzip: Buffer; etag: string; gzipEtag: string };
 let shellCache: Shell | null = null;
 function brandedShell(branding: OrgBranding): Shell {
-  const key = JSON.stringify([branding.accent, branding.mark, branding.markUrl, branding.selfLabel]);
+  const key = JSON.stringify(branding);
   if (shellCache?.key === key) return shellCache;
   const html = injectBranding(BASE_HTML, branding, { titleSuffix: "Admin" });
   const digest = createHash("sha256").update(html).digest("hex").slice(0, 16);
@@ -378,6 +397,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return void res.end(body);
   };
   if (method === "GET" && pathname === "/") return serveShell();
+  if (method === "GET" && pathname === "/theme-palettes.json") {
+    const gz = gzipAccepted(req);
+    const body = gz ? THEME_PALETTES_GZIP : THEME_PALETTES;
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-cache",
+      vary: "accept-encoding",
+      "content-length": String(body.length),
+      ...(gz ? { "content-encoding": "gzip" } : {}),
+    });
+    return void res.end(body);
+  }
   if (method === "GET" && pathname === "/brand-mark.svg") {
     res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" });
     return void res.end(BRAND_MARK);

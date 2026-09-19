@@ -61,3 +61,42 @@ test("resolveBranding sanitizes stored values that predate write-side sanitizati
   const config = { getBrandingDurable: async () => ({ selfLabel: "{{legacy}}", orgName: "Acme <{Corp}>" }) };
   assert.deepEqual(await resolveBranding(config, ORG), { selfLabel: "legacy", orgName: "Acme Corp" });
 });
+
+test("branding validates imported theme colors and preserves the organization default", async () => {
+  const palette = {
+    name: "Night",
+    source: "vscode",
+    background: { r: 20, g: 24, b: 32 },
+    foreground: { r: 240, g: 240, b: 240 },
+    ansi: Array(16).fill(null),
+  };
+  const theme = { mode: "custom", palette };
+  assert.deepEqual(sanitizeBranding({ theme })?.theme, theme);
+  assert.equal(
+    sanitizeBranding({ theme: { ...theme, palette: { ...palette, button: { r: "red;}", g: 0, b: 0 } } } }),
+    undefined,
+  );
+  assert.equal(
+    sanitizeBranding({
+      theme: { ...theme, palette: { ...palette, syntax: { keyword: { r: Infinity, g: 0, b: 0 } } } },
+    }),
+    undefined,
+  );
+  assert.equal(sanitizeBranding({ theme: { mode: "custom" } }), undefined);
+  assert.deepEqual(sanitizeBranding({ theme: { mode: "system", palette } })?.theme, { mode: "system" });
+  const branding = sanitizeBranding({ theme });
+  assert.deepEqual((await resolveBranding({ getBrandingDurable: async () => branding ?? null }, ORG)).theme, theme);
+});
+
+test("uploaded logos accept bounded PNG data and reject active image formats", () => {
+  const png =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk1kAAAAASUVORK5CYII=";
+  assert.equal(sanitizeBranding({ markUrl: png })?.markUrl, png);
+  for (const markUrl of [
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:text/html;base64,aGk=",
+    "data:image/png;base64,iVBORw0KGgo" + "A".repeat(131072),
+    png + '";color:red',
+  ])
+    assert.equal(sanitizeBranding({ markUrl }), undefined);
+});

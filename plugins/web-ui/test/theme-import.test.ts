@@ -10,7 +10,7 @@ import {
   themeCss,
   themeTokens,
   type Palette,
-} from "../src/theme-import.ts";
+} from "../../chassis/src/theme-import.ts";
 
 const shellCss = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const baseCss = readFileSync(

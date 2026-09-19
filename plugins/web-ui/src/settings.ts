@@ -6,7 +6,14 @@ import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage } from "../../chassis/src/errors";
-import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
+import {
+  isBrandTheme,
+  importTheme,
+  isPalette,
+  themeCss,
+  themeTokens,
+  type Palette,
+} from "../../chassis/src/theme-import";
 
 export type ThemeChoice = "light" | "dark" | "system" | "custom";
 
@@ -26,21 +33,32 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode 
 let settingsHost: HTMLElement | null = null;
 let themeImportError: string | null = null;
 
+function organizationTheme() {
+  try {
+    const value: unknown = JSON.parse(
+      document.querySelector('meta[name="brand-theme"]')?.getAttribute("content") ?? "null",
+    );
+    return isBrandTheme(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function storedTheme(): ThemeChoice {
   try {
     const stored = localStorage.getItem(THEME_KEY);
-    if (stored === "light" || stored === "dark") return stored;
+    if (stored === "light" || stored === "dark" || stored === "system") return stored;
     if (stored === "custom" && storedCustomTheme()) return stored;
   } catch {
     void 0;
   }
-  return "system";
+  return organizationTheme()?.mode ?? "system";
 }
 
 export function storedCustomTheme(): Palette | null {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) ?? "null");
-    return isPalette(parsed) ? parsed : null;
+    return isPalette(parsed) ? parsed : (organizationTheme()?.palette ?? null);
   } catch {
     return null;
   }
@@ -57,7 +75,14 @@ function storeCustomTheme(palette: Palette | null): void {
 
 export function applyTheme(): void {
   const choice = storedTheme();
-  const custom = choice === "custom" ? storedCustomTheme() : null;
+  let personalChoice = null;
+  try {
+    personalChoice = localStorage.getItem(THEME_KEY);
+  } catch {
+    void 0;
+  }
+  const palette = personalChoice === "custom" ? storedCustomTheme() : organizationTheme()?.palette;
+  const custom = choice === "custom" ? palette : null;
   const root = document.documentElement;
   let styleEl = document.getElementById(CUSTOM_THEME_STYLE_ID);
   if (custom) {
@@ -79,8 +104,7 @@ export function applyTheme(): void {
 export function setTheme(choice: ThemeChoice): void {
   themeImportError = null;
   try {
-    if (choice === "system") localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, choice);
+    localStorage.setItem(THEME_KEY, choice);
   } catch {
     void 0;
   }
@@ -152,7 +176,7 @@ function themeRow(): TemplateResult {
   const custom = storedCustomTheme();
   const note = themeImportError
     ? html`<span class="settings-row-error">${themeImportError}</span>`
-    : "System follows your device's light or dark setting. Import an iTerm2 .itermcolors or a VS Code color theme .json to paint the app with its palette.";
+    : "Your organization supplies the default. Choose your own look here. System follows your device's light or dark setting. Import an iTerm2 .itermcolors or a VS Code color theme .json to paint the app with its palette.";
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
@@ -163,6 +187,10 @@ function themeRow(): TemplateResult {
         <div class="settings-choice" role="radiogroup" aria-label="Theme">
           ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
           ${custom ? themeOption("custom", current, custom.name, themeSwatches(custom)) : nothing}
+        </div>
+        <div class="settings-row-note">
+          <a href="https://iterm2colorschemes.com/" target="_blank" rel="noopener noreferrer">Browse iTerm2 themes ↗</a>
+          · <a href="https://vscodethemes.com/" target="_blank" rel="noopener noreferrer">Browse VS Code themes ↗</a>
         </div>
         <div class="settings-theme-import">
           <input

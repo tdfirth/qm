@@ -1,3 +1,4 @@
+import { readAdminSource } from "./admin-source.ts";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
@@ -88,8 +89,12 @@ test("the brand icon is a CSS variable the org can point at its own image", () =
     /var\(--brand-mark-image, url\("\.\/brand-mark\.svg"\)\)/,
     "the badge paints from the variable and falls back to the shipped mark",
   );
-  assert.match(shell, /id="branding-mark-url"/, "the admin form can set it");
-  assert.match(shell, /markUrl: \$\("branding-mark-url"\)\.value\.trim\(\)/, "and saves it with the rest of branding");
+  assert.match(readAdminSource(), /id="branding-mark-url"/, "the admin form can set it");
+  assert.match(
+    shell,
+    /governanceUI.settings.load\(r.data, scope, "branding"\)/,
+    "loads the state-driven branding editor",
+  );
 });
 
 test("design system routes embed the shared component library and retain the script CSP", async () => {
@@ -102,4 +107,17 @@ test("design system routes embed the shared component library and retain the scr
   assert.ok(script);
   const hash = createHash("sha256").update(script).digest("base64");
   assert.ok(response.headers.get("content-security-policy")?.includes("sha256-" + hash));
+});
+
+test("the complete bundled theme catalog loads separately from the admin shell", async () => {
+  const { isPalette } = await import("../../chassis/src/theme-import.ts");
+  const response = await fetch(base + "/theme-palettes.json");
+  assert.equal(response.status, 200);
+  const palettes = (await response.json()) as Array<{ name: string }>;
+  assert.equal(palettes.length, 615);
+  assert.ok(palettes.every(isPalette));
+  assert.equal(new Set(palettes.map((palette) => palette.name)).size, palettes.length);
+  assert.ok(palettes.some((palette) => palette.name === "Aubade"));
+  const html = await (await fetch(base + "/")).text();
+  assert.ok(!html.includes('"name":"Aubade"'));
 });

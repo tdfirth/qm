@@ -776,6 +776,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const bad = orgOnly(scope, "branding is org-wide");
       if (bad) return bad;
       const body = (ctx.body ?? {}) as {
+        theme?: unknown;
         accent?: unknown;
         mark?: unknown;
         markUrl?: unknown;
@@ -785,11 +786,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const accentInput = typeof body.accent === "string" ? body.accent.trim() : "";
       const markUrlInput = typeof body.markUrl === "string" ? body.markUrl.trim() : "";
       const value = sanitizeBranding(body);
+      if (body.theme != null && !value?.theme) return { error: "Choose a valid theme or import a theme file." };
       if (accentInput && !value?.accent) {
         return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
       }
       if (markUrlInput && !value?.markUrl) {
-        return { error: "branding mark image must be an https URL" };
+        return { error: "Logo must be an HTTPS URL or an uploaded PNG image." };
       }
       ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };

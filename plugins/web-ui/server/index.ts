@@ -1,3 +1,4 @@
+import { isBrandTheme } from "../../chassis/src/theme-import.ts";
 import "./instrument.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -83,6 +84,7 @@ const brandingCache = createBrandingCache(async () => {
   const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
   return {
     ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
+    ...(isBrandTheme(b?.theme) ? { theme: b.theme } : {}),
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
     ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),

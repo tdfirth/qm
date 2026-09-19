@@ -124,3 +124,30 @@ test("the installable-app metadata follows the brand: manifest link, touch icon,
   assert.match(branded, /<meta name="apple-mobile-web-app-title" content="Ship &quot;Q&quot;" \/>/);
   assert.match(injectBranding(shell, {}), /<meta name="apple-mobile-web-app-title" content="QM" \/>/);
 });
+
+test("organization themes are safely embedded for the browser", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const theme = {
+    mode: "custom" as const,
+    palette: {
+      name: '</head><script>alert("theme")</script>',
+      source: "vscode" as const,
+      background: { r: 20, g: 24, b: 32 },
+      foreground: { r: 240, g: 240, b: 240 },
+      ansi: Array(16).fill(null),
+    },
+  };
+  const html = injectBranding("<html><head></head><body></body></html>", { theme });
+  const document = new JSDOM(html).window.document;
+  assert.deepEqual(JSON.parse(document.querySelector('meta[name="brand-theme"]')!.getAttribute("content")!), theme);
+  assert.equal(document.querySelectorAll("script").length, 0);
+});
+
+test("an uploaded logo is rendered safely and takes precedence over a legacy letter badge", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const markUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk1kAAAAASUVORK5CYII=";
+  const html = injectBranding("<html><head></head></html>", { markUrl, mark: "Y" });
+  assert.ok(html.includes(`--brand-mark-image:url("${markUrl}")`));
+  assert.ok(!html.includes('--brand-mark:"Y"'));
+});

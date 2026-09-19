@@ -1,4 +1,7 @@
+import { isBrandImage } from "./brand-image.ts";
+import { isBrandTheme, type BrandTheme } from "./theme-import.ts";
 export interface OrgBranding {
+  theme?: BrandTheme;
   orgName?: string;
   accent?: string;
   mark?: string;
@@ -63,11 +66,16 @@ const escapeAttr = (v: string): string =>
 
 const CSS_HOSTILE = /[<>{}"'();\\]/;
 const cssSafe = (v: string | undefined): v is string => !!v && !CSS_HOSTILE.test(v);
-const cssUrlSafe = (v: string | undefined): v is string => cssSafe(v) && /^https:\/\/\S+$/.test(v);
 
 export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
   const { accent, mark, markUrl, selfLabel } = branding;
   let out = html;
+  if (isBrandTheme(branding.theme)) {
+    out = out.replace(
+      "</head>",
+      () => `<meta name="brand-theme" content="${escapeAttr(JSON.stringify(branding.theme))}"></head>`,
+    );
+  }
   if (selfLabel) {
     out = out.replace(
       /(<meta name="brand-self-label" content=")[^"]*(")/,
@@ -84,8 +92,8 @@ export function injectBranding(html: string, branding: OrgBranding, opts?: { tit
   }
   const decls = [
     ...(cssSafe(accent) ? [`--brand-accent:${accent}`] : []),
-    ...(cssSafe(mark) ? [`--brand-mark:"${mark}"`] : []),
-    ...(cssUrlSafe(markUrl) ? [`--brand-mark-image:url("${markUrl}")`] : []),
+    ...(cssSafe(mark) && !isBrandImage(markUrl) ? [`--brand-mark:"${mark}"`] : []),
+    ...(isBrandImage(markUrl) ? [`--brand-mark-image:url("${markUrl}")`] : []),
   ].join(";");
   if (decls) out = out.replace("</head>", () => `<style>:root{${decls}}</style></head>`);
   return out;

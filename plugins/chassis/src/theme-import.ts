@@ -78,12 +78,12 @@ function parseItermColors(name: string, xml: string): Palette {
   const colors = new Map<string, Rgb>();
   for (const entry of xml.matchAll(PLIST_COLOR_ENTRY)) {
     const parts: Partial<Record<"Red" | "Green" | "Blue", number>> = {};
-    for (const component of entry[2].matchAll(PLIST_COMPONENT)) {
+    for (const component of (entry[2] ?? "").matchAll(PLIST_COMPONENT)) {
       parts[component[1] as "Red" | "Green" | "Blue"] = Number(component[2]);
     }
     const { Red, Green, Blue } = parts;
     if (![Red, Green, Blue].every((v) => v !== undefined && Number.isFinite(v))) continue;
-    colors.set(entry[1].trim(), { r: unitToByte(Red), g: unitToByte(Green), b: unitToByte(Blue) });
+    colors.set((entry[1] ?? "").trim(), { r: unitToByte(Red), g: unitToByte(Green), b: unitToByte(Blue) });
   }
   const lookup = (key: string): Rgb | undefined =>
     colors.get(key) ?? colors.get(`${key} (Dark)`) ?? colors.get(`${key} (Light)`);
@@ -241,7 +241,7 @@ function stripTrailingCommas(text: string): string {
     }
     if (ch === ",") {
       let j = i + 1;
-      while (j < text.length && /\s/.test(text[j])) j++;
+      while (j < text.length && /\s/.test(text[j] ?? "")) j++;
       if (text[j] === "}" || text[j] === "]") {
         i++;
         continue;
@@ -262,7 +262,7 @@ function stringEnd(text: string, openQuote: number): number {
 export function parseHex(value: string): Rgba | undefined {
   const m = /^#([0-9a-f]{3,8})$/i.exec(value.trim());
   if (!m) return undefined;
-  let digits = m[1];
+  let digits = m[1] ?? "";
   if (digits.length === 3 || digits.length === 4) digits = [...digits].map((d) => d + d).join("");
   if (digits.length !== 6 && digits.length !== 8) return undefined;
   const byte = (at: number) => parseInt(digits.slice(at, at + 2), 16);
@@ -404,6 +404,13 @@ export function isPalette(value: unknown): value is Palette {
   const p = value as Partial<Palette>;
   return (
     typeof p.name === "string" &&
+    p.name.length <= 60 &&
+    (p.kind === undefined || p.kind === "light" || p.kind === "dark") &&
+    [p.link, p.cursor, p.selection, p.selectionForeground, p.sidebar, p.border, p.button].every(
+      (c) => c === undefined || isRgb(c),
+    ) &&
+    (p.syntax === undefined ||
+      (typeof p.syntax === "object" && p.syntax !== null && Object.values(p.syntax).every(isRgb))) &&
     (p.source === "iterm2" || p.source === "vscode") &&
     isRgb(p.background) &&
     isRgb(p.foreground) &&
@@ -417,4 +424,34 @@ function isRgb(value: unknown): value is Rgb {
   if (!value || typeof value !== "object") return false;
   const c = value as Partial<Rgb>;
   return [c.r, c.g, c.b].every((n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 255);
+}
+
+export type BrandTheme = { mode: "light" | "dark" | "system" | "custom"; palette?: Palette };
+
+export function isBrandTheme(value: unknown): value is BrandTheme {
+  if (!value || typeof value !== "object") return false;
+  const theme = value as BrandTheme;
+  return ["light", "dark", "system"].includes(theme.mode) || (theme.mode === "custom" && isPalette(theme.palette));
+}
+
+export function adminThemeVars(palette: Palette): Record<string, string> {
+  const { vars } = themeTokens(palette);
+  return Object.fromEntries(
+    Object.entries({
+      "--bg": "--background",
+      "--surface": "--card",
+      "--subtle": "--secondary",
+      "--text": "--foreground",
+      "--muted": "--muted-foreground",
+      "--ink": "--foreground",
+      "--border": "--border",
+      "--cta": "--cta",
+      "--cta-hover": "--cta-hover",
+      "--cta-foreground": "--cta-foreground",
+      "--danger": "--destructive",
+      "--ok": "--success",
+      "--sidebar-active": "--sidebar-accent",
+      "--trigger": "--primary",
+    }).map(([key, token]) => [key, vars[token] ?? ""]),
+  );
 }

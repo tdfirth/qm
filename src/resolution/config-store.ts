@@ -1,3 +1,4 @@
+import type { BrandTheme } from "../../plugins/chassis/src/theme-import.ts";
 import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
@@ -115,6 +116,7 @@ export interface PersistedPeopleDirectoryUrl {
   url: string;
 }
 export interface OrgBranding {
+  theme?: BrandTheme;
   accent?: string;
   mark?: string;
   markUrl?: string;

@@ -198,7 +198,7 @@ test("branding governance validates, round-trips through surface-config, clears,
   const surfaceBranding = async () =>
     (
       (await (await fetch(`${srv.base}/v1/surface-config`)).json()) as {
-        branding?: { accent?: string; mark?: string; selfLabel?: string };
+        branding?: { accent?: string; mark?: string; selfLabel?: string; theme?: unknown };
       }
     ).branding;
   try {
@@ -251,6 +251,24 @@ test("branding governance validates, round-trips through surface-config, clears,
       200,
     );
     assert.equal((await surfaceBranding())?.mark, "bx");
+    const theme = {
+      mode: "custom",
+      palette: {
+        name: "Night",
+        source: "vscode",
+        background: { r: 20, g: 24, b: 32 },
+        foreground: { r: 240, g: 240, b: 240 },
+        ansi: Array(16).fill(null),
+      },
+    };
+    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ theme }) })).status, 200);
+    assert.deepEqual((await surfaceBranding())?.theme, theme);
+    assert.equal(
+      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ theme: { mode: "custom" } }) })).status,
+      400,
+    );
+    assert.deepEqual((await surfaceBranding())?.theme, theme);
+
     assert.equal(
       (
         await fetch(url, {
