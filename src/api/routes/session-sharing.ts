@@ -7,6 +7,7 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
+import { browserRenderableImage } from "../../../plugins/chassis/src/image-mime.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -132,7 +133,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
     const file = share.files.find((file) => file.id === params.fileId);
     const opened = file && (await deps.sessionShareBytes?.open(file.blobKey));
     if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
-    const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
+    const inline = url.searchParams.get("inline") === "1" && browserRenderableImage(file.mimetype);
     res.writeHead(200, {
       "content-type": inline ? file.mimetype : "application/octet-stream",
       "content-length": String(opened.sizeBytes),

@@ -96,6 +96,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   let visible = original;
   let accessible = true;
   let fileData: string | null = "<script>attachment contents</script>";
+  let fileName = "example.html";
+  let fileMime = "text/html";
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
     const parts = url.pathname.split("/");
@@ -138,8 +140,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
         openFileForViewer: async (id: string, user: string) =>
           id === "f1" && user === "alice" && fileData !== null
             ? {
-                name: "example.html",
-                mimetype: "text/html",
+                name: fileName,
+                mimetype: fileMime,
                 sizeBytes: Buffer.byteLength(fileData),
                 stream: Readable.from(fileData),
               }
@@ -181,6 +183,21 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
+  fileData = "BM";
+  fileName = "example.bmp";
+  fileMime = "image/bmp";
+  const imageShare = (await (await create()).json()) as { share: { token: string } };
+  const imageSnapshot = (await (await read(imageShare.share.token)).json()) as {
+    messages: Array<{ attachments?: Array<{ id: string }> }>;
+  };
+  const imageFileId = imageSnapshot.messages.find((message) => message.attachments?.length)?.attachments?.[0]?.id;
+  assert.ok(imageFileId);
+  const inlineImage = await read(imageShare.share.token, "internal", `/files/${imageFileId}`);
+  assert.equal(inlineImage.headers.get("content-type"), "image/bmp");
+  assert.match(inlineImage.headers.get("content-disposition")!, /^inline;/);
+  fileData = "<script>attachment contents</script>";
+  fileName = "example.html";
+  fileMime = "text/html";
   visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
   const delivery = await deliveries.enqueue({
     destination: { type: "web", target: "web:alice:s1" },
