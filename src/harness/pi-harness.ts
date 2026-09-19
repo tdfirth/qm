@@ -1269,6 +1269,22 @@ export async function buildModelRuntime(
   return runtime;
 }
 
+function promptWithCancellation(
+  session: AgentSession,
+  text: string,
+  signal?: AbortSignal,
+  options?: Parameters<AgentSession["prompt"]>[1],
+): Promise<void> {
+  signal?.throwIfAborted();
+  return session.prompt(text, {
+    ...options,
+    preflightResult(success) {
+      options?.preflightResult?.(success);
+      if (success) signal?.throwIfAborted();
+    },
+  });
+}
+
 export async function oneShot(
   prefix: string,
   model: Model<Api>,
@@ -1302,7 +1318,7 @@ export async function oneShot(
     };
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      await session.prompt(prompt);
+      await promptWithCancellation(session, prompt, opts?.signal);
     } catch (err) {
       throw piTurnError(session, err, messagesBefore);
     } finally {
@@ -2230,6 +2246,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             )
               throw new TurnHandedOff();
           };
+          const promptAgent = (text: string, options?: Parameters<AgentSession["prompt"]>[1]): Promise<void> =>
+            promptWithCancellation(entry.agentSession, text, turn.cancel, options);
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             checkHandoff();
             if (userAborted || turn.cancel?.aborted) return false;
@@ -2256,9 +2274,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               }
             }
             const outcome = await raceTurnWallClock(
-              entry.agentSession.prompt(
-                refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-              ),
+              promptAgent(refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal)),
               { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
             );
             if (userAborted) return false;
@@ -2270,10 +2286,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
               : undefined;
             checkHandoff();
+            turn.cancel?.throwIfAborted();
             wallClock = await raceTurnWallClock(
               turn.continueTurn
                 ? entry.agentSession.agent.continue()
-                : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+                : promptAgent(modelPrompt, images ? { images } : undefined),
               {
                 capMs: raceCapMs(),
                 extendMs: extendCapMs,
@@ -2320,7 +2337,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   checkHandoff();
                   if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS)
                     return Promise.resolve<TurnWallClockOutcome>("aborted");
-                  return raceTurnWallClock(entry.agentSession.prompt(note), {
+                  return raceTurnWallClock(promptAgent(note), {
                     capMs: raceCapMs(),
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
@@ -2368,7 +2385,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               ) {
                 try {
                   checkHandoff();
-                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
+                  const outcome = await raceTurnWallClock(promptAgent(note), {
                     capMs,
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
@@ -2397,7 +2414,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               handedOff = !userAborted && !turn.cancel?.aborted;
             } else {
               const cancelAbortRejection =
-                turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
+                turn.cancel?.aborted === true &&
+                (err === turn.cancel.reason || (err as { name?: string } | null)?.name === "AbortError");
               if (!userAborted && !cancelAbortRejection) {
                 const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
                 let recovered = false;
@@ -2477,6 +2495,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const cancelStoppedCleanly =
             turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
           if (userAborted || cancelStoppedCleanly) {
+            if (!tapedTriggerUser) await tapeEntryMirror(userEntry);
             const freshMessages = entry.agentSession.messages.slice(messagesBefore);
             const lastFreshAssistant = [...freshMessages]
               .reverse()

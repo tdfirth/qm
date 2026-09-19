@@ -2,7 +2,7 @@ import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../typ
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import type { Task, TaskStore } from "../tasks/task-store.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -82,6 +82,13 @@ export function runResultDelivery(
     return { destination, text: standaloneFailureText(run.result)!, provenance, idempotencyKey };
   }
   if (run.result?.status === "pending_approval" && run.result.pendingApprovals?.length) {
+    if (
+      run.request.surfaceTools &&
+      !run.request.addressed &&
+      !isPersonAuthored(origin.kind) &&
+      run.result.pendingApprovals.every((approval) => approval.kind === "input")
+    )
+      return null;
     return { destination, text: "", provenance, idempotencyKey };
   }
   if (

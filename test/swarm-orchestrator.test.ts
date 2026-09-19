@@ -233,6 +233,8 @@ for (const storage of ["memory", "postgres"] as const) {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       let rootId = "";
+      let rootRunId = "";
+      const continueRoot = Promise.withResolvers<void>();
       const childIds = new Set<string>();
       const issued: Array<{ sessionId: string; attempt: number }> = [];
       exerciseTurn = async (turn) => {
@@ -247,9 +249,14 @@ for (const storage of ["memory", "postgres"] as const) {
         assert.ok(claims?.runLeaseToken);
         issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
         const root = turn.input === "http-swarm-root";
-        if (root) rootId = turn.session.id;
-        else childIds.add(turn.session.id);
-        if (root && storage === "postgres") await built.runtime.stopBackgroundClaims();
+        if (root) {
+          rootId = turn.session.id;
+          rootRunId = turn.runId!;
+        } else childIds.add(turn.session.id);
+        if (root && storage === "postgres") {
+          await built.runtime.stopBackgroundClaims();
+          await continueRoot.promise;
+        }
         const body = root
           ? {
               action: "spawn",
@@ -323,17 +330,23 @@ for (const storage of ["memory", "postgres"] as const) {
           }),
           body,
         });
-        assert.equal(rootResponse.status, 200);
-        const root = (await rootResponse.json()) as { status: string };
-        assert.equal(root.status, "ok", JSON.stringify(root));
+        assert.equal(rootResponse.status, storage === "postgres" ? 202 : 200);
+        const root = (await rootResponse.json()) as { status: string; runId?: string };
         if (storage === "postgres") {
+          assert.deepEqual(root, { status: "queued", runId: rootRunId });
+          continueRoot.resolve();
+          const completedRoot = await built.runs.waitFor(rootRunId, 15_000);
+          assert.equal(completedRoot.status, "done");
+          assert.equal(completedRoot.result?.status, "ok", JSON.stringify(completedRoot.result));
+          assert.equal(completedRoot.attempts, 1);
+          assert.equal(completedRoot.errorAttempts, 0);
           await new Promise<void>((resolve) => server.close(() => resolve()));
           await built.runtime.stop();
           built = buildApp(config);
           server = createServer(built.app, serverDeps(config, built));
           await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
           base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        }
+        } else assert.equal(root.status, "ok", JSON.stringify(root));
         await built.app.swarms!.sweep();
         const workers = (await built.runs.list()).filter((run) => run.request.swarm);
         assert.equal(workers.length, 3);
@@ -420,6 +433,7 @@ for (const storage of ["memory", "postgres"] as const) {
         assert.equal(rejected.errorAttempts, 1);
         assert.equal(revokedExecuted, false);
       } finally {
+        continueRoot.resolve();
         exerciseTurn = undefined;
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await built.runtime.stop();

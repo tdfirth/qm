@@ -140,6 +140,34 @@ test("runResultDelivery keeps proactive ambient quarantine silent", () => {
   assert.equal(runResultDelivery(ambient), null);
 });
 
+for (const kind of ["ambient", "automation", "human", "direct"] as const) {
+  for (const addressed of [false, true]) {
+    test(`input approval delivery for ${kind} with addressed=${addressed} follows the initiating context`, () => {
+      const pending = run({
+        result: {
+          status: "pending_approval",
+          pendingApprovals: [{ requestId: "screen", command: "security-screen", reason: "flagged", kind: "input" }],
+        },
+      });
+      pending.request = { ...pending.request, surfaceTools: true, origin: { kind }, addressed };
+      const delivery = runResultDelivery(pending);
+      if (!addressed && (kind === "ambient" || kind === "automation")) assert.equal(delivery, null);
+      else assert.deepEqual(delivery?.destination.approvalRequestIds, ["screen"]);
+    });
+  }
+}
+
+test("an unaddressed automated tool approval remains deliverable", () => {
+  const pending = run({
+    result: {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "tool", command: "execute", reason: "grant required" }],
+    },
+  });
+  pending.request = { ...pending.request, surfaceTools: true, origin: { kind: "automation" } };
+  assert.deepEqual(runResultDelivery(pending)?.destination.approvalRequestIds, ["tool"]);
+});
+
 test("runResultDelivery carries the surface's edit checkpoint into the destination", () => {
   const d = runResultDelivery(run({ deliveryState: { editRef: "171.002" } }));
   assert.equal(d?.destination.editRef, "171.002");
