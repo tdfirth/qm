@@ -403,7 +403,7 @@ export async function ingestInbound(
         stream = signal ? addAbortSignal(signal, reopened.stream) : reopened.stream;
       }
       signal?.throwIfAborted();
-      const id = fileArtifactId(`${register.seed}:${a.sourceId ?? a.blobId}`, "in", 0);
+      const id = fileArtifactId(`${register.seed}:${a.blobId}`, "in", 0);
       const path = artifactPath(id, name);
       const { artifact } = await register.store.put({
         id,

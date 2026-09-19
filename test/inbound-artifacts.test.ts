@@ -137,3 +137,16 @@ test("Auto accepts large binary uploads but cannot evade text screening with a b
     assert.equal(result.blocked.length, accepted ? 0 : 1);
   }
 });
+
+test("surface source IDs cannot alias different immutable image uploads", async () => {
+  const { transfer, store, register, upload } = fixture();
+  const first = { ...(await upload("first.png", "first-image")), mimetype: "image/png", sourceId: "same-source" };
+  const second = { ...(await upload("second.png", "second-image")), mimetype: "image/png", sourceId: "same-source" };
+  const result = await ingestInbound([first, second], transfer, register);
+  assert.equal(result.images.length, 2);
+  assert.notEqual(result.images[0]!.artifactId, result.images[1]!.artifactId);
+  for (const image of result.images) {
+    const opened = await store.open(image.artifactId!);
+    assert.deepEqual(await collectBlob(opened!.stream), Buffer.from(image.dataBase64, "base64"));
+  }
+});
