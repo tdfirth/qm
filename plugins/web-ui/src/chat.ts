@@ -1630,7 +1630,13 @@ export function createChatSurface(
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
+            ${
+              attachments.length
+                ? html`<div class="message-files">
+                    ${attachments.map((attachment) => userAttachmentBadge(attachment, message))}
+                  </div>`
+                : nothing
+            }
           </div>
           ${
             sendFailure
@@ -2820,7 +2826,7 @@ export function createChatSurface(
     }
   }
 
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult | typeof nothing {
+  function userAttachmentBadge(a: UserAttachmentView, message: AgentMessage): TemplateResult | typeof nothing {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
       const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
@@ -2833,6 +2839,7 @@ export function createChatSurface(
           loading="lazy"
           @error=${() => {
             brokenUserImageSources.add(src);
+            settledRowCache.delete(message as object);
             redrawTranscript();
           }}
         />`;

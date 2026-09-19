@@ -34,6 +34,7 @@ test("images a user attached render as passive images in the live chat", () => {
   assert.match(fn, /alt="Attached image"/);
   assert.match(fn, /!brokenUserImageSources\.has\(src\)/);
   assert.match(fn, /brokenUserImageSources\.add\(src\);/);
+  assert.match(fn, /settledRowCache\.delete\(message as object\);/);
   assert.match(fn, /return imageChip\(a\.fileName, a\.size, artifactHref \?\? localContentUrl\(a\)\);/);
   assert.doesNotMatch(fn, /const dataUrl|artifactHref \?\? dataUrl/);
   assert.doesNotMatch(fn, /chipBadge\(FileImage|tip\(|download|title=/);
@@ -60,6 +61,8 @@ test("images a user attached render as passive images on the share page", () => 
   const userImage = files.match(/if \(message\.role === "user"[\s\S]*?\n\s*\}/)?.[0] ?? "";
   assert.match(userImage, /class="user-image-attachment"/);
   assert.match(userImage, /alt="Attached image"/);
+  assert.match(userImage, /!failedImageSources\.has\(imageSrc\)/);
+  assert.match(userImage, /failedImageSources\.add\(imageSrc\);/);
   assert.doesNotMatch(userImage, /<a|chipBadge|file\.name|title=|download/);
   assert.match(files, /const inlineImage = browserRenderableImage\(file\.mimetype\);/);
   assert.match(files, /return chipBadge\([\s\S]*?inlineImage \? FileImage : File/);

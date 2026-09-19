@@ -1,6 +1,6 @@
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { html, render } from "lit";
+import { html, render, type TemplateResult } from "lit";
 import { Lock, ArrowUpRight, Check, Copy, File, FileImage } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
@@ -21,8 +21,10 @@ interface SharedTranscript {
 installMarkdownSanitizer({ shared: true });
 const transcript: SharedTranscript | null = JSON.parse(document.getElementById("shared-transcript")!.textContent!);
 const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL;
-render(
-  html`
+const failedImageSources = new Set<string>();
+
+function sharedConversation(): TemplateResult {
+  return html`
     <div class="shared-conversation">
       <header class="chat-topbar session-topbar">
         <a class="shared-brand" href=${base} aria-label=${`Open ${brandName()}`}
@@ -54,29 +56,41 @@ render(
                             ? html`<div class="message-files">
                                 ${message.attachments.map((file) => {
                                   const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
+                                  const imageSrc = `${href}?inline=1`;
                                   const inlineImage = browserRenderableImage(file.mimetype);
-                                  if (message.role === "user" && inlineImage) {
+                                  if (message.role === "user" && inlineImage && !failedImageSources.has(imageSrc)) {
                                     return html`<img
                                       class="user-image-attachment"
-                                      src=${`${href}?inline=1`}
+                                      src=${imageSrc}
                                       alt="Attached image"
                                       loading="lazy"
+                                      @error=${() => {
+                                        failedImageSources.add(imageSrc);
+                                        draw();
+                                      }}
                                     />`;
                                   }
-                                  if (inlineImage && message.role !== "user") {
+                                  if (inlineImage && message.role !== "user" && !failedImageSources.has(imageSrc)) {
                                     return html`<a
                                       class="file-image"
                                       href=${href}
                                       download=${file.name}
                                       rel="noreferrer"
-                                      ><img src=${`${href}?inline=1`} alt=${file.name} loading="lazy"
+                                      ><img
+                                        src=${imageSrc}
+                                        alt=${file.name}
+                                        loading="lazy"
+                                        @error=${() => {
+                                          failedImageSources.add(imageSrc);
+                                          draw();
+                                        }}
                                     /></a>`;
                                   }
                                   return chipBadge(
                                     inlineImage ? FileImage : File,
                                     file.name,
                                     file.sizeBytes,
-                                    inlineImage ? `${href}?inline=1` : href,
+                                    inlineImage ? imageSrc : href,
                                     !inlineImage,
                                   );
                                 })}
@@ -100,9 +114,14 @@ render(
         ${icon(Lock, 12)}${transcript ? `Shared snapshot · ${new Date(transcript.createdAt).toLocaleDateString()} · ${transcript.audience === "external" ? "Anyone with the link" : "Organization only"}` : "Shared conversation"}
       </footer>
     </div>
-  `,
-  document.getElementById("app")!,
-);
+  `;
+}
+
+function draw(): void {
+  render(sharedConversation(), document.getElementById("app")!);
+}
+
+draw();
 
 const viewport = createTranscriptViewport();
 requestAnimationFrame(() => {
