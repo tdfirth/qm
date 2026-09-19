@@ -1475,7 +1475,6 @@ export function buildApp(
       : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => {
-    void productAnalytics.responseFinished(run);
     const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
     const finishTiming = startTiming("queue.task", "run", startedAt);
     let status: TimingStatus = "internal_error";
@@ -1487,6 +1486,7 @@ export function buildApp(
       data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
       measurements: { queue_wait: startedAt - run.createdAt },
     });
+    return productAnalytics.responseFinished(run);
   });
   const ledger = runStore.ledger;
 
@@ -2095,7 +2095,7 @@ export function buildApp(
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
   runs.onTerminal((run) => {
-    void runs
+    return runs
       .activeForThread(run.sessionId)
       .then((live) => {
         if (!live) engaged.settle(run.sessionId);
@@ -2103,10 +2103,10 @@ export function buildApp(
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
+    return app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
   });
   runs.onTerminal((run) => {
-    void (async () => {
+    return (async () => {
       const uuid = (await sessions.getByThread(run.sessionId))?.id;
       const rows = uuid ? await approvals.entries() : [];
       const awaiting = rows.some(
@@ -2134,7 +2134,7 @@ export function buildApp(
     });
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+      return returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;
@@ -2541,17 +2541,34 @@ export function buildApp(
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
+      const failures: unknown[] = [];
+      try {
+        await harness.turns.close?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      await runs.drainTerminal();
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
       stopStreamSync();
-      void runStreamEvents.close?.();
-      await harness.turns.close?.();
-      await tasks.close?.();
-      await flyTunnel?.stop();
+      const cleanup = await Promise.allSettled(
+        [
+          () => runs.close?.(),
+          () => runSignals.close?.(),
+          () => sessionStateBus.close?.(),
+          () => ledgerEventBus.close?.(),
+          () => runActivity.close?.(),
+          () => runStreamEvents.close?.(),
+          () => tasks.close?.(),
+          () => flyTunnel?.stop(),
+        ].map((close) => Promise.resolve().then(close)),
+      );
+      failures.push(...cleanup.filter((result) => result.status === "rejected").map((result) => result.reason));
+      try {
+        await errors.flush();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length) throw new AggregateError(failures, "Runtime stores could not close cleanly");
     },
   };
 
