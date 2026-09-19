@@ -316,7 +316,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export { browserRenderableImage } from "../../chassis/src/image-mime";
+export { browserRenderableImage } from "../../chassis/src/image-mime.ts";
 
 const copyFeedback = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
 
