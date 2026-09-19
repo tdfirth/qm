@@ -110,7 +110,7 @@ import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
-import { createSkillMaterializer, skillsIndex, SKILLS_DIR } from "../skills/materialize.ts";
+import { skillsIndex } from "../skills/materialize.ts";
 import {
   resolveOnboardingStatus,
   onboardingSkillVisible,
@@ -271,7 +271,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
-  const skillMaterializer = createSkillMaterializer(deps.advisoryLock);
   const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
@@ -1709,8 +1708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionScratch,
         provisionResource,
         provisionOwnerAuth,
-        ensureSkillTree,
-        readSkill,
+        useSkill,
         provisionForReach,
         reclaimBox,
         provisionPending,
@@ -1738,9 +1736,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         credentialCutoverServices,
         quarantinedServices,
         cutoverModeOf,
-        visibleSkills,
         visibleSkillsForTurn,
-        skillMaterializer,
         emitGapWork,
         perf,
       });
@@ -2176,7 +2172,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const snapshotExcludeDirs = [
           ...resolution.layers.filter((l) => l.mode === "ro" && l.mountPath).map((l) => l.mountPath),
           TURN_FILES_DIR,
-          SKILLS_DIR,
         ];
 
         const spine: SpineState = {
@@ -2316,8 +2311,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
-          ensureSkillTree,
-          readSkill,
+          useSkill,
           ...(reachAvailable
             ? {
                 reach: {
@@ -2885,15 +2879,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sessionUsedTools = visibleHistory.some(
           (e) =>
             e.type === "tool_call" &&
-            !(
-              e.payload !== null &&
-              typeof e.payload === "object" &&
-              "tool" in e.payload &&
-              e.payload.tool === "read" &&
-              "path" in e.payload &&
-              typeof e.payload.path === "string" &&
-              e.payload.path.startsWith("skill://")
-            ),
+            !(e.payload !== null && typeof e.payload === "object" && "tool" in e.payload && e.payload.tool === "skill"),
         );
         if (
           !strictReadOnly &&
