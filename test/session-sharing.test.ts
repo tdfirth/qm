@@ -265,7 +265,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
 
 test("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
-    entry("user", { attachments: [{ artifactId: "user" }] }, 1),
+    entry("user", { attachments: [{ artifactId: "user", previewArtifactId: "user-preview" }] }, 1),
     entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
     entry("tool_result", { tool: "attach", files: [{ artifactId: "failed" }], isError: true }, 3),
     entry("tool_result", { tool: "attach", files: [{ artifactId: "old", name: "a" }] }, 4),
@@ -277,7 +277,12 @@ test("attachment projection includes only user and delivered attachments", () =>
     entry("assistant", { text: "private final" }, 10),
   ]);
   assert.deepEqual(messages, [
-    { role: "user", text: "", attachmentIds: ["user"] },
+    {
+      role: "user",
+      text: "",
+      attachmentIds: ["user-preview"],
+      inlinePreviewIds: ["user-preview"],
+    },
     { role: "assistant", text: "Here", attachmentIds: ["new"] },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },
   ]);

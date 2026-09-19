@@ -14,7 +14,7 @@ interface SharedTranscript {
   messages: Array<{
     role: "user" | "assistant";
     text: string;
-    attachments?: Array<{ id: string; name: string; mimetype: string; sizeBytes: number }>;
+    attachments?: Array<{ id: string; name: string; mimetype: string; sizeBytes: number; inlinePreview?: boolean }>;
   }>;
 }
 
@@ -57,7 +57,9 @@ function sharedConversation(): TemplateResult {
                                 ${message.attachments.map((file) => {
                                   const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
                                   const imageSrc = `${href}?inline=1`;
-                                  const inlineImage = browserRenderableImage(file.mimetype);
+                                  const inlineImage =
+                                    browserRenderableImage(file.mimetype) &&
+                                    (message.role !== "user" || file.inlinePreview === true);
                                   if (message.role === "user" && inlineImage && !failedImageSources.has(imageSrc)) {
                                     return html`<img
                                       class="user-image-attachment"

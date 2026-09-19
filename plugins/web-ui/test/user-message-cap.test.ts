@@ -30,7 +30,8 @@ test("images a user attached render as passive images in the live chat", () => {
   const fn = chat.match(/function userAttachmentBadge\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /startsWith\("image\/"\)/);
   assert.match(fn, /a\.preview\?\.startsWith\("data:image\/"\)/);
-  assert.match(fn, /const src = preview \?\? artifactHref;/);
+  assert.match(fn, /const src = preview \?\? persistedPreview;/);
+  assert.doesNotMatch(fn, /const src = preview \?\? artifactHref/);
   assert.match(fn, /alt="Attached image"/);
   assert.match(fn, /!brokenUserImageSources\.has\(src\)/);
   assert.match(fn, /brokenUserImageSources\.add\(src\);/);
@@ -63,8 +64,9 @@ test("images a user attached render as passive images on the share page", () => 
   assert.match(userImage, /alt="Attached image"/);
   assert.match(userImage, /!failedImageSources\.has\(imageSrc\)/);
   assert.match(userImage, /failedImageSources\.add\(imageSrc\);/);
+  assert.match(shared, /message\.role !== "user" \|\| file\.inlinePreview === true/);
   assert.doesNotMatch(userImage, /<a|chipBadge|file\.name|title=|download/);
-  assert.match(files, /const inlineImage = browserRenderableImage\(file\.mimetype\);/);
+  assert.match(files, /browserRenderableImage\(file\.mimetype\) &&/);
   assert.match(files, /return chipBadge\([\s\S]*?inlineImage \? FileImage : File/);
 });
 

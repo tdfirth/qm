@@ -789,6 +789,8 @@ interface CoreAttachment {
   mimetype: string;
   sizeBytes: number;
   blobId: string;
+  previewBlobId?: string;
+  previewMimetype?: string;
 }
 
 interface CoreApprovalRecord {
@@ -2330,13 +2332,27 @@ const apiRoutes: readonly WebRoute[] = [
         if (Array.isArray(p.attachments)) {
           for (const raw of p.attachments as unknown[]) {
             if (!raw || typeof raw !== "object") continue;
-            const a = raw as { name?: unknown; mimetype?: unknown; sizeBytes?: unknown; blobId?: unknown };
+            const a = raw as {
+              name?: unknown;
+              mimetype?: unknown;
+              sizeBytes?: unknown;
+              blobId?: unknown;
+              previewBlobId?: unknown;
+              previewMimetype?: unknown;
+            };
             if (typeof a.name !== "string" || typeof a.blobId !== "string" || !a.blobId) continue;
             attachments.push({
               name: a.name,
               mimetype: typeof a.mimetype === "string" && a.mimetype ? a.mimetype : "application/octet-stream",
               sizeBytes: typeof a.sizeBytes === "number" ? a.sizeBytes : 0,
               blobId: a.blobId,
+              ...(typeof a.previewBlobId === "string" && a.previewBlobId
+                ? {
+                    previewBlobId: a.previewBlobId,
+                    previewMimetype:
+                      typeof a.previewMimetype === "string" ? a.previewMimetype : "application/octet-stream",
+                  }
+                : {}),
             });
           }
         }

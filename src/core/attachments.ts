@@ -15,7 +15,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import { downscaleVisionImage } from "./image-downscale.ts";
+import { downscaleVisionImage, sniffImageDimensions } from "./image-downscale.ts";
 
 export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
@@ -353,6 +353,27 @@ export async function materializeInbound(
     const registered = register
       ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
       : undefined;
+    let previewArtifactId: string | undefined;
+    if (register && a.previewBlobId && a.previewMimetype === "image/webp") {
+      const preview = await transfer.open(a.previewBlobId);
+      if (preview && preview.sizeBytes <= 1_000_000) {
+        const previewBytes = await collectBlob(preview.stream);
+        const dimensions = sniffImageDimensions(previewBytes);
+        if (dimensions?.format === "webp" && dimensions.width <= 512 && dimensions.height <= 512) {
+          const previewArtifact = await registerArtifact(
+            register,
+            "in",
+            MAX_INBOUND_FILES + metas.length,
+            name,
+            a.previewMimetype,
+            previewBytes,
+          );
+          previewArtifactId = previewArtifact?.id;
+        }
+      } else {
+        preview?.stream.destroy();
+      }
+    }
     metas.push({
       name,
       mimetype,
@@ -361,6 +382,7 @@ export async function materializeInbound(
       ...(a.author ? { author: a.author } : {}),
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
+      ...(previewArtifactId ? { previewArtifactId } : {}),
     });
     if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
       const imageBytes = await downscaleVisionImage(bytes, mimetype);

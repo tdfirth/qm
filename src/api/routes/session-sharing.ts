@@ -45,6 +45,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const projected = sharedMessages(source.entries, deliveredAttachments);
   if (!projected.length) return sendJson(res, 400, { error: "empty_conversation" });
   const ids = [...new Set(projected.flatMap((m) => m.attachmentIds ?? []))];
+  const inlinePreviewIds = new Set(projected.flatMap((m) => m.inlinePreviewIds ?? []));
   if (ids.length > 100 || Buffer.byteLength(JSON.stringify(projected)) > 2_000_000)
     return sendJson(res, 413, { error: "share_too_large" });
   const files: SessionShare["files"] = [];
@@ -74,7 +75,13 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   }
   for (const file of pending) {
     const stored = await deps.sessionShareBytes.put(file.data, { maxBytes: MAX_ATTACHMENT_BYTES });
-    const attachment = { id: randomUUID(), name: file.name, mimetype: file.mimetype, sizeBytes: stored.sizeBytes };
+    const attachment = {
+      id: randomUUID(),
+      name: file.name,
+      mimetype: file.mimetype,
+      sizeBytes: stored.sizeBytes,
+      ...(inlinePreviewIds.has(file.sourceId) ? { inlinePreview: true } : {}),
+    };
     attachments.set(file.sourceId, attachment);
     files.push({ ...attachment, blobKey: stored.blobKey });
   }

@@ -2805,6 +2805,7 @@ export function createChatSurface(
     content?: string;
     preview?: string;
     artifactId?: string;
+    previewArtifactId?: string;
   }
 
   const localAttachmentUrls = new Map<UserAttachmentView, string>();
@@ -2830,7 +2831,8 @@ export function createChatSurface(
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
       const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
-      const src = preview ?? artifactHref;
+      const persistedPreview = a.previewArtifactId ? fileContentUrl(a.previewArtifactId, a.fileName) : undefined;
+      const src = preview ?? persistedPreview;
       if (browserRenderableImage(a.mimeType) && src && !brokenUserImageSources.has(src)) {
         return html`<img
           class="user-image-attachment"
