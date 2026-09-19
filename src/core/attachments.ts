@@ -10,7 +10,12 @@ import type {
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  fileArtifactId,
+  previewArtifactPath,
+  type FileArtifactStore,
+  type FileDirection,
+} from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
@@ -144,12 +149,13 @@ async function registerArtifact(
   name: string,
   mimetype: string,
   bytes: Uint8Array,
+  preview = false,
 ): Promise<
   { id: string; path: string; ownerScopeId: ScopeId; direction: FileDirection; created: boolean } | undefined
 > {
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
-    const path = `artifacts/${id}/${name}`;
+    const path = preview ? previewArtifactPath(id, name) : `artifacts/${id}/${name}`;
     const { created } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,
@@ -161,6 +167,7 @@ async function registerArtifact(
       direction,
       ...(reg.createdInScope ? { createdInScope: reg.createdInScope } : {}),
       maxBytes: MAX_ATTACHMENT_BYTES,
+      enabled: !preview,
     });
     const registered = { id, path, ownerScopeId: reg.ownerScopeId, direction, created };
     await reg.onRegistered?.(registered);
@@ -367,6 +374,7 @@ export async function materializeInbound(
             name,
             a.previewMimetype,
             previewBytes,
+            true,
           );
           previewArtifactId = previewArtifact?.id;
         }

@@ -137,15 +137,17 @@ test("fresh shares freeze messages and authorized attachments with separate audi
                 entries: visible,
               }
             : null,
-        openFileForViewer: async (id: string, user: string) =>
-          id === "f1" && user === "alice" && fileData !== null
-            ? {
-                name: fileName,
-                mimetype: fileMime,
-                sizeBytes: Buffer.byteLength(fileData),
-                stream: Readable.from(fileData),
-              }
-            : null,
+        openFileForViewer: async (id: string, user: string, opts?: { preview?: boolean }) => {
+          if (user !== "alice" || fileData === null || !["f1", "p1"].includes(id)) return null;
+          if (id === "p1" && !opts?.preview) return null;
+          const data = id === "p1" ? "PREVIEW" : fileData;
+          return {
+            name: id === "p1" ? "example.webp" : fileName,
+            mimetype: id === "p1" ? "image/webp" : fileMime,
+            sizeBytes: Buffer.byteLength(data),
+            stream: Readable.from(data),
+          };
+        },
       },
     } as unknown as ApiCtx);
   });
@@ -186,15 +188,23 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   fileData = "BM";
   fileName = "example.bmp";
   fileMime = "image/bmp";
+  visible = [
+    ...entries,
+    entry("user", { text: "Image", attachments: [{ artifactId: "f1", previewArtifactId: "p1" }] }, 12),
+  ];
   const imageShare = (await (await create()).json()) as { share: { token: string } };
   const imageSnapshot = (await (await read(imageShare.share.token)).json()) as {
-    messages: Array<{ attachments?: Array<{ id: string }> }>;
+    messages: Array<{ attachments?: Array<{ id: string; previewId?: string }> }>;
   };
-  const imageFileId = imageSnapshot.messages.find((message) => message.attachments?.length)?.attachments?.[0]?.id;
+  const imageAttachment = imageSnapshot.messages.find((message) => message.attachments?.length)?.attachments?.[0];
+  const imageFileId = imageAttachment?.id;
   assert.ok(imageFileId);
+  assert.ok(imageAttachment.previewId);
   const inlineImage = await read(imageShare.share.token, "internal", `/files/${imageFileId}`);
   assert.equal(inlineImage.headers.get("content-type"), "image/bmp");
   assert.match(inlineImage.headers.get("content-disposition")!, /^inline;/);
+  const previewImage = await read(imageShare.share.token, "internal", `/files/${imageAttachment.previewId}`);
+  assert.equal(await previewImage.text(), "PREVIEW");
   fileData = "<script>attachment contents</script>";
   fileName = "example.html";
   fileMime = "text/html";
@@ -280,8 +290,9 @@ test("attachment projection includes only user and delivered attachments", () =>
     {
       role: "user",
       text: "",
-      attachmentIds: ["user-preview"],
+      attachmentIds: ["user"],
       inlinePreviewIds: ["user-preview"],
+      previewPairs: [{ attachmentId: "user", previewId: "user-preview" }],
     },
     { role: "assistant", text: "Here", attachmentIds: ["new"] },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },

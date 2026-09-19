@@ -2200,24 +2200,48 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;
   const IMAGE_PREVIEW_BYTES = 1_000_000;
   const IMAGE_PREVIEW_SOURCE_PIXELS = 16_777_216;
+  let imagePreviewQueue = Promise.resolve();
 
   async function imageDimensions(file: File): Promise<{ width: number; height: number } | undefined> {
     const bytes = new Uint8Array(await file.slice(0, 262_144).arrayBuffer());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const type = file.type.toLowerCase();
-    if ((type === "image/png" || type === "image/apng") && bytes.length >= 24) {
+    const signature = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
+    if (
+      (type === "image/png" || type === "image/apng") &&
+      bytes.length >= 24 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    ) {
       return { width: view.getUint32(16), height: view.getUint32(20) };
     }
-    if (type === "image/gif" && bytes.length >= 10) {
+    if (
+      type === "image/gif" &&
+      bytes.length >= 10 &&
+      (signature(0, 6) === "GIF87a" || signature(0, 6) === "GIF89a")
+    ) {
       return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
     }
-    if (["image/bmp", "image/x-ms-bmp"].includes(type) && bytes.length >= 26) {
+    if (
+      ["image/bmp", "image/x-ms-bmp"].includes(type) &&
+      bytes.length >= 26 &&
+      bytes[0] === 0x42 &&
+      bytes[1] === 0x4d
+    ) {
       return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
     }
-    if (["image/x-icon", "image/vnd.microsoft.icon"].includes(type) && bytes.length >= 8) {
-      return { width: bytes[6] || 256, height: bytes[7] || 256 };
-    }
-    if (type === "image/webp" && bytes.length >= 30) {
+    if (
+      type === "image/webp" &&
+      bytes.length >= 30 &&
+      signature(0, 4) === "RIFF" &&
+      signature(8, 12) === "WEBP"
+    ) {
       let offset = 12;
       while (offset + 8 <= bytes.length) {
         const chunk = String.fromCharCode(...bytes.subarray(offset, offset + 4));
@@ -2265,7 +2289,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     let bitmap: ImageBitmap | undefined;
     try {
       const dimensions = await imageDimensions(file);
-      if (!dimensions || dimensions.width * dimensions.height > IMAGE_PREVIEW_SOURCE_PIXELS) return undefined;
+      if (
+        !dimensions ||
+        dimensions.width <= 0 ||
+        dimensions.height <= 0 ||
+        dimensions.width > IMAGE_PREVIEW_SOURCE_PIXELS / dimensions.height
+      )
+        return undefined;
       const scale = Math.min(1, IMAGE_PREVIEW_EDGE / dimensions.width, IMAGE_PREVIEW_EDGE / dimensions.height);
       const width = Math.max(1, Math.round(dimensions.width * scale));
       const height = Math.max(1, Math.round(dimensions.height * scale));
@@ -2287,7 +2317,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   async function loadAnyAttachment(file: File): Promise<Attachment> {
-    const preview = boundedImagePreview(file);
+    const preview = imagePreviewQueue.then(() => boundedImagePreview(file));
+    imagePreviewQueue = preview.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
       const { loadAttachment } = await import("@earendil-works/pi-web-ui");
       return { ...(await loadAttachment(file)), preview: await preview };

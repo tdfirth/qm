@@ -36,7 +36,8 @@ test("images a user attached render as passive images in the live chat", () => {
   assert.match(fn, /!brokenUserImageSources\.has\(src\)/);
   assert.match(fn, /brokenUserImageSources\.add\(src\);/);
   assert.match(fn, /settledRowCache\.delete\(message as object\);/);
-  assert.match(fn, /return imageChip\(a\.fileName, a\.size, artifactHref \?\? localContentUrl\(a\)\);/);
+  assert.match(fn, /\?preview=1/);
+  assert.match(fn, /return imageChip\(a\.fileName, a\.size, artifactHref\);/);
   assert.doesNotMatch(fn, /const dataUrl|artifactHref \?\? dataUrl/);
   assert.doesNotMatch(fn, /chipBadge\(FileImage|tip\(|download|title=/);
 });
@@ -48,13 +49,16 @@ test("local image previews are bounded before they reach an image element", () =
   assert.match(composer, /const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;/);
   assert.match(composer, /const IMAGE_PREVIEW_BYTES = 1_000_000;/);
   assert.match(composer, /const IMAGE_PREVIEW_SOURCE_PIXELS = 16_777_216;/);
-  assert.match(preview, /dimensions\.width \* dimensions\.height > IMAGE_PREVIEW_SOURCE_PIXELS/);
+  assert.match(composer, /const preview = imagePreviewQueue\.then\(\(\) => boundedImagePreview\(file\)\);/);
+  assert.match(preview, /dimensions\.width > IMAGE_PREVIEW_SOURCE_PIXELS \/ dimensions\.height/);
   assert.match(preview, /createImageBitmap\(file, \{ resizeWidth: width, resizeHeight: height/);
   assert.match(preview, /canvas\.width = width/);
   assert.match(preview, /canvas\.height = height/);
   assert.match(preview, /preview\.size > IMAGE_PREVIEW_BYTES/);
   assert.match(staged, /attachment\.preview\?\.startsWith\("data:image\/"\)/);
   assert.doesNotMatch(staged, /attachment\.content/);
+  assert.match(composer, /bytes\[0\] === 0x89/);
+  assert.match(composer, /signature\(0, 4\) === "RIFF"/);
 });
 
 test("images a user attached render as passive images on the share page", () => {
@@ -62,12 +66,16 @@ test("images a user attached render as passive images on the share page", () => 
   const userImage = files.match(/if \(message\.role === "user"[\s\S]*?\n\s*\}/)?.[0] ?? "";
   assert.match(userImage, /class="user-image-attachment"/);
   assert.match(userImage, /alt="Attached image"/);
-  assert.match(userImage, /!failedImageSources\.has\(imageSrc\)/);
+  assert.match(userImage, /!failedImage/);
   assert.match(userImage, /failedImageSources\.add\(imageSrc\);/);
-  assert.match(shared, /message\.role !== "user" \|\| file\.inlinePreview === true/);
-  assert.doesNotMatch(userImage, /<a|chipBadge|file\.name|title=|download/);
+  assert.match(userImage, /href=\$\{href\}/);
+  assert.match(userImage, /download=\$\{file\.name\}/);
+  assert.match(shared, /message\.role !== "user" \|\| \(file\.inlinePreview === true && Boolean\(file\.previewId\)\)/);
+  assert.doesNotMatch(userImage, /chipBadge|title=/);
   assert.match(files, /browserRenderableImage\(file\.mimetype\) &&/);
   assert.match(files, /return chipBadge\([\s\S]*?inlineImage \? FileImage : File/);
+  assert.match(files, /inlineImage && !failedImage \? imageSrc : href/);
+  assert.match(files, /!inlineImage \|\| failedImage/);
 });
 
 test("both transcript renderers provide an accessible control and an observable inner body", () => {

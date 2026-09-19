@@ -1040,7 +1040,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
   const { res, user, url } = c;
   const id = c.params.id!;
   const corePath = withSourceAuthNonce(
-    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
+    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}${url.searchParams.get("preview") === "1" ? "&preview=1" : ""}`,
     CORE_SIGNING_SECRET,
   );
   const portalTok = portalTokenStore.getStore();

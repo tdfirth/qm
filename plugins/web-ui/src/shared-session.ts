@@ -14,7 +14,14 @@ interface SharedTranscript {
   messages: Array<{
     role: "user" | "assistant";
     text: string;
-    attachments?: Array<{ id: string; name: string; mimetype: string; sizeBytes: number; inlinePreview?: boolean }>;
+    attachments?: Array<{
+      id: string;
+      name: string;
+      mimetype: string;
+      sizeBytes: number;
+      inlinePreview?: boolean;
+      previewId?: string;
+    }>;
   }>;
 }
 
@@ -56,23 +63,30 @@ function sharedConversation(): TemplateResult {
                             ? html`<div class="message-files">
                                 ${message.attachments.map((file) => {
                                   const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
-                                  const imageSrc = `${href}?inline=1`;
+                                  const imageSrc = file.previewId
+                                    ? `${location.pathname}/files/${encodeURIComponent(file.previewId)}?inline=1`
+                                    : `${href}?inline=1`;
                                   const inlineImage =
                                     browserRenderableImage(file.mimetype) &&
-                                    (message.role !== "user" || file.inlinePreview === true);
-                                  if (message.role === "user" && inlineImage && !failedImageSources.has(imageSrc)) {
-                                    return html`<img
+                                    (message.role !== "user" || (file.inlinePreview === true && Boolean(file.previewId)));
+                                  const failedImage = failedImageSources.has(imageSrc);
+                                  if (message.role === "user" && inlineImage && !failedImage) {
+                                    return html`<a
                                       class="user-image-attachment"
-                                      src=${imageSrc}
-                                      alt="Attached image"
-                                      loading="lazy"
-                                      @error=${() => {
-                                        failedImageSources.add(imageSrc);
-                                        draw();
-                                      }}
-                                    />`;
+                                      href=${href}
+                                      download=${file.name}
+                                      rel="noreferrer"
+                                      ><img
+                                        src=${imageSrc}
+                                        alt="Attached image"
+                                        loading="lazy"
+                                        @error=${() => {
+                                          failedImageSources.add(imageSrc);
+                                          draw();
+                                        }}
+                                    /></a>`;
                                   }
-                                  if (inlineImage && message.role !== "user" && !failedImageSources.has(imageSrc)) {
+                                  if (inlineImage && message.role !== "user" && !failedImage) {
                                     return html`<a
                                       class="file-image"
                                       href=${href}
@@ -92,8 +106,8 @@ function sharedConversation(): TemplateResult {
                                     inlineImage ? FileImage : File,
                                     file.name,
                                     file.sizeBytes,
-                                    inlineImage ? imageSrc : href,
-                                    !inlineImage,
+                                    inlineImage && !failedImage ? imageSrc : href,
+                                    !inlineImage || failedImage,
                                   );
                                 })}
                               </div>`

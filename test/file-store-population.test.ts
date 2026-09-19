@@ -172,7 +172,12 @@ test("materializeInbound registers a bounded image preview beside the original",
   );
 
   assert.notEqual(inbound.metas[0]!.previewArtifactId, inbound.metas[0]!.artifactId);
-  assert.deepEqual(await drain(store, inbound.metas[0]!.previewArtifactId!), preview);
+  const opened = await store.open(inbound.metas[0]!.previewArtifactId!, { includeDisabled: true });
+  assert.ok(opened);
+  const chunks: Buffer[] = [];
+  for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
+  assert.deepEqual(Buffer.concat(chunks), preview);
+  assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
 });
 
 test("materializeInbound omits artifactId when registration fails or is absent", async () => {

@@ -686,6 +686,8 @@ export function createChatSurface(
 
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    for (const url of localAttachmentUrls.values()) URL.revokeObjectURL(url);
+    localAttachmentUrls.clear();
     teardownActiveChat();
   }
 
@@ -2831,7 +2833,9 @@ export function createChatSurface(
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
       const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
-      const persistedPreview = a.previewArtifactId ? fileContentUrl(a.previewArtifactId, a.fileName) : undefined;
+      const persistedPreview = a.previewArtifactId
+        ? `${fileContentUrl(a.previewArtifactId, a.fileName)}?preview=1`
+        : undefined;
       const src = preview ?? persistedPreview;
       if (browserRenderableImage(a.mimeType) && src && !brokenUserImageSources.has(src)) {
         return html`<img
@@ -2846,7 +2850,7 @@ export function createChatSurface(
           }}
         />`;
       }
-      return imageChip(a.fileName, a.size, artifactHref ?? localContentUrl(a));
+      return imageChip(a.fileName, a.size, artifactHref);
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
