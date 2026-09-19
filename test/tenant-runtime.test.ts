@@ -146,6 +146,34 @@ for (const failingStep of ["migrate", "sandbox:initialize", "config:hydrate", "i
   });
 }
 
+for (const workerOnly of [false, true]) {
+  test(`tenant preparation waits for all migrations before exposing or starting work: workerOnly=${workerOnly}`, async () => {
+    const migrated = Promise.withResolvers<void>();
+    gates.set("migrate", migrated.promise);
+    let prepared = false;
+    const preparing = prepare({}, workerOnly).then((runtime) => {
+      prepared = true;
+      return runtime;
+    });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, ["build", "migrate"]);
+      assert.equal(prepared, false);
+    } finally {
+      migrated.resolve();
+    }
+    const runtime = await preparing;
+    try {
+      assert.equal(Boolean(runtime.listener), !workerOnly);
+      assert.equal(events.includes("runtime:start"), false);
+      await runtime.start();
+      assert.ok(events.includes("runtime:start"));
+    } finally {
+      await runtime.stop();
+    }
+  });
+}
+
 const accounts = JSON.stringify([
   { id: "one", botToken: "xoxb-one", appToken: "xapp-one" },
   { id: "two", botToken: "xoxb-two", appToken: "xapp-two" },

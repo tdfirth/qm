@@ -60,6 +60,8 @@ Pooled mode requires Postgres for sessions and runs. Every company uses a separa
 
 Tenant IDs are stable lowercase slugs. They become the organization identity and part of default filesystem, object storage, and provider resource namespaces. Startup rejects conflicting IDs, hosts, database targets, signing keys, and overlapping resource namespaces. It cannot identify two different DNS aliases that secretly point to the same database or two provider credentials that refer to the same undeclared resources; operators must provision these correctly.
 
+Pooled provider name prefixes accept only lowercase letters, digits, and hyphens, and must begin and end with a letter or digit. Paths, URL escapes, query strings, fragments, and uppercase characters are rejected before any tenant starts. `FLY_DEPLOY_APP_PREFIX` is limited to 26 characters; longer tenant IDs receive a stable shortened Fly default.
+
 ## Ingress and authentication
 
 The core routes by a configured Host header, `x-qm-tenant`, or a tenant claim in a capability token. Conflicting selectors fail before dispatch. A selector is only a routing hint: the selected runtime still verifies its source signature, portal identity, or capability. Pooled mode requires tenant-bound signatures and tokens.

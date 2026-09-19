@@ -42,6 +42,8 @@ const NAME_PREFIXES = [
   "FLY_DEPLOY_APP_PREFIX",
 ] as const;
 
+const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
 const TENANT_SECRETS = [
   "CORE_SIGNING_SECRET",
   "CAPABILITY_SECRET",
@@ -208,7 +210,7 @@ export function loadHostConfig(env: NodeJS.ProcessEnv = process.env): HostConfig
   const ids = new Set<string>();
   const tenants = manifest.tenants.map((entry, index): TenantDefinition => {
     const raw = object(entry, `tenants[${index}]`);
-    if (typeof raw.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(raw.id))
+    if (typeof raw.id !== "string" || raw.id.length > 48 || !SLUG_PATTERN.test(raw.id))
       throw new Error("Tenant id must be a lowercase slug of at most 48 characters");
     if (ids.has(raw.id)) throw new Error(`Duplicate tenant id: ${raw.id}`);
     ids.add(raw.id);
@@ -271,7 +273,12 @@ export function loadHostConfig(env: NodeJS.ProcessEnv = process.env): HostConfig
       let defaultPrefix = `qm-${raw.id}`;
       if (key === "FLY_DEPLOY_APP_PREFIX" && defaultPrefix.length > 26)
         defaultPrefix = `qm-${raw.id.slice(0, 12)}-${hashId([raw.id], 10)}`;
-      tenantEnv[key] = value?.trim() ?? defaultPrefix;
+      const prefix = value?.trim() ?? defaultPrefix;
+      if (!SLUG_PATTERN.test(prefix))
+        throw new Error(`${raw.id}: ${key} must be a lowercase slug with alphanumeric ends`);
+      if (key === "FLY_DEPLOY_APP_PREFIX" && prefix.length > 26)
+        throw new Error(`${raw.id}: FLY_DEPLOY_APP_PREFIX must be no longer than 26 characters`);
+      tenantEnv[key] = prefix;
     }
     const context = createTenantContext({ id: raw.id, env: tenantEnv, pooled: true });
     const config = runWithTenant(context, () => loadConfig(context.env));

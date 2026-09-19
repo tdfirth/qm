@@ -4,6 +4,19 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadHostConfig } from "../src/tenancy/manifest.ts";
+import { SpritesClient } from "@fly/sprites";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
+
+const providerPrefixes = [
+  "SPRITES_NAME_PREFIX",
+  "SMOLMACHINES_NAME_PREFIX",
+  "E2B_NAME_PREFIX",
+  "MODAL_NAME_PREFIX",
+  "PORTER_SANDBOX_NAME_PREFIX",
+  "AGENT37_NAME_PREFIX",
+  "SUPERSERVE_NAME_PREFIX",
+  "FLY_DEPLOY_APP_PREFIX",
+];
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenants-"));
@@ -164,22 +177,76 @@ test("one tenant may use the same canonical database target for direct and poole
 test("empty provider name prefixes cannot fall back to a shared provider namespace", (t) => {
   const f = fixture();
   t.after(f.cleanup);
-  for (const key of [
-    "SPRITES_NAME_PREFIX",
-    "SMOLMACHINES_NAME_PREFIX",
-    "E2B_NAME_PREFIX",
-    "MODAL_NAME_PREFIX",
-    "PORTER_SANDBOX_NAME_PREFIX",
-    "AGENT37_NAME_PREFIX",
-    "SUPERSERVE_NAME_PREFIX",
-    "FLY_DEPLOY_APP_PREFIX",
-  ]) {
+  for (const key of providerPrefixes) {
     for (const value of ["", '"   "']) {
       f.write("alpha", { [key]: value });
       f.write("beta", { [key]: value });
       assert.throws(() => loadHostConfig(f.env), new RegExp(`${key} must not be empty`));
     }
   }
+});
+
+test("pooled provider prefixes reject URL aliases and non-slug characters", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  for (const key of providerPrefixes) {
+    for (const value of [
+      "ignored/../qm-alpha",
+      "ignored/%2e%2e/qm-alpha",
+      "qm-alpha?ignored",
+      '"qm-alpha#ignored"',
+      "qm%2dalpha",
+      "QM-alpha",
+      "qm_alpha",
+      "qm.alpha",
+      '"qm alpha"',
+      "-qm-alpha",
+      "qm-alpha-",
+    ]) {
+      f.write("beta", { [key]: value });
+      assert.throws(() => loadHostConfig(f.env), new RegExp(`${key} must be a lowercase slug`), `${key}=${value}`);
+    }
+    f.write("beta", { [key]: "valid-prefix-123" });
+    assert.equal(loadHostConfig(f.env).tenants[1]!.context.env[key], "valid-prefix-123");
+  }
+});
+
+test("pooled prefixes reject names that the actual Sprites SDK resolves to another tenant's resource", async (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push(new Request(input, init).url);
+    return new Response(null, { status: 204 });
+  });
+  const client = new SpritesClient("fake-token", { baseURL: "https://sprites.example.test" });
+  const actor = "personal:same@example.test";
+  const alpha = sandboxScopeName("qm-alpha", actor);
+  const aliased = sandboxScopeName("ignored/../qm-alpha", actor);
+  assert.notEqual(alpha, aliased);
+  await client.deleteSprite(alpha);
+  await client.deleteSprite(aliased);
+  assert.equal(requests[0], requests[1]);
+  assert.equal(requests[0], `https://sprites.example.test/v1/sprites/${alpha}`);
+  f.write("beta", { SPRITES_NAME_PREFIX: "ignored/../qm-alpha" });
+  assert.throws(() => loadHostConfig(f.env), /SPRITES_NAME_PREFIX must be a lowercase slug/);
+});
+
+test("tenant ids keep generated provider prefixes within the same slug grammar", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  f.entries[0]!.id = "alpha-";
+  writeFileSync(f.env.QM_TENANTS_FILE!, JSON.stringify({ tenants: f.entries }));
+  assert.throws(() => loadHostConfig(f.env), /Tenant id must be a lowercase slug/);
+});
+
+test("pooled Fly prefixes respect the provider's existing length limit", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  f.write("beta", { FLY_DEPLOY_APP_PREFIX: "a".repeat(27) });
+  assert.throws(() => loadHostConfig(f.env), /FLY_DEPLOY_APP_PREFIX must be no longer than 26 characters/);
+  f.write("beta", { FLY_DEPLOY_APP_PREFIX: "a".repeat(26) });
+  assert.equal(loadHostConfig(f.env).tenants[1]!.config.flyDeploy.appPrefix.length, 26);
 });
 
 test("provider namespace comparisons use the normalized effective prefix", (t) => {
