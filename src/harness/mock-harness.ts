@@ -34,6 +34,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!read ",
   "!skill ",
   "!skill-run ",
+  "!skill-then-boom ",
   "!write ",
   "!attach ",
   "!writeattach ",
@@ -181,6 +182,28 @@ export function createMockHarness(): Harness {
 
         if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
           reply = "[strict/read-only posture: that tool is unavailable]";
+        } else if (turn.continueTurn && textPayload(continuedUserEntry?.payload).startsWith("!skill-then-boom ")) {
+          const prior = [...turn.history]
+            .reverse()
+            .find((entry) => entry.type === "tool_result" && (entry.payload as { tool?: string }).tool === "skill");
+          const dir = (prior?.payload as { dir?: string })?.dir;
+          const ran = await turn.tools.execute(`sh ${dir}/scripts/run.sh`);
+          reply = (ran.stdout || ran.stderr).trim();
+          usedTool = true;
+        } else if (command0.startsWith("!skill-then-boom ")) {
+          const name = command0.slice("!skill-then-boom ".length);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "skill", name, callId: "mock-skill" },
+            scopeLabel: turn.scopeLabel,
+          });
+          const result = await turn.tools.skill(name);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "skill", name, callId: "mock-skill", ...result },
+            scopeLabel: turn.scopeLabel,
+          });
+          throw new Error("boom: simulated fault after skill load");
         } else if (command0 === "!boom") {
           throw new Error("boom: simulated turn fault");
         } else if (command0 === "!boom-always" || boomAlwaysSessions.has(turn.session.id)) {

@@ -205,11 +205,11 @@ function startupCancellationCodexBinary(dir: string): string {
     path,
     `#!${process.execPath}
 const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
   process.exit(0);
 });
+fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.stdin.resume();
 `,
   );

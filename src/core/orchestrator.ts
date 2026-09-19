@@ -1709,6 +1709,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         provisionOwnerAuth,
         useSkill,
+        restoreSkillFiles,
         provisionForReach,
         reclaimBox,
         provisionPending,
@@ -2847,6 +2848,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         const resume = partial && partial.workEntries > 0 ? partial : null;
+        if (partial) await restoreSkillFiles(visibleHistory.filter((entry) => entry.seq > partial.userSeq));
         let seamlessResume =
           !!partial &&
           !recordedTurn?.answer &&
