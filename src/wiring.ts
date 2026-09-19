@@ -314,6 +314,8 @@ import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-sign
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
+import { createWorkCapacity, type WorkCapacity } from "./runs/work-capacity.ts";
+import { currentTenant } from "./tenancy/context.ts";
 import {
   createNoopInstanceRegistry,
   createLegacyEnrollmentBridge,
@@ -539,12 +541,14 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 export function buildApp(
   config: Config,
   overrides: {
+    capacity?: WorkCapacity;
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  const capacity = overrides.capacity ? createWorkCapacity(Math.max(1, config.workers), overrides.capacity) : undefined;
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
@@ -874,7 +878,12 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
+        ? {
+            snapshots: createS3SnapshotStore({
+              bucket: e2b.snapshotS3Bucket,
+              prefix: `${currentTenant()?.pooled ? config.s3Prefix : ""}e2b-home`,
+            }),
+          }
         : {}),
       onError: sandboxOnError,
     });
@@ -917,7 +926,12 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
+        ? {
+            snapshots: createS3SnapshotStore({
+              bucket: modal.snapshotS3Bucket,
+              prefix: `${currentTenant()?.pooled ? config.s3Prefix : ""}modal-home`,
+            }),
+          }
         : {}),
       onError: sandboxOnError,
     });
@@ -1553,7 +1567,6 @@ export function buildApp(
           claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
-          port: 18096,
         })
       : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
@@ -1975,6 +1988,8 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    inlineTurns: !capacity || (!config.backgroundWorkEnabled && !config.backgroundDeploymentId),
+    capacity,
     admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
@@ -2360,6 +2375,7 @@ export function buildApp(
   noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
+      capacity,
       admittedWork,
       runs,
       sessions,

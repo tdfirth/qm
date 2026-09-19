@@ -251,6 +251,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            ORDER BY candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
          ) RETURNING *`,
         [token, now + ttlMs, workerId, now, runId ?? null, sessionId ?? null],
+        { timeoutMs: 1_500 },
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     } catch (err) {
