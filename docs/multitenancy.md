@@ -74,6 +74,8 @@ The egress authorization service also accepts `QM_TENANTS_FILE`. It selects the 
 
 AWS-backed storage and sandbox providers use the host's IAM identity. Tenant environment files cannot replace that identity with ambient AWS credentials. Give the host access only to its assigned companies' resources, or use separate hosts where distinct IAM boundaries are required.
 
+Sentry initialization belongs to the host process. Configure its destination and deployment identity in the host environment; tenant environment files do not select telemetry destinations. Sanitized backend reports and performance timings share the operator's host telemetry configuration, while tenant error and audit records retain their own database stores.
+
 ## Move an existing company
 
 1. Preserve the company's organization ID, database, signing/encryption secrets, model configuration, and resource namespaces in its environment file. Inspect generated defaults before moving existing sandboxes or object storage; changing a prefix changes which resources QM finds.
@@ -88,5 +90,7 @@ The manifest and credentials are deployment inputs, so a process restart is requ
 This pools core compute; it does not eliminate per-tenant database connections, resident caches, sandbox compute, portal/web processes, or external service costs. Tenants are currently resident for the host's lifetime. Size a host using measured resident memory, database connections, queue delay, and concurrent turn workload, then assign a bounded set of tenants to each host.
 
 A tenant runtime is a data and configuration boundary inside a trusted Node process, not a process-security boundary. A fatal process error affects every tenant assigned to that host. Use separate hosts for tenants that require separate IAM identities, stronger fault isolation, or different trusted extensions.
+
+The worker-only entrypoint uses the same pooled host and durable run queues. It does not yet define a versioned contract for deploying runners independently of the app. A separate runner service should own complete active turns, including leases, cancellation, and recovery; persist outputs for delivery after app restarts; and resolve tenant configuration from its own trusted registry. Overlapping app and runner versions also require compatible request/event formats and database migrations.
 
 This change does not add automatic tenant placement, idle-runtime eviction, a dynamic control plane, billing, or a new durable workflow engine. Existing run and delivery stores remain the durable execution machinery. Those are separate follow-up decisions for a much larger hosted service.
