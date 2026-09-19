@@ -2199,6 +2199,61 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   const IMAGE_PREVIEW_EDGE = 512;
   const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;
   const IMAGE_PREVIEW_BYTES = 1_000_000;
+  const IMAGE_PREVIEW_SOURCE_PIXELS = 16_777_216;
+
+  async function imageDimensions(file: File): Promise<{ width: number; height: number } | undefined> {
+    const bytes = new Uint8Array(await file.slice(0, 262_144).arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const type = file.type.toLowerCase();
+    if ((type === "image/png" || type === "image/apng") && bytes.length >= 24) {
+      return { width: view.getUint32(16), height: view.getUint32(20) };
+    }
+    if (type === "image/gif" && bytes.length >= 10) {
+      return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    }
+    if (["image/bmp", "image/x-ms-bmp"].includes(type) && bytes.length >= 26) {
+      return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
+    }
+    if (["image/x-icon", "image/vnd.microsoft.icon"].includes(type) && bytes.length >= 8) {
+      return { width: bytes[6] || 256, height: bytes[7] || 256 };
+    }
+    if (type === "image/webp" && bytes.length >= 30) {
+      let offset = 12;
+      while (offset + 8 <= bytes.length) {
+        const chunk = String.fromCharCode(...bytes.subarray(offset, offset + 4));
+        const size = view.getUint32(offset + 4, true);
+        const data = offset + 8;
+        if (chunk === "VP8X" && data + 10 <= bytes.length) {
+          const width = 1 + bytes[data + 4]! + (bytes[data + 5]! << 8) + (bytes[data + 6]! << 16);
+          const height = 1 + bytes[data + 7]! + (bytes[data + 8]! << 8) + (bytes[data + 9]! << 16);
+          return { width, height };
+        }
+        if (chunk === "VP8L" && data + 5 <= bytes.length && bytes[data] === 0x2f) {
+          const packed = view.getUint32(data + 1, true);
+          return { width: (packed & 0x3fff) + 1, height: ((packed >>> 14) & 0x3fff) + 1 };
+        }
+        if (chunk === "VP8 " && data + 10 <= bytes.length) {
+          return { width: view.getUint16(data + 6, true) & 0x3fff, height: view.getUint16(data + 8, true) & 0x3fff };
+        }
+        offset = data + size + (size % 2);
+      }
+    }
+    if (["image/jpeg", "image/jpg", "image/pjpeg"].includes(type) && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let offset = 2;
+      while (offset + 8 < bytes.length) {
+        if (bytes[offset++] !== 0xff) return undefined;
+        while (bytes[offset] === 0xff) offset++;
+        const marker = bytes[offset++]!;
+        const length = view.getUint16(offset);
+        if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+          return { width: view.getUint16(offset + 5), height: view.getUint16(offset + 3) };
+        }
+        if (length < 2 || offset + length > bytes.length) return undefined;
+        offset += length;
+      }
+    }
+    return undefined;
+  }
 
   async function boundedImagePreview(file: File): Promise<string | undefined> {
     if (
@@ -2209,11 +2264,15 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       return undefined;
     let bitmap: ImageBitmap | undefined;
     try {
-      bitmap = await createImageBitmap(file);
-      const scale = Math.min(1, IMAGE_PREVIEW_EDGE / bitmap.width, IMAGE_PREVIEW_EDGE / bitmap.height);
+      const dimensions = await imageDimensions(file);
+      if (!dimensions || dimensions.width * dimensions.height > IMAGE_PREVIEW_SOURCE_PIXELS) return undefined;
+      const scale = Math.min(1, IMAGE_PREVIEW_EDGE / dimensions.width, IMAGE_PREVIEW_EDGE / dimensions.height);
+      const width = Math.max(1, Math.round(dimensions.width * scale));
+      const height = Math.max(1, Math.round(dimensions.height * scale));
+      bitmap = await createImageBitmap(file, { resizeWidth: width, resizeHeight: height, resizeQuality: "high" });
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.width = width;
+      canvas.height = height;
       const context = canvas.getContext("2d");
       if (!context) return undefined;
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);

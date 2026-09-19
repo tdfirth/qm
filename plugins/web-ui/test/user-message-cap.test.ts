@@ -30,8 +30,10 @@ test("images a user attached render as passive images in the live chat", () => {
   const fn = chat.match(/function userAttachmentBadge\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /startsWith\("image\/"\)/);
   assert.match(fn, /a\.preview\?\.startsWith\("data:image\/"\)/);
-  assert.match(fn, /<img class="user-image-attachment" src=\$\{src\} alt="Attached image" loading="lazy"/);
-  assert.match(fn, /if \(browserRenderableImage\(a\.mimeType\) && src\)/);
+  assert.match(fn, /const src = preview \?\? artifactHref;/);
+  assert.match(fn, /alt="Attached image"/);
+  assert.match(fn, /!brokenUserImageSources\.has\(src\)/);
+  assert.match(fn, /brokenUserImageSources\.add\(src\);/);
   assert.match(fn, /return imageChip\(a\.fileName, a\.size, artifactHref \?\? localContentUrl\(a\)\);/);
   assert.doesNotMatch(fn, /const dataUrl|artifactHref \?\? dataUrl/);
   assert.doesNotMatch(fn, /chipBadge\(FileImage|tip\(|download|title=/);
@@ -43,8 +45,11 @@ test("local image previews are bounded before they reach an image element", () =
   assert.match(composer, /const IMAGE_PREVIEW_EDGE = 512;/);
   assert.match(composer, /const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;/);
   assert.match(composer, /const IMAGE_PREVIEW_BYTES = 1_000_000;/);
-  assert.match(preview, /canvas\.width = Math\.max/);
-  assert.match(preview, /canvas\.height = Math\.max/);
+  assert.match(composer, /const IMAGE_PREVIEW_SOURCE_PIXELS = 16_777_216;/);
+  assert.match(preview, /dimensions\.width \* dimensions\.height > IMAGE_PREVIEW_SOURCE_PIXELS/);
+  assert.match(preview, /createImageBitmap\(file, \{ resizeWidth: width, resizeHeight: height/);
+  assert.match(preview, /canvas\.width = width/);
+  assert.match(preview, /canvas\.height = height/);
   assert.match(preview, /preview\.size > IMAGE_PREVIEW_BYTES/);
   assert.match(staged, /attachment\.preview\?\.startsWith\("data:image\/"\)/);
   assert.doesNotMatch(staged, /attachment\.content/);

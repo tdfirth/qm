@@ -2802,6 +2802,7 @@ export function createChatSurface(
   }
 
   const localAttachmentUrls = new Map<UserAttachmentView, string>();
+  const brokenUserImageSources = new Set<string>();
 
   function localContentUrl(a: UserAttachmentView): string | undefined {
     if (!a.content) return undefined;
@@ -2823,9 +2824,18 @@ export function createChatSurface(
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
       const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
-      const src = artifactHref ?? preview;
-      if (browserRenderableImage(a.mimeType) && src) {
-        return html`<img class="user-image-attachment" src=${src} alt="Attached image" loading="lazy" />`;
+      const src = preview ?? artifactHref;
+      if (browserRenderableImage(a.mimeType) && src && !brokenUserImageSources.has(src)) {
+        return html`<img
+          class="user-image-attachment"
+          src=${src}
+          alt="Attached image"
+          loading="lazy"
+          @error=${() => {
+            brokenUserImageSources.add(src);
+            redrawTranscript();
+          }}
+        />`;
       }
       return imageChip(a.fileName, a.size, artifactHref ?? localContentUrl(a));
     }
