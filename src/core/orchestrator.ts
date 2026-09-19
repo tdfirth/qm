@@ -2854,11 +2854,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         const resume = partial && partial.workEntries > 0 ? partial : null;
         let seamlessResume =
-          !!resume &&
+          !!partial &&
           !recordedTurn?.answer &&
           !input.approval &&
           !!tapeRows?.serve &&
           !tapeRows.interrupted &&
+          (!resume || (tapeRows.fold?.at(-1) as { role?: string } | undefined)?.role !== "user") &&
           tapeEndsAtCommittedStep(tapeRows.fold);
         if (partial) postKeys.seed(completedSurfaceEnqueues(visibleHistory, partial.userSeq, surfaceName));
         if (partial) {
@@ -2876,7 +2877,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} seamless=${seamlessResume}`,
           );
         }
-        const resumeInput = seamlessResume ? "" : resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume });
+        const resumeInput = seamlessResume
+          ? ""
+          : resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume });
         let turnInput = partial ? resumeInput : baseText;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
@@ -3495,6 +3498,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             modelCalls += segment.modelCalls ?? 0;
             addUsage();
           }
+          if (segment.handedOff) throw new TurnHandedOff();
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
@@ -3509,7 +3513,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
-        if (result.handedOff) throw new TurnHandedOff();
         const primarySubturnEndSeq = emittedEntries.at(-1)?.seq;
         const preTurnCovered = tapeRows ? tapeRows.covered : false;
         let latchedCoverageSeq = -1;

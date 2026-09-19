@@ -204,7 +204,7 @@ export function createMockHarness(): Harness {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
           await turn.emit({
             type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
+            payload: { tool: "slack", callId: "mock-lost-post", action: "post", bytes: msg.length },
             scopeLabel: turn.scopeLabel,
           });
           await turn.tools.post(msg);
@@ -231,10 +231,14 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!work-then-boom") {
           await turn.emit({
             type: "tool_call",
-            payload: { tool: "execute", command: "make build" },
+            payload: { tool: "execute", callId: "mock-work", command: "make build" },
             scopeLabel: turn.scopeLabel,
           });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "mock-work", ok: true },
+            scopeLabel: turn.scopeLabel,
+          });
           throw new Error("boom: simulated mid-turn fault");
         } else if (command0 === "!refuse") {
           throw new NonRetryableTurnError(

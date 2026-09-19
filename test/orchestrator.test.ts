@@ -350,7 +350,10 @@ test("a retried run whose tape ends at a committed tool result CONTINUES the con
   assert.equal(res.sourceAssistantEntrySeq, 3);
 
   const found = await app.getSession(res.sessionId!);
-  assert.deepEqual(found!.entries.map((e) => e.type), ["user", "tool_call", "tool_result", "assistant"]);
+  assert.deepEqual(
+    found!.entries.map((e) => e.type),
+    ["user", "tool_call", "tool_result", "assistant"],
+  );
   const userTexts = found!.entries
     .filter((e) => e.type === "user")
     .map((e) => String((e.payload as { text?: string }).text ?? ""));
@@ -384,7 +387,7 @@ test("the resume note is recorded hidden so no surface renders it as a typed use
   );
 });
 
-test("a retry of an attempt that recorded NO work restarts it — never claims work is recorded above", async () => {
+test("a retry with a clean user-only tape continues without an interruption note", async () => {
   const { app } = freshApp();
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
 
@@ -392,10 +395,10 @@ test("a retry of an attempt that recorded NO work restarts it — never claims w
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /interrupted before it recorded any work.*Start the request now/s);
+  assert.match(res.reply ?? "", /continued from the recorded conversation/);
   assert.doesNotMatch(
     res.reply ?? "",
-    /recorded above|don't start over/,
+    /interrupted|don't start over/,
     "the model is never told about work that does not exist",
   );
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original user entry, not the retry's prompt");
@@ -409,11 +412,7 @@ test("a retry of an attempt that recorded NO work restarts it — never claims w
     "the human's request is recorded once — a retry must not re-send it into the transcript or the model's context",
   );
   assert.notEqual((userEntries[0]!.payload as { hidden?: boolean }).hidden, true, "the original stays visible");
-  assert.equal(
-    (userEntries[1]!.payload as { hidden?: boolean }).hidden,
-    true,
-    "the retry's prompt is hidden — the chat shows only what the human typed",
-  );
+  assert.equal(userEntries.length, 1, "no recovery note is needed for a clean user-only tape");
 });
 
 test("a guest actor is refused (internal-only, input side)", async () => {

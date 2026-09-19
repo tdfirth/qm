@@ -745,3 +745,16 @@ test("a fold ends at a committed step only when its last message is a tool resul
   assert.equal(tapeEndsAtCommittedStep([]), false);
   assert.equal(tapeEndsAtCommittedStep(undefined), false);
 });
+
+test("interrupted tool results cannot masquerade as a committed batch", () => {
+  const rows = [
+    user("go"),
+    assistant([
+      { type: "toolCall", id: "c1", name: "exec" },
+      { type: "toolCall", id: "c2", name: "exec" },
+    ]),
+    toolResult("c1", INTERRUPTED_TOOL_RESULT),
+    toolResult("c2", "done"),
+  ];
+  assert.equal(tapeEndsAtCommittedStep(foldTape(rows)), false);
+});

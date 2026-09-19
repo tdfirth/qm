@@ -64,6 +64,7 @@ export interface ToolContextRef {
   }>;
   pausedOnApproval?: boolean;
   handoffRequested?: boolean;
+  handoffStopped?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
@@ -3963,6 +3964,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
   return {
     ...tool,
     async execute(...args) {
+      ref.abortSignal?.throwIfAborted();
       const [, params] = args;
       if (ref.runtimeHandoff || ref.runtimeMutationPending)
         return {
@@ -3992,7 +3994,10 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         }
       }
       const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
+      const result = Promise.resolve().then(() => {
+        ref.abortSignal?.throwIfAborted();
+        return tool.execute(...args);
+      });
       inFlight.add(result);
       try {
         return await result;

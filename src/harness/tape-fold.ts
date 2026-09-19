@@ -306,7 +306,7 @@ export function planTapeSeed(
   if (rows.some((r) => r.kind === "message" && r.harness !== undefined && r.harness !== harness)) {
     return { seed: null, skip: "foreign-harness" };
   }
-  const fold = folded ? [...folded] : foldTape(rows);
+  const fold = (folded ? [...folded] : foldTape(rows)).filter((message) => !assistantDroppedAtReplay(message));
   const lint = lintFold(fold);
   return { seed: mode === "serve" && lint.ok && fold.length ? fold : null, lint, fold };
 }
@@ -317,9 +317,17 @@ export function tapeNeedsInterruptHeal(rows: readonly TapeRecord[], folded?: rea
 }
 
 export function tapeEndsAtCommittedStep(messages: readonly unknown[] | undefined): boolean {
+  messages = messages?.filter((message) => !assistantDroppedAtReplay(message));
   if (!messages?.length || !lintFold(messages).ok) return false;
   const last = messages[messages.length - 1] as { role?: string } | undefined;
-  return last?.role === "toolResult" || last?.role === "user";
+  if (last?.role === "user") return true;
+  if (last?.role !== "toolResult") return false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as { role?: string; content?: Array<{ type?: string; text?: string }> };
+    if (message.role !== "toolResult") break;
+    if (message.content?.some((block) => block.type === "text" && block.text === INTERRUPTED_TOOL_RESULT)) return false;
+  }
+  return true;
 }
 
 export function healFoldInterrupt(messages: readonly unknown[], at: number): unknown[] {

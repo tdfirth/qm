@@ -1,3 +1,4 @@
+import { createHandoff, type Handoff, type HandoffSignals } from "./handoff.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { errorAlreadyRecorded, type ErrorLog } from "../admin/error-log.ts";
@@ -24,11 +25,6 @@ export interface ProcessDeps {
 export const LEASE_LOST_CONSECUTIVE = 3;
 
 const CLAIM_FAIL_CRASH_CONSECUTIVE = 20;
-
-export interface HandoffSignals {
-  requested: AbortSignal;
-  deadline: AbortSignal;
-}
 
 export async function processRun(
   deps: ProcessDeps,
@@ -102,7 +98,7 @@ export async function processRun(
       if (!(await deps.runs.releaseLease(run.id, token, { handoff: true })))
         throw new Error(`run ${run.id} lost its lease before it could be handed off`, { cause: err });
       console.log(`[worker] run ${run.id} handed off to the incoming deployment at a committed step`);
-      return { status: "silent", sessionId: run.sessionId };
+      throw err;
     }
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyRecorded(err))
@@ -127,6 +123,7 @@ export async function processRun(
 }
 
 export interface WorkerDeps extends ProcessDeps {
+  handoff?: Handoff;
   pollMs?: number;
   recoveryPollMs?: number;
   workerId?: string;
@@ -178,10 +175,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   let inFlight: { runId: string; leaseToken: string; threadRef: string } | null = null;
   let releasedLeaseToken: string | null = null;
   let releasing: Promise<void> | null = null;
-  let handoffRequested = new AbortController();
-  let handoffDeadline = new AbortController();
-  let handoffTimer: ReturnType<typeof setTimeout> | undefined;
-  let handoff: HandoffSignals = { requested: handoffRequested.signal, deadline: handoffDeadline.signal };
+  const handoff = deps.handoff ?? createHandoff();
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -229,11 +223,11 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimDone = null;
       deps.onClaimed?.();
       try {
-        const work = () => processRun(deps, run, { background: true, handoff });
+        const work = () => processRun(deps, run, { background: true, handoff: handoff.signals() });
         if (deps.admittedWork) await deps.admittedWork.run(work);
         else await work();
       } catch (e) {
-        swallow("worker: background run crashed", e);
+        if (!(e instanceof TurnHandedOff)) swallow("worker: background run crashed", e);
       } finally {
         inFlight = null;
       }
@@ -250,24 +244,14 @@ export function createWorker(deps: WorkerDeps): Worker {
 
   function requestHandoff(graceMs: number): void {
     void stopClaims();
-    if (handoffRequested.signal.aborted) return;
-    handoffRequested.abort();
-    if (!Number.isFinite(graceMs) || graceMs <= 0) {
-      handoffDeadline.abort();
-      return;
-    }
-    handoffTimer = setTimeout(() => handoffDeadline.abort(), graceMs);
-    handoffTimer.unref?.();
+    handoff.request(graceMs);
   }
 
   return {
     start() {
       if (loopDone) return;
       stopped = false;
-      clearTimeout(handoffTimer);
-      handoffRequested = new AbortController();
-      handoffDeadline = new AbortController();
-      handoff = { requested: handoffRequested.signal, deadline: handoffDeadline.signal };
+      if (!deps.handoff) handoff.reset();
       unsubscribe = deps.runs.subscribeAvailable?.(notify, {
         pollMs,
         onResync: notify,
@@ -305,7 +289,6 @@ export function createWorker(deps: WorkerDeps): Worker {
     async stop(drainMs = STOP_DRAIN_MS) {
       void stopClaims();
       await Promise.race([loopDone, sleep(drainMs, { unref: true })]);
-      clearTimeout(handoffTimer);
     },
   };
 }

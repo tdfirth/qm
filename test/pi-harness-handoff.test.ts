@@ -95,14 +95,20 @@ test("a model call that outlives the handoff grace is abandoned and the turn rep
     assert.equal(result.handedOff, true);
     assert.equal(result.stopped, undefined, "a hand-off is not a user stop");
     assert.equal(result.reply, "");
-    assert.equal(sink.entries.filter((entry) => entry.type === "user").length, 1, "the turn's user entry is recorded once");
+    assert.equal(
+      sink.entries.filter((entry) => entry.type === "user").length,
+      1,
+      "the turn's user entry is recorded once",
+    );
     assert.equal(
       sink.entries.some((entry) => entry.type === "assistant"),
       false,
       "no assistant entry is fabricated for the abandoned call",
     );
     assert.equal(
-      sink.tape.some((rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd === true),
+      sink.tape.some(
+        (rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd === true,
+      ),
       false,
       "no completeness checkpoint is stamped over a handed-off segment",
     );
@@ -177,4 +183,67 @@ test("a requested handoff ends the agent loop after the next tool result commits
   assert.deepEqual(await hook({}), undefined);
   ref.handoffRequested = true;
   assert.deepEqual(await hook({}), { terminate: true });
+});
+
+test("an expired handoff deadline never dispatches a fresh model request", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [], tape: [] };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return sse(textReplyEvents("must not run"));
+  }) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      handoffTurn(
+        "handoff-expired",
+        {
+          handoff: AbortSignal.abort(),
+          handoffDeadline: AbortSignal.abort(),
+        },
+        sink,
+      ),
+    );
+    assert.equal(result.handedOff, true);
+    assert.equal(calls, 0);
+    assert.equal(
+      sink.entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("an active Pi model call observes a zero-grace runtime handoff", { timeout: 3000 }, async () => {
+  const { createHandoff } = await import("../src/runs/handoff.ts");
+  const handoff = createHandoff();
+  const entered = Promise.withResolvers<void>();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: unknown, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      entered.resolve();
+      init?.signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+    })) as typeof fetch;
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const signals = handoff.signals();
+  try {
+    const pending = harness.turns.runTurn(
+      handoffTurn(
+        "immediate",
+        {
+          handoff: signals.requested,
+          handoffDeadline: signals.deadline,
+        },
+        { entries: [], tape: [] },
+      ),
+    );
+    await entered.promise;
+    handoff.request(0);
+    assert.equal((await pending).handedOff, true);
+  } finally {
+    globalThis.fetch = realFetch;
+    await harness.turns.close?.();
+  }
 });
