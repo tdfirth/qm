@@ -46,13 +46,9 @@ export async function extractFacts(
   turns: Array<{ input: string; reply: string }>,
 ): Promise<string[]> {
   if (!harness.oneShot) return [];
-  try {
-    const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
-    return parseFacts(out ?? "");
-  } catch {
-    return [];
-  }
+  const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
+  return parseFacts(out ?? "");
 }
 
 export interface Burst {
@@ -170,6 +166,7 @@ export function createPerTurnStrategy(deps: {
   }
 
   return {
+    captureBurst: flush,
     onTurnEnd: createBurstBuffer(
       deps.captureQuietMs ?? 0,
       deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,

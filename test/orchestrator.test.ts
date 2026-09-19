@@ -216,10 +216,12 @@ test("a channel turn gets no 1:1 identity block", async () => {
   assert.doesNotMatch(sys.promptEnvelope.system, /## Who you're talking to/);
 });
 
-test("a silent cron source run stays out of normal human chat history", async () => {
+test("a silent cron source run stays out of normal human chat history", async (t) => {
   const built = freshApp();
+  built.runtime.startBackground();
+  t.after(() => built.runtime.stop());
   const cron = await built.app.createCron({
-    schedule: { firstFireAt: Date.now() },
+    schedule: { firstFireAt: Date.now() + 3_600_000 },
     action: "!run printf 'Posted the digest DM\\n\\n[no-update]\\n'",
     owner: "U1",
     createdBy: "U1",
@@ -244,10 +246,12 @@ test("a silent cron source run stays out of normal human chat history", async ()
   );
 });
 
-test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async () => {
+test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async (t) => {
   const built = freshApp();
+  built.runtime.startBackground();
+  t.after(() => built.runtime.stop());
   const cron = await built.app.createCron({
-    schedule: { firstFireAt: Date.now() },
+    schedule: { firstFireAt: Date.now() + 3_600_000 },
     action: "deploy digest ready",
     owner: "U-carol",
     createdBy: "U-carol",
@@ -336,11 +340,13 @@ test(
   },
 );
 
-test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
+test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
 
   await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.tick(60_000);
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -368,11 +374,13 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
   );
 });
 
-test("the resume note is recorded hidden so no surface renders it as a typed user message", async () => {
+test("the resume note is recorded hidden so no surface renders it as a typed user message", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-hidden-1" });
 
   await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.tick(60_000);
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
 
@@ -395,11 +403,13 @@ test("the resume note is recorded hidden so no surface renders it as a typed use
   );
 });
 
-test("a retry of an attempt that recorded NO work restarts it — never claims work is recorded above", async () => {
+test("a retry of an attempt that recorded NO work restarts it — never claims work is recorded above", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp();
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
 
   await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.tick(60_000);
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -3890,13 +3900,15 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
   );
 });
 
-test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
+test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
   const req = dm("!boom-always", { idempotencyKey: "exhaust-1" });
   await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.tick(60_000);
   await assert.rejects(app.turn(req), /boom/);
   let found = await app.getSession(t1.sessionId!);
   assert.equal(
@@ -3907,6 +3919,7 @@ test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure
   const midway = await runs.activeForThread("dm:U1:t1");
   assert.equal(midway?.status, "pending", "the run really is mid-cycle — requeued, not parked");
 
+  t.mock.timers.tick(60_000);
   await assert.rejects(app.turn(req), /boom/);
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "the run parked: no attempt is left to record it");
   assert.equal((await runs.get(midway!.id))?.status, "failed");

@@ -181,6 +181,7 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
   }
 
   const strategy: MemoryStrategy = {
+    captureBurst: flushBurst,
     onTurnEnd: createBurstBuffer(
       deps.captureQuietMs ?? 0,
       deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,

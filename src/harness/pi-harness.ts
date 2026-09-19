@@ -1809,7 +1809,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
           const grindMeter = createGrindMeter();
 
-          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
+          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history, turn.tapeRows);
           entry.ref.goalMeter = grindMeter;
           entry.ref.goalRound = 0;
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
@@ -1875,6 +1875,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
             const steerStamp = role === "user" && !isTrigger ? steerTapeStamp(message) : undefined;
+            if (
+              role === "assistant" &&
+              entry.ref.goal &&
+              (entry.ref.goal.status === "active" || entry.ref.goal.status === "complete")
+            ) {
+              const usage = piUsageToCallUsage(
+                (message as { usage?: Partial<Usage> }).usage,
+                entry.agentSession.model,
+                entry.ref.fast,
+              );
+              meterGoalCall(entry.ref.goal, usage);
+            }
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
@@ -1893,6 +1905,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 : {}),
               ...(steerStamp ? { meta: steerStamp.meta } : {}),
             };
+            rec.meta = { ...rec.meta, goal: entry.ref.goal ? { ...entry.ref.goal } : null };
             try {
               await turn.tape(rec);
             } catch (err) {
@@ -1938,7 +1951,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
               meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
               const meteredGoal = entry.ref.goal;
-              if (meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
+              if (!turn.tape && meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
                 meterGoalCall(meteredGoal, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,

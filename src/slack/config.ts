@@ -28,7 +28,7 @@ export interface SlackPluginConfig {
   historyLimit?: number;
   installationId?: string;
   sharedServiceUrl?: string;
-  receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
+  receiverFactory?: (staging?: EnvelopeStaging, accept?: (body: Record<string, unknown>) => Promise<void>) => Receiver;
   botToken: string;
   accountId?: string;
   allowFrom?: string[];

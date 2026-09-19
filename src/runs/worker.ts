@@ -33,15 +33,34 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
   let consecutiveLost = 0;
   let leaseLost = false;
+  let confirmedUntil = run.leaseExpiresAt ?? Date.now() + deps.leaseTtlMs;
+  let leaseDeadline: ReturnType<typeof setTimeout> | undefined;
+  const abortExpired = (): void => {
+    if (leaseLost || Date.now() < confirmedUntil) return;
+    leaseLost = true;
+    clearInterval(beat);
+    cancel.abort();
+  };
+  const scheduleLeaseDeadline = (): void => {
+    clearTimeout(leaseDeadline);
+    leaseDeadline = setTimeout(abortExpired, Math.max(0, confirmedUntil - Date.now()));
+    leaseDeadline.unref?.();
+  };
+  scheduleLeaseDeadline();
   const beat = setInterval(() => {
+    const heartbeatStarted = Date.now();
     void deps.runs
       .heartbeat(run.id, token, deps.leaseTtlMs)
       .then((alive) => {
+        if (beatStopped || leaseLost) return;
         if (alive) {
           consecutiveLost = 0;
+          confirmedUntil = Math.max(confirmedUntil, heartbeatStarted + deps.leaseTtlMs);
+          scheduleLeaseDeadline();
           return;
         }
         consecutiveLost += 1;
+        abortExpired();
         if (consecutiveLost >= LEASE_LOST_CONSECUTIVE && !leaseLost) {
           leaseLost = true;
           clearInterval(beat);
@@ -52,8 +71,9 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
         }
       })
       .catch((err: unknown) => {
-        consecutiveLost = 0;
-        console.warn(`[worker] heartbeat failed for run ${run.id} (transient, ignored): ${errMessage(err)}`);
+        if (beatStopped || leaseLost) return;
+        abortExpired();
+        console.warn(`[worker] heartbeat failed for run ${run.id}: ${errMessage(err)}`);
       });
   }, intervalMs);
   let beatStopped = false;
@@ -61,6 +81,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     if (beatStopped) return;
     beatStopped = true;
     clearInterval(beat);
+    clearTimeout(leaseDeadline);
   };
   try {
     if (run.request.swarm) {
@@ -101,7 +122,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
-      retryAfterMs: retryDelay(run.errorAttempts),
+      ...(deps.runs.backgroundOnly ? {} : { retryAfterMs: retryDelay(run.errorAttempts) }),
     });
     throw err;
   } finally {
@@ -249,8 +270,10 @@ export function createWorker(deps: WorkerDeps): Worker {
       releasing = (async () => {
         try {
           if (await deps.runs.heartbeat(held.runId, held.leaseToken, deps.leaseTtlMs)) {
-            const session = await deps.sessions.getByThread(held.threadRef);
-            if (session) await deps.sessions.forceReleaseLease(session.id);
+            if (!deps.runs.backgroundOnly) {
+              const session = await deps.sessions.getByThread(held.threadRef);
+              if (session) await deps.sessions.forceReleaseLease(session.id);
+            }
             await deps.runs.releaseLease(held.runId, held.leaseToken);
           }
           releasedLeaseToken = held.leaseToken;

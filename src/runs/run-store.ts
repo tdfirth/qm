@@ -52,6 +52,7 @@ export interface EnqueueResult {
 
 export interface RunStore {
   readonly maxClaims?: number;
+  readonly backgroundOnly?: boolean;
 
   subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 

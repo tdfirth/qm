@@ -54,6 +54,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
   const inFlightRunByThread = createInFlightThreadMap();
 
   function ackRunDelivery(runId: string): void {
+    if (core.durableDeliveries) return;
     void (async () => {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -123,7 +124,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
       return result;
     }
     if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
-      if (!hooks.deferDeliveryAck) ackRunDelivery(runId);
+      if (!hooks.deferDeliveryAck && !core.durableDeliveries) ackRunDelivery(runId);
     } else {
       inFlightRuns.delete(runId);
     }

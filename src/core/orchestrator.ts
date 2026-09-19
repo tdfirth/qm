@@ -18,6 +18,7 @@ import type {
   EntryType,
   ScopeId,
   SessionEntry,
+  AttachmentMeta,
   SessionType,
   TurnResult,
   PendingApproval,
@@ -144,6 +145,7 @@ import {
   isVisionAttachment,
   MAX_HISTORY_IMAGE_BYTES,
   materializeInbound,
+  restoreInboundFiles,
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
@@ -208,7 +210,7 @@ import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
-import { createAttachStaging } from "./orchestrator/attach-tool.ts";
+import { attachmentStateFromTape, createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
 export {
@@ -270,8 +272,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
   const blobTransfer = deps.blobTransfer ?? createMemoryBlobTransferStore();
-
-  const pendingCaptures = new Map<ScopeId, Promise<void>>();
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
   const reachRosterCache = new LRUCache<string, DirectoryChannel[]>({
@@ -402,6 +402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     scopeId: ScopeId;
     automated: boolean;
     runId?: string;
+    runLeaseToken?: string;
     surface?: string;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
@@ -410,7 +411,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       args.sessionId,
       "turn",
       args.automated ? Math.min(AUTOMATED_TURN_LEASE_WAIT_MS, budget) : budget,
-      { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
+      {
+        waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+        ...(args.runId && args.runLeaseToken ? { run: { runId: args.runId, runLeaseToken: args.runLeaseToken } } : {}),
+      },
     );
     const waitedMs = attempt.waitedMs ?? 0;
     if (attempt.lease) return { lease: attempt.lease, waitedMs };
@@ -913,6 +917,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const acquired = await acquireTurnLeaseOrRefuse({
           sessionId: session.id,
           site: "flagged_input",
+          ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
           scopeId,
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
@@ -1186,7 +1191,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
         });
       }
-      const transferId = turnFileId(input.runId, input.attempt);
+      const transferStartedAt = input.runId ? (await deps.runs?.get(input.runId))?.createdAt : undefined;
+      const transferId = turnFileId(input.runId, input.attempt, transferStartedAt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
@@ -1265,6 +1271,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return turnAtSeq(await deps.sessions.getEntries(session.id, { sinceSeq: seq }), seq);
       };
       const recordedTurn = isRetry ? await recordedTurnForRun() : null;
+      const savedTurnTape = input.runId ? await deps.sessions.getTape(session.id) : [];
+      const restoredAttachments = input.runId ? attachmentStateFromTape(savedTurnTape, input.runId) : undefined;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
         deps.auditLog.record({
@@ -1278,13 +1286,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         console.error(
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
-        return recordedAnswer.text.trim()
+        if (useMemory && memoryPolicy.capture !== "off" && memoryStrategy.onTurnEnd) {
+          const conversationLabel = await conversationLabelFor(deps.directory, scopeId, conversation.channelName);
+          await memoryStrategy.onTurnEnd({
+            scopeId: memoryScopeId,
+            conversationScopeId: scopeId,
+            input: input.text,
+            reply: recordedAnswer.text,
+            actorId: actor.id,
+            ...(automatedTurn ? { autonomous: true } : {}),
+            ...(conversationLabel ? { conversationLabel } : {}),
+            sessionId: session.id,
+            idempotencyKey: input.runId ?? `${session.id}:${recordedTurn.userSeq}`,
+          });
+        }
+        return recordedAnswer.text.trim() || restoredAttachments?.entries.length
           ? {
               status: "ok",
               sessionId: session.id,
               reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
+              ...(restoredAttachments?.entries.length
+                ? { attachments: restoredAttachments.entries.map((entry) => entry.attachment) }
+                : {}),
             }
           : { status: "silent", sessionId: session.id };
       }
@@ -1736,6 +1761,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const acquired = await acquireTurnLeaseOrRefuse({
         sessionId: session.id,
         site: "turn",
+        ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
         scopeId,
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
@@ -2287,6 +2313,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provision,
           blobTransfer,
           fileRegistration,
+          restored: restoredAttachments,
+          ...(input.runId
+            ? {
+                persist: async (state) => {
+                  await withManagedRosterVersion(() =>
+                    deps.sessions.appendTape(lease, {
+                      kind: "annotation",
+                      payload: { event: "turn_attachments", runId: input.runId, state },
+                      scopeLabel: scopeId,
+                    }),
+                  );
+                },
+              }
+            : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(
@@ -2541,7 +2581,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         });
 
-        if (input.attachments?.some((attachment) => attachment.sourceId)) {
+        if (!isRetry && input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(
             input.attachments,
             (await deps.sessions.getContextWindow(session.id)).entries,
@@ -2568,6 +2608,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
+        const persistInbound = async (inboxDir: string, metas: AttachmentMeta[]) => {
+          if (!input.runId || !metas.length) return;
+          await withManagedRosterVersion(() =>
+            deps.sessions.appendTape(lease, {
+              kind: "annotation",
+              payload: { event: "turn_inbound_files", runId: input.runId, inboxDir, metas },
+              scopeLabel: scopeId,
+            }),
+          );
+        };
+        await persistInbound(turnInboxDir, inbound.metas);
         const manifest = inboundManifest(inbound.metas, turnInboxDir);
         const inboundIssues = inboundIssueList({
           tooMany: inbound.tooMany,
@@ -2671,6 +2722,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
           );
         };
+        if (isRetry && input.runId && !strictReadOnly) {
+          await restoreInboundFiles(
+            savedTurnTape,
+            input.runId,
+            turnInboxDir,
+            deps.files,
+            mayReadArtifact,
+            async (path, bytes) => deps.sandbox.writeFileBytes(await provision(), path, bytes),
+          );
+        }
         const rehydrateTape = (messages: readonly unknown[]) => {
           return rehydrateFoldImages(
             messages,
@@ -3127,8 +3188,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             session,
             prepareSteer: async (text, request) => {
               if (!request?.attachments?.length) return { text };
-              const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
+              const steerId = hashId([JSON.stringify(request)], 24);
+              const seed = `${fileRegistration.seed}:steer:${steerId}`;
+              const inboxDir = `${turnInboxDir}/${steerId}`;
               const received = strictReadOnly
                 ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
                 : await materializeInbound(
@@ -3153,6 +3215,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           )
                       : undefined,
                   );
+              await persistInbound(inboxDir, received.metas);
               const steeredDocuments = await loadDocumentInputs(
                 deps.files,
                 received.metas,
@@ -3694,48 +3757,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
         });
-        const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-          const prior = pendingCaptures.get(memoryScopeId);
-          const capture = (async () => {
-            if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
-            const captureStart = Date.now();
-            try {
-              const conversationLabel = await conversationLabelFor(deps.directory, scopeId, conversation.channelName);
-              await onTurnEnd({
-                scopeId: memoryScopeId,
-                conversationScopeId: scopeId,
-                input: turnInput,
-                reply,
-                actorId: actor.id,
-                ...(automatedTurn ? { autonomous: true } : {}),
-                ...(conversationLabel ? { conversationLabel } : {}),
-                sessionId: session.id,
-                idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-              });
-            } catch (e) {
-              deps.errors?.record(
-                {
-                  category: "memory",
-                  code: "capture_failed",
-                  message: errMessage(e),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                e,
-              );
-            } finally {
-              deps.metrics?.record({
-                totalMs: 0,
-                status: "capture",
-                scopeLabel: scopeId,
-                captureMs: Date.now() - captureStart,
-              });
-            }
-          })();
-          pendingCaptures.set(memoryScopeId, capture);
-          void capture.finally(() => {
-            if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
+        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && memoryStrategy.onTurnEnd) {
+          const conversationLabel = await conversationLabelFor(deps.directory, scopeId, conversation.channelName);
+          await memoryStrategy.onTurnEnd({
+            scopeId: memoryScopeId,
+            conversationScopeId: scopeId,
+            input: turnInput,
+            reply,
+            actorId: actor.id,
+            ...(automatedTurn ? { autonomous: true } : {}),
+            ...(conversationLabel ? { conversationLabel } : {}),
+            sessionId: session.id,
+            idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
           });
         }
 

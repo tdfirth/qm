@@ -8,7 +8,7 @@ import type { TurnResult } from "../src/types.ts";
 
 type ActionHandler = (args: any) => Promise<void>;
 
-function fixture() {
+function fixture(options: { durable?: boolean } = {}) {
   const submitted: any[] = [];
   const state: {
     stored: { requesterId: string; text: string } | null;
@@ -22,6 +22,7 @@ function fixture() {
     fetchFails: false,
   };
   const core = {
+    durableDeliveries: options.durable === true,
     submitTurn: async (body: any) => {
       submitted.push(body);
       if (state.hold) await state.hold;
@@ -199,3 +200,28 @@ test("a sealed-out deny never claims the command was denied", async () => {
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
   assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);
 });
+
+for (const action of ["hilo_allow_once", "hilo_deny"]) {
+  for (const result of [
+    { status: "pending_approval", reason: "This conversation is waiting for someone else." },
+    { status: "refused", reason: "This approval is no longer visible." },
+  ] as const) {
+    test(`a delayed ${result.status} response to ${action} cannot overwrite a durable final card`, async () => {
+      const f = fixture({ durable: true });
+      const release = Promise.withResolvers<void>();
+      f.state.hold = release.promise;
+      f.state.result = result;
+      const pending = f.click("U2", action);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.submitted.length, 1);
+      f.state.stored = null;
+      f.updates.push({ text: "Completed successfully" });
+      release.resolve();
+      await pending;
+      assert.deepEqual(f.updates, [{ text: "Completed successfully" }]);
+      assert.equal(f.ephemerals.at(-1)?.text, result.reason);
+      await f.click("U2", action);
+      assert.deepEqual(f.updates, [{ text: "Completed successfully" }]);
+    });
+  }
+}

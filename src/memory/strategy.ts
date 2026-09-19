@@ -12,6 +12,15 @@ import {
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
 
 export interface MemoryStrategy {
+  captureBurst?(ctx: {
+    scopeId: ScopeId;
+    conversationScopeId: ScopeId;
+    actorId?: string;
+    conversationLabel?: string;
+    sessionId?: string;
+    idempotencyKey?: string;
+    turns: Array<{ input: string; reply: string }>;
+  }): Promise<void>;
   onTurnEnd?(ctx: {
     scopeId: ScopeId;
     input: string;

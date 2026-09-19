@@ -4,7 +4,7 @@ import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import {
   runResultDelivery,
-  wireRunResultDeliveries,
+  deliverRunResult,
   recordRunFailureEntry,
   type TurnFailureSessions,
 } from "../src/delivery/run-result-delivery.ts";
@@ -211,12 +211,12 @@ test("runResultDelivery skips terminal results that cannot be safely replayed", 
 test("wired stores: a completed turn lands in the outbox unless the live path acked it", async () => {
   const { runs } = createMemoryRunStore();
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries);
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const c1 = await runs.claim("w1", 5_000);
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
   await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
+  await deliverRunResult(runs, deliveries, crashed.id);
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.text, "recovered reply");
@@ -227,6 +227,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   const c2 = await runs.claim("w2", 5_000);
   await deliveries.ackByKey(`run:${live.id}`, 99);
   await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
+  await deliverRunResult(runs, deliveries, live.id);
   await new Promise((r) => setTimeout(r, 0));
   const after = await deliveries.pending("slack");
   assert.deepEqual(
@@ -239,11 +240,11 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
 test("wired stores: a parked run lands a durable, non-ackable failure note", async () => {
   const { runs } = createMemoryRunStore();
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries);
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
+  await deliverRunResult(runs, deliveries, parked.id);
   await new Promise((r) => setTimeout(r, 0));
 
   const stored = await runs.get(parked.id);
@@ -340,11 +341,11 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const { sessions, session } = await failureSessions();
   const { runs } = createMemoryRunStore();
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, undefined, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
+  await deliverRunResult(runs, deliveries, parked.id, undefined, undefined, sessions);
 
   for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
     await new Promise((r) => setTimeout(r, 10));
