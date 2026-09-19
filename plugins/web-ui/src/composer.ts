@@ -44,7 +44,7 @@ import {
   type QueuedRun,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { fieldSelect, icon, modelMark } from "./ui";
+import { browserRenderableImage, fieldSelect, icon, modelMark } from "./ui";
 import {
   EFFORT_LEVELS,
   defaultEffortForModel,
@@ -466,6 +466,43 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
   }
 
+  function stagedAttachment(attachment: Attachment, agent: Agent): TemplateResult {
+    const remove = (showTooltip: boolean) => html`
+      <button
+        type="button"
+        class="chip-x"
+        aria-label="Remove attachment"
+        ${showTooltip ? tip("Remove") : nothing}
+        @click=${() => removeAttachment(attachment.id, agent)}
+      >
+        ${icon(X, 13)}
+      </button>
+    `;
+    if (browserRenderableImage(attachment.mimeType)) {
+      const content = attachment.preview ?? attachment.content;
+      const src = content.startsWith("data:") ? content : `data:${attachment.mimeType};base64,${content}`;
+      return html`<span class="image-preview"><img src=${src} alt=${attachment.fileName} />${remove(false)}</span>`;
+    }
+    if (pastedTextIds.has(attachment.id)) {
+      return html`<span class="file-chip">
+        <button
+          type="button"
+          class="chip-open"
+          aria-label="View pasted text"
+          ${tip("View pasted text")}
+          @click=${() => openPasteView(attachment.id, agent)}
+        >
+          ${icon(FileText, 14)}
+          <span>${pasteChipLabel(attachment.extractedText?.length ?? 0)}</span>
+        </button>
+        ${remove(true)}
+      </span>`;
+    }
+    return html`<span class="file-chip">
+      ${icon(Paperclip, 14)}<span dir="auto">${attachment.fileName}</span>${remove(true)}
+    </span>`;
+  }
+
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
@@ -563,37 +600,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           composerState.attachments.length
             ? html`
                 <div class="attachment-strip">
-                  ${composerState.attachments.map(
-                    (a) => html`
-                      <span class="file-chip">
-                        ${
-                          pastedTextIds.has(a.id)
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="chip-open"
-                                  aria-label="View pasted text"
-                                  ${tip("View pasted text")}
-                                  @click=${() => openPasteView(a.id, agent)}
-                                >
-                                  ${icon(FileText, 14)}
-                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-                                </button>
-                              `
-                            : html`${icon(Paperclip, 14)}<span dir="auto">${a.fileName}</span>`
-                        }
-                        <button
-                          type="button"
-                          class="chip-x"
-                          aria-label="Remove attachment"
-                          ${tip("Remove")}
-                          @click=${() => removeAttachment(a.id, agent)}
-                        >
-                          ${icon(X, 13)}
-                        </button>
-                      </span>
-                    `,
-                  )}
+                  ${composerState.attachments.map((attachment) => stagedAttachment(attachment, agent))}
                 </div>
               `
             : nothing

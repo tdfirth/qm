@@ -165,9 +165,32 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     composer!.state.attachments = [attachment];
     draw();
     assert.equal(button(".send-btn").disabled, true, "attachment-only send remains blocked");
+    assert.equal(host.querySelector(".attachment-strip .file-chip span")?.textContent, "draft.txt");
+    assert.equal(host.querySelector(".attachment-strip .image-preview"), null);
     host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
     assert.deepEqual(composer!.state.attachments, [attachment], "stopping preserves attachments");
     assert.equal(requests.length, 0);
+    composer!.state.attachments = [
+      {
+        id: "test-image",
+        type: "image",
+        fileName: "tiny.png",
+        mimeType: "image/png",
+        size: 1,
+        content: "iVBORw0KGgo=",
+      },
+    ];
+    draw();
+    const preview = host.querySelector<HTMLImageElement>(".attachment-strip .image-preview img");
+    assert.equal(preview?.src, "data:image/png;base64,iVBORw0KGgo=");
+    assert.equal(preview?.alt, "tiny.png");
+    preview?.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: true }));
+    assert.notEqual(dom.window.document.querySelector(".qm-tooltip.visible")?.textContent, "tiny.png");
+    assert.equal(host.querySelector(".attachment-strip .file-chip"), null);
+    const imageRemove = host.querySelector<HTMLButtonElement>('.image-preview [aria-label="Remove attachment"]');
+    assert.ok(imageRemove);
+    imageRemove.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: true }));
+    assert.notEqual(dom.window.document.querySelector(".qm-tooltip.visible")?.textContent, "Remove");
     composer!.state.attachments = [];
     stopping = false;
     composer!.state.draft = "Resume sending";

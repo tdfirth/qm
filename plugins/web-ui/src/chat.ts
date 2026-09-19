@@ -2818,13 +2818,14 @@ export function createChatSurface(
     }
   }
 
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
+  function userAttachmentBadge(a: UserAttachmentView): TemplateResult | typeof nothing {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
+      if (!browserRenderableImage(a.mimeType)) return nothing;
       const dataUrl =
         a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const download = !artifactHref || !browserRenderableImage(a.mimeType);
-      return chipBadge(FileImage, a.fileName, a.size, artifactHref ?? dataUrl ?? undefined, download);
+      const src = artifactHref ?? dataUrl;
+      return src ? html`<img class="user-image-attachment" src=${src} alt="" loading="lazy" />` : nothing;
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;

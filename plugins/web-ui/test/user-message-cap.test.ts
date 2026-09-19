@@ -25,25 +25,19 @@ test("the scroller is the size container the cap measures", () => {
   assert.doesNotMatch(chat, /--chat-viewport/);
 });
 
-test("images a user attached render as chips, not inline, in the live chat", () => {
+test("images a user attached render as passive images in the live chat", () => {
   const fn = chat.match(/function userAttachmentBadge\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /startsWith\("image\/"\)/);
-  assert.match(
-    fn,
-    /return chipBadge\(FileImage, a\.fileName, a\.size, artifactHref \?\? dataUrl \?\? undefined, download\);/,
-  );
-  assert.doesNotMatch(fn, /<img/);
-  assert.match(fn, /const download = !artifactHref \|\| !browserRenderableImage\(a\.mimeType\);/);
+  assert.match(fn, /<img class="user-image-attachment" src=\$\{src\} alt="" loading="lazy"/);
+  assert.doesNotMatch(fn, /chipBadge\(FileImage|tip\(|download|title=/);
 });
 
-test("images a user attached render as chips that open inline on the share page", () => {
+test("images a user attached render as passive images on the share page", () => {
   const files = shared.match(/message\.attachments\.map\(\(file\) => \{[\s\S]*?\n\s*\}\)\}/)?.[0] ?? "";
-  assert.match(files, /if \(inlineImage && message\.role !== "user"\) \{\s*return html`<a\s+class="file-image"/);
-  assert.equal(files.match(/<img/g)?.length, 1);
-  assert.match(
-    files,
-    /return chipBadge\(\s*inlineImage \? FileImage : File,\s*file\.name,\s*file\.sizeBytes,\s*inlineImage \? `\$\{href\}\?inline=1` : href,\s*!inlineImage,?\s*\);/,
-  );
+  const userImage = files.match(/if \(message\.role === "user"[\s\S]*?\n\s*\}/)?.[0] ?? "";
+  assert.match(userImage, /class="user-image-attachment"/);
+  assert.match(userImage, /alt=""/);
+  assert.doesNotMatch(userImage, /<a|chipBadge|file\.name|title=|download/);
 });
 
 test("both transcript renderers provide an accessible control and an observable inner body", () => {
