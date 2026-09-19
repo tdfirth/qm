@@ -905,7 +905,9 @@ test("the handoff deadline fires after the grace so a stuck step is abandoned at
   const orchestrator = {
     async handleTurn(input: OrchestratorInput) {
       signalStarted();
-      await new Promise<void>((resolve) => input.handoffDeadline!.addEventListener("abort", () => resolve(), { once: true }));
+      await new Promise<void>((resolve) =>
+        input.handoffDeadline!.addEventListener("abort", () => resolve(), { once: true }),
+      );
       deadlineSeen = true;
       throw new TurnHandedOff();
     },
