@@ -1,3 +1,4 @@
+import { durableTaskContext } from "../durable/tasks.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
@@ -382,6 +383,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async waitRun(runId, hooks = {}) {
+      const current = durableTaskContext.getStore();
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
       const signalFirstBlock = (text: string): void => {
@@ -428,6 +430,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       };
       try {
         for (;;) {
+          current?.signal.throwIfAborted();
+          if (current?.handoff.requested.aborted) return { status: "queued", runId };
           let run;
           try {
             run = await deps.runs.get(runId);

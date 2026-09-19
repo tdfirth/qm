@@ -1,3 +1,4 @@
+import { isDurableControlFlow } from "../durable/tasks.ts";
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { performance } from "node:perf_hooks";
@@ -628,6 +629,7 @@ export function createTurnHandler(deps: {
       await taskList?.settle();
       await goalNotice?.settle();
     } catch (err) {
+      if (isDurableControlFlow(err)) throw err;
       await settleAck();
       if (core.durableIngress && !accepted) {
         inc.ackGate?.failed(errMessage(err));
@@ -885,6 +887,7 @@ export function createTurnHandler(deps: {
       key,
       () => handleIncoming(stamped, client),
       (err) => {
+        if (isDurableControlFlow(err)) throw err;
         stamped.ackGate?.failed(errMessage(err));
         reportFailure("slack: incoming handler", err);
       },

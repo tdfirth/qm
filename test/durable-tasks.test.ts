@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
-import type { QueryResult } from "pg";
 import { createDurableTasks } from "../src/durable/tasks.ts";
 import { withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { sleep, withTimeout } from "../src/util/async.ts";
@@ -144,11 +143,10 @@ for (const operation of ["extend_claim", "set_task_checkpoint_state"]) {
     const source = `
       import { createDurableTasks } from ${JSON.stringify(new URL("../src/durable/tasks.ts", import.meta.url).href)};
       const tasks = createDurableTasks({ databaseUrl: process.env.DATABASE_URL, queue: "qm_close_exit_test" });
-      const pool = await tasks.pg.pool();
-      const query = pool.query.bind(pool);
+      const query = tasks.pg.query.bind(tasks.pg);
       const blocked = Promise.withResolvers();
       const release = Promise.withResolvers();
-      pool.query = (...args) => {
+      tasks.pg.query = (...args) => {
         const result = query(...args);
         if (typeof args[0] === "string" && args[0].includes(${JSON.stringify(operation)}))
           return result.then(async (value) => { blocked.resolve(); await release.promise; return value; });
@@ -310,7 +308,7 @@ test(
       await stopping;
       await worker.drained();
       assert.equal(executed, 0);
-      assert.equal((await client.fetchTaskResult(taskId))?.state, "sleeping");
+      assert.equal((await client.fetchTaskResult(taskId))?.state, "pending");
       client.claimTasks = claim;
       tasks.start({ pollIntervalMs: 10 });
       assert.equal(await withTimeout(() => tasks.result(taskId), 5000, "deferred claim"), undefined);
@@ -333,9 +331,8 @@ for (const operation of ["event", "sleep"]) {
       const blocked = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       let effects = 0;
-      const pool = await tasks.pg!.pool();
-      const query = pool.query.bind(pool) as (text: string, values?: unknown[]) => Promise<QueryResult>;
-      pool.query = ((...args: Parameters<typeof query>) => {
+      const query = tasks.pg!.query.bind(tasks.pg!);
+      tasks.pg!.query = ((...args: Parameters<typeof query>) => {
         const result = query(...args);
         const statement = args[0];
         if (
@@ -349,7 +346,7 @@ for (const operation of ["event", "sleep"]) {
           });
         }
         return result;
-      }) as typeof pool.query;
+      }) as typeof query;
       tasks.register("work", async (context) => {
         if (operation === "event") await context.awaitEvent("ready");
         else await context.sleepUntil("ready", new Date(0));
@@ -382,9 +379,8 @@ test(
     const blocked = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<AbortSignal>();
-    const pool = await tasks.pg!.pool();
-    const query = pool.query.bind(pool) as (text: string, values?: unknown[]) => Promise<QueryResult>;
-    pool.query = ((...args: Parameters<typeof query>) => {
+    const query = tasks.pg!.query.bind(tasks.pg!);
+    tasks.pg!.query = ((...args: Parameters<typeof query>) => {
       const result = query(...args);
       if (typeof args[0] === "string" && args[0].includes("absurd.extend_claim"))
         return result.then(async (value) => {
@@ -393,7 +389,7 @@ test(
           return value;
         });
       return result;
-    }) as typeof pool.query;
+    }) as typeof query;
     tasks.register("work", async (context) => {
       entered.resolve(context.signal);
       await context.heartbeat(1);

@@ -1,3 +1,4 @@
+import { durableTaskContext, isDurableControlFlow } from "../durable/tasks.ts";
 import { swallow } from "../util/errors.ts";
 import { sleep, createInFlightThreadMap, type GoalNoticeView, type RunTaskView } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -75,6 +76,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
   }
 
   function coreFailure(err: unknown): Error {
+    if (isDurableControlFlow(err)) throw err;
     swallow("slack: core call", err);
     if ((err as { code?: string })?.code === "run_stalled") {
       return new SlackTurnFailure(
@@ -100,6 +102,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     inFlightRuns.add(queued.runId);
     try {
       await hooks.onQueued?.(queued.runId);
+      if (core.durableDeliveries && durableTaskContext.getStore()) return queued;
       return await pollRun(queued.runId, hooks);
     } finally {
       inFlightRuns.delete(queued.runId);

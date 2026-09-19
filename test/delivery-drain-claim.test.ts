@@ -86,10 +86,12 @@ test("legacy claim expiry and acknowledgements cannot complete a workflow-owned 
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
   let executions = 0;
-  const unregister = srv.slackCore.registerDeliveryHandler!(async () => {
-    executions++;
-    entered.resolve();
-    await finish.promise;
+  const unregister = srv.slackCore.registerDeliveryHandler!(async (_delivery, context) => {
+    await context.step("provider:post", async () => {
+      executions++;
+      entered.resolve();
+      await finish.promise;
+    });
   });
   try {
     await srv.app.enqueueDelivery({
@@ -114,9 +116,18 @@ test("legacy claim expiry and acknowledgements cannot complete a workflow-owned 
     assert.deepEqual(await fetchPending(srv.base, "type=group&claimMs=15000"), []);
     assert.deepEqual(await fetchPending(srv.base, "type=group"), pending);
     assert.equal((await srv.deliveries.get(pending[0]!.id))?.deliveredAt, null);
-    finish.resolve();
     await srv.runtime.stopBackgroundClaims();
-    await withTimeout(() => srv.runtime.backgroundDrained(), 2_000, "delivery workflow completion");
+    finish.resolve();
+    await withTimeout(() => srv.runtime.backgroundDrained(), 2_000, "delivery workflow handoff");
+    assert.deepEqual(await fetchPending(srv.base, "type=group"), pending);
+    srv.runtime.startBackground();
+    await withTimeout(
+      async () => {
+        while ((await srv.deliveries.get(pending[0]!.id))?.deliveredAt === null) await sleep(10);
+      },
+      2000,
+      "resumed delivery acknowledgement",
+    );
     assert.deepEqual(await fetchPending(srv.base, "type=group"), []);
     assert.notEqual((await srv.deliveries.get(pending[0]!.id))?.deliveredAt, null);
     assert.equal(executions, 1);

@@ -84,3 +84,17 @@ export const RUN_WORKFLOW_MIGRATION: PgMigrationDefinition = {
       WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
   ],
 };
+
+const workflowChanged = RUN_WORKFLOW_MIGRATION.statements.find((statement) =>
+  statement.startsWith("CREATE OR REPLACE FUNCTION qm_run_workflow_changed()"),
+)!;
+
+export const RUN_HANDOFF_WORKFLOW_MIGRATION: PgMigrationDefinition = {
+  id: "runs/store/0007-worker-handoffs",
+  statements: [
+    workflowChanged.replace(
+      "UPDATE runs SET status='pending',",
+      "UPDATE runs SET handoffs=handoffs+CASE WHEN NEW.last_attempt_run IS DISTINCT FROM OLD.last_attempt_run AND NEW.attempts=OLD.attempts THEN 1 ELSE 0 END,status='pending',",
+    ),
+  ],
+};

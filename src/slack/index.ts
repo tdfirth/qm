@@ -11,7 +11,6 @@ import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
   NO_RETRY,
-  HISTORY_NO_RETRY,
   type SlackPluginConfig,
   normalizeSlackApiUrl,
   slackAccountConfigsFromEnv,
@@ -224,9 +223,9 @@ export async function startSlackPlugin(
   };
   const rateLimitNotice = createSlackRateLimitNotice({
     ...historyRateLimitOptions,
-    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY, timeout: 5000 }),
+    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, timeout: 5000 }),
   });
-  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS });
   const historyClient = {
     conversations: Object.fromEntries(
       (["history", "replies"] as const).map((method) => [

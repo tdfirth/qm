@@ -3,8 +3,7 @@ import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 
-export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
-export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
+export const NO_RETRY = { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true } as const;
 
 export type SlackContextSource = "live" | "shadow" | "mirror";
 

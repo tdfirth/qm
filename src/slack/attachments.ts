@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { DurableTaskDeferred } from "../durable/tasks.ts";
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
@@ -264,22 +265,27 @@ export async function uploadDurableAttachment(
       try {
         bytes = await blobs.readBlob(attachment.blobId);
       } catch (error) {
+        assertOperationActive();
         if (!attachment.artifactId || !attachment.artifactViewerId) throw error;
         bytes = await blobs.readFileArtifact(attachment.artifactId, attachment.artifactViewerId);
       }
+      assertOperationActive();
       const allocated = await client.files.getUploadURLExternal({ filename: attachment.name, length: bytes.length });
       if (!allocated.file_id || !allocated.upload_url) throw new Error("Slack did not allocate a file upload");
+      assertOperationActive();
+      const signal = getOperationSignal();
       const response = await upload(allocated.upload_url, {
         method: "POST",
         headers: { "content-type": "application/octet-stream" },
         body: bytes,
-        signal: AbortSignal.timeout(300_000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
       });
       if (!response.ok) throw new Error(`Slack file upload failed: ${response.status}`);
       return { fileId: allocated.file_id, completionProtocol: 1 };
     });
     const shared = async () => {
       try {
+        assertOperationActive();
         return channelShareTs(await client.files.info({ file: allocation.fileId }), channel);
       } catch (error) {
         if (["file_not_found", "file_deleted"].includes(slackErrorCode(error) ?? "")) return undefined;
@@ -292,6 +298,7 @@ export async function uploadDurableAttachment(
       const messageTs = await shared();
       if (messageTs) return { expired: false, messageTs };
       try {
+        assertOperationActive();
         await client.files.completeUploadExternal({
           files: [{ id: allocation.fileId, title: attachment.name }],
           channel_id: channel,

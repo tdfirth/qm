@@ -20,6 +20,7 @@ import { renderTaskList } from "./presenters.ts";
 import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { normalizeReactions, resolveReactionTargets } from "./reactions.ts";
+import { assertOperationActive } from "../util/async.ts";
 import type { Approvals } from "./approvals.ts";
 
 export function createSlackDeliveryHandler(deps: {
@@ -39,6 +40,7 @@ export function createSlackDeliveryHandler(deps: {
   ) {
     return context.step(key, () =>
       postWithVerify(client, args, key, {
+        context,
         verifyFirst: true,
         verifyOldest: recoveryVerifyOldest(delivery.createdAt, delivery.destination.editRef),
       }),
@@ -171,6 +173,7 @@ export function createSlackDeliveryHandler(deps: {
       const posted = await context.step("message", () =>
         withMessageLock(async () => {
           await resolveProgressRef();
+          assertOperationActive();
           if (destination.editRef) {
             try {
               await client.chat.update({
@@ -196,6 +199,7 @@ export function createSlackDeliveryHandler(deps: {
             },
             key,
             {
+              context,
               verifyFirst: true,
               verifyOldest: recoveryVerifyOldest(delivery.createdAt, destination.editRef),
             },
@@ -207,6 +211,7 @@ export function createSlackDeliveryHandler(deps: {
       await context.step("progress:remove", () =>
         withMessageLock(async () => {
           await resolveProgressRef();
+          assertOperationActive();
           if (destination.editRef) {
             try {
               await client.chat.delete({ channel, ts: destination.editRef });

@@ -5,6 +5,11 @@ import { createSurfaceToolDeps } from "../src/core/orchestrator/surface-tools.ts
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { LogLevel, WebClient } from "@slack/web-api";
+import { NO_RETRY } from "../src/slack/config.ts";
+import { withOperationSignal } from "../src/util/async.ts";
 import { DurableTaskDeferred } from "../src/durable/tasks.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createDeliveryDispatcher, type DeliveryTaskContext } from "../src/delivery/task-delivery.ts";
@@ -445,4 +450,241 @@ test("an uncertain completed upload keeps the same file when its one-shot ticket
   visible = true;
   assert.deepEqual(await execute(), { fileId: "F1", messageTs: "2.1" });
   assert.deepEqual({ allocations, completions }, { allocations: 1, completions: 2 });
+});
+
+test(
+  "a handed-off Slack post remains uncertain until the original request is reconciled",
+  { timeout: 3000 },
+  async () => {
+    const { createDurableTasks } = await import("../src/durable/tasks.ts");
+    const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+    const tasks = createDurableTasks({ queue: "slack_post_handoff" });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const replayed = Promise.withResolvers<void>();
+    const messages: Array<{ ts: string; metadata?: unknown }> = [];
+    let posts = 0;
+    const client = {
+      chat: {
+        async postMessage(args: { metadata?: unknown }) {
+          const index = ++posts;
+          if (index === 1) {
+            entered.resolve();
+            await release.promise;
+          }
+          messages.push({ ...args, ts: String(index) });
+          return { ts: String(index), channel: "C1" };
+        },
+      },
+      conversations: {
+        history: async () => ({ messages }),
+        replies: async () => ({ messages }),
+      },
+    };
+    const handler = createSlackDeliveryHandler({
+      client,
+      clientForIdentity: () => client,
+      core: {} as Parameters<typeof createSlackDeliveryHandler>[0]["core"],
+      threads: { mark() {} },
+    });
+    tasks.register("delivery", (context) =>
+      handler(
+        {
+          id: "d1",
+          destination: { type: "slack", target: "C1" },
+          text: "Deliver exactly once",
+          idempotencyKey: "post-handoff",
+          createdAt: Date.now(),
+        } as Delivery,
+        context,
+      ),
+    );
+    await tasks.spawn("delivery", {}, { idempotencyKey: "post-handoff" });
+    const retiring = tasks.start({ pollIntervalMs: 1 });
+    try {
+      await entered.promise;
+      retiring.requestHandoff(0);
+      await retiring.drained();
+      const replacement = tasks.start({
+        pollIntervalMs: 1,
+        admittedWork: {
+          ...createAdmittedWork(),
+          run: async (run) => {
+            try {
+              return await run();
+            } finally {
+              replayed.resolve();
+            }
+          },
+        },
+      });
+      await replayed.promise;
+      await replacement.stop();
+      release.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(posts, 1);
+      assert.equal(messages.length, 1);
+    } finally {
+      release.resolve();
+      await tasks.close();
+    }
+  },
+);
+
+test("a durable Slack post reconciles delayed visibility without resending an ambiguous request", async () => {
+  const { postWithVerify } = await import("../src/slack/delivery.ts");
+  const context = checkpoints();
+  let posts = 0;
+  let visible = false;
+  const message = { ts: "1.1", metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: "pending" } } };
+  const client = {
+    chat: {
+      postMessage: async () => {
+        posts++;
+        throw new Error("connection closed before response");
+      },
+    },
+    conversations: {
+      history: async () => ({ messages: visible ? [message] : [] }),
+      replies: async () => ({ messages: visible ? [message] : [] }),
+    },
+  };
+  const post = () => postWithVerify(client, { channel: "C1", text: "once" }, "pending", { context, verifyFirst: true });
+  await assert.rejects(post(), DurableTaskDeferred);
+  await assert.rejects(post(), DurableTaskDeferred);
+  assert.equal(posts, 1);
+  visible = true;
+  assert.deepEqual(await post(), { channel: "C1", ts: "1.1", reused: true });
+  assert.equal(posts, 1);
+});
+
+test("a durable Slack post retries a confirmed rate limit without duplicating an accepted attempt", async () => {
+  const { postWithVerify } = await import("../src/slack/delivery.ts");
+  const context = checkpoints();
+  let posts = 0;
+  const client = {
+    chat: {
+      postMessage: async () => {
+        if (++posts === 1) throw { code: "slack_webapi_rate_limited_error", retryAfter: 0 };
+        return { ts: "1.1", channel: "C1" };
+      },
+    },
+    conversations: { history: async () => ({ messages: [] }), replies: async () => ({ messages: [] }) },
+  };
+  const post = () =>
+    postWithVerify(client, { channel: "C1", text: "once" }, "rate-limit", { context, verifyFirst: true });
+  assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+  assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+  assert.equal(posts, 2);
+});
+
+test("a real Slack client preserves a definite rate limit for durable retries", { timeout: 5000 }, async () => {
+  const { postWithVerify } = await import("../src/slack/delivery.ts");
+  let posts = 0;
+  const server = createServer((request, response) => {
+    const posting = request.url?.endsWith("chat.postMessage");
+    const limited = posting && ++posts === 1;
+    const success = posting ? { ok: true, ts: "1.1", channel: "C1" } : { ok: true, messages: [] };
+    response.writeHead(limited ? 429 : 200, { "retry-after": "0", "content-type": "application/json" });
+    response.end(JSON.stringify(limited ? { ok: false, error: "ratelimited" } : success));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const client = new WebClient("test-token", {
+    ...NO_RETRY,
+    slackApiUrl: `http://127.0.0.1:${address.port}/api/`,
+    logLevel: LogLevel.ERROR,
+  });
+  const context = checkpoints();
+  const post = () =>
+    postWithVerify(
+      client as unknown as Parameters<typeof postWithVerify>[0],
+      { channel: "C1", text: "once" },
+      "sdk-rate-limit",
+      {
+        context,
+        verifyFirst: true,
+      },
+    );
+  try {
+    assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+    assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+    assert.equal(posts, 2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+for (const prerequisite of ["lock", "progress lookup"] as const) {
+  for (const mutation of ["update", "delete"] as const) {
+    test(`a retired Slack ${mutation} cannot run after its pending ${prerequisite} completes`, async () => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      let reads = 0;
+      let mutations = 0;
+      const wait = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const client = { chat: { [mutation]: async () => mutations++ } };
+      const handler = createSlackDeliveryHandler({
+        core: {
+          async getDeliveryRun() {
+            if (++reads === 2 && prerequisite === "progress lookup") await wait();
+            return { id: "r1", request: {}, deliveryState: { editRef: "1.1" } };
+          },
+          async withRunDeliveryLock(_id: string, run: () => Promise<unknown>) {
+            if (prerequisite === "lock") await wait();
+            return run();
+          },
+        } as unknown as Parameters<typeof createSlackDeliveryHandler>[0]["core"],
+        client,
+        clientForIdentity: () => client,
+        threads: { mark() {} },
+      });
+      const active = withOperationSignal(controller.signal, () =>
+        handler(
+          {
+            id: "d1",
+            destination: { type: "slack", target: "C1" },
+            text: mutation === "update" ? "done" : "",
+            idempotencyKey: "run:r1",
+            createdAt: Date.now(),
+            deliveredAt: null,
+          },
+          checkpoints(),
+        ),
+      );
+      await entered.promise;
+      controller.abort();
+      release.resolve();
+      await assert.rejects(active, { name: "AbortError" });
+      assert.equal(mutations, 0);
+    });
+  }
+}
+
+test("a durable Slack post retries a recorded rejection after the destination is repaired", async () => {
+  const { postWithVerify } = await import("../src/slack/delivery.ts");
+  const context = checkpoints();
+  let posts = 0;
+  const client = {
+    chat: {
+      postMessage: async () => {
+        if (++posts === 1) throw { code: "slack_webapi_platform_error", data: { error: "not_in_channel" } };
+        return { ts: "1.1", channel: "C1" };
+      },
+    },
+    conversations: { history: async () => ({ messages: [] }), replies: async () => ({ messages: [] }) },
+  };
+  const post = () =>
+    postWithVerify(client, { channel: "C1", text: "once" }, "repaired", { context, verifyFirst: true });
+  await assert.rejects(post(), { code: "slack_webapi_platform_error" });
+  assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+  assert.deepEqual(await post(), { channel: "C1", ts: "1.1" });
+  assert.equal(posts, 2);
 });

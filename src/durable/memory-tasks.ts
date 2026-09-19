@@ -1,9 +1,12 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { SuspendTask, TimeoutError } from "absurd-sdk";
 import { reportFailure } from "../util/errors.ts";
-import { sleep, withAbort } from "../util/async.ts";
+import { sleep, withAbort, withOperationSignal } from "../util/async.ts";
 import type { DurableTasks, DurableTaskContext, DurableWorker, DurableWorkerOptions } from "./tasks.ts";
-import { DurableTaskDeferred } from "./tasks.ts";
+import { DurableTaskDeferred, durableTaskContext } from "./tasks.ts";
+import { createHandoff, type HandoffSignals } from "../runs/handoff.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 
 interface MemoryTask {
   id: string;
@@ -32,8 +35,14 @@ export function createMemoryDurableTasks(): DurableTasks {
   const executions = new Map<MemoryTask, AbortController>();
   let closed = false;
 
-  function context(task: MemoryTask, controller: AbortController): DurableTaskContext {
-    const check = () => controller.signal.throwIfAborted();
+  function context(task: MemoryTask, controller: AbortController, handoff: HandoffSignals): DurableTaskContext {
+    const signal = AbortSignal.any([controller.signal, handoff.deadline]);
+    const stepScope = new AsyncLocalStorage<boolean>();
+    const check = () => signal.throwIfAborted();
+    const boundary = () => {
+      check();
+      if (!stepScope.getStore() && handoff.requested.aborted) throw new TurnHandedOff();
+    };
     const occurrences = new Map<string, number>();
     const nameFor = (name: string) => {
       const count = (occurrences.get(name) ?? 0) + 1;
@@ -44,21 +53,23 @@ export function createMemoryDurableTasks(): DurableTasks {
       taskID: task.id,
       runID: task.runId,
       attempt: task.attempt,
-      signal: controller.signal,
+      signal,
+      handoff,
       async step<T>(name: string, run: () => Promise<T>): Promise<T> {
-        check();
+        boundary();
         const key = nameFor(name);
         if (task.checkpoints.has(key)) return copy(task.checkpoints.get(key)) as T;
-        const value = await run();
+        const value = await stepScope.run(true, () => withOperationSignal(signal, () => withAbort(run, signal)));
         check();
         task.checkpoints.set(key, copy(value));
+        boundary();
         return value;
       },
       async sleepFor(name, seconds) {
         await ctx.sleepUntil(name, new Date(Date.now() + seconds * 1000));
       },
       async sleepUntil(name, date) {
-        check();
+        boundary();
         const key = nameFor(name);
         const at = task.checkpoints.has(key) ? (task.checkpoints.get(key) as number) : date.getTime();
         task.checkpoints.set(key, at);
@@ -68,7 +79,7 @@ export function createMemoryDurableTasks(): DurableTasks {
         }
       },
       async awaitEvent<T>(name: string, options?: { timeoutSeconds?: number; stepName?: string }): Promise<T> {
-        check();
+        boundary();
         const key = nameFor(options?.stepName ?? `$awaitEvent:${name}`);
         if (task.checkpoints.has(key)) return copy(task.checkpoints.get(key)) as T;
         if (events.has(name)) {
@@ -93,7 +104,7 @@ export function createMemoryDurableTasks(): DurableTasks {
     return ctx;
   }
 
-  async function execute(task: MemoryTask): Promise<void> {
+  async function execute(task: MemoryTask, handoff: HandoffSignals): Promise<void> {
     const handler = handlers.get(task.name);
     if (!handler) {
       task.availableAt = Date.now() + 100;
@@ -102,13 +113,22 @@ export function createMemoryDurableTasks(): DurableTasks {
     }
     task.state = "running";
     const controller = new AbortController();
+    const ctx = context(task, controller, handoff);
     executions.set(task, controller);
     try {
       task.result = copy(
-        await withAbort(() => handler(context(task, controller), copy(task.params)), controller.signal),
+        await durableTaskContext.run(ctx, () =>
+          withOperationSignal(ctx.signal, () => withAbort(() => handler(ctx, copy(task.params)), ctx.signal)),
+        ),
       );
       task.state = "done";
     } catch (error) {
+      if (error instanceof TurnHandedOff || (handoff.deadline.aborted && error === ctx.signal.reason)) {
+        task.state = "pending";
+        task.availableAt = Date.now();
+        task.runId = randomUUID();
+        return;
+      }
       if (error instanceof DurableTaskDeferred) {
         task.availableAt = Date.now() + error.seconds * 1000;
         task.state = "pending";
@@ -129,6 +149,7 @@ export function createMemoryDurableTasks(): DurableTasks {
       task.attempt++;
       task.runId = randomUUID();
     } finally {
+      controller.abort(new SuspendTask());
       executions.delete(task);
     }
   }
@@ -137,6 +158,7 @@ export function createMemoryDurableTasks(): DurableTasks {
     const concurrency = options.concurrency ?? 8;
     if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Workflow concurrency must be positive");
     let stopped = false;
+    const handoff = createHandoff();
     let wake: (() => void) | undefined;
     const executing = new Set<Promise<void>>();
     const claims = (async () => {
@@ -146,7 +168,7 @@ export function createMemoryDurableTasks(): DurableTasks {
             if (stopped || executing.size >= concurrency) break;
             if (task.state !== "pending" || task.availableAt > Date.now()) continue;
             task.state = "running";
-            const run = () => execute(task);
+            const run = () => execute(task, handoff.signals());
             const execution = (options.admittedWork ? options.admittedWork.run(run) : run())
               .catch((error: unknown) => {
                 task.state = "pending";
@@ -169,6 +191,11 @@ export function createMemoryDurableTasks(): DurableTasks {
       }
     })();
     const worker: DurableWorker = {
+      requestHandoff(graceMs) {
+        stopped = true;
+        handoff.request(graceMs);
+        wake?.();
+      },
       async stopClaims() {
         stopped = true;
         wake?.();
@@ -221,11 +248,14 @@ export function createMemoryDurableTasks(): DurableTasks {
       throw new Error("An in-memory task cannot participate in a PostgreSQL transaction");
     },
     async result<T>(taskId: string): Promise<T> {
+      const current = durableTaskContext.getStore();
       while (!closed) {
         const task = tasks.get(taskId);
         if (!task) throw new Error(`Workflow not found: ${taskId}`);
         if (task.state === "done") return copy(task.result) as T;
         if (task.state === "failed") throw task.error;
+        if (current?.handoff.requested.aborted) throw new TurnHandedOff();
+        current?.signal.throwIfAborted();
         await sleep(10);
       }
       throw new Error("Workflow runtime closed while waiting for a result");

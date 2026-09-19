@@ -1,4 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { durableTaskContext } from "../durable/tasks.ts";
 import type {
   PendingApproval,
   PendingApprovalRecord,
@@ -201,6 +203,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function drive(runId: string): Promise<TurnResult> {
+    const handoff = deps.handoff?.signals();
+    const yielded = (): TurnResult => {
+      if (durableTaskContext.getStore()) throw new TurnHandedOff();
+      return { status: "queued", runId };
+    };
     const timeoutMs = deps.runWaitMs ?? 60_000;
     const deadline = performance.now() + timeoutMs;
     for (;;) {
@@ -211,16 +218,24 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
+      if (handoff?.requested.aborted) return yielded();
       const claimed = deps.runs.backgroundOnly
         ? null
         : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
         const result = processRun(
-          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+          { runs: deps.runs, sessions: deps.sessions, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
           claimed,
+          { handoff },
         );
-        if (claimed.id === runId) return withAdminLink(await result);
-        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+        try {
+          if (claimed.id === runId) return withAdminLink(await result);
+          await result;
+        } catch (error) {
+          if (error instanceof TurnHandedOff) return yielded();
+          if (claimed.id === runId) throw error;
+          swallow("inline predecessor run failed", error);
+        }
         continue;
       }
       const remaining = deadline - performance.now();

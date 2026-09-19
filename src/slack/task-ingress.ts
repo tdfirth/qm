@@ -19,17 +19,20 @@ export function createSlackIngress(tasks: DurableTasks): SlackIngress {
   tasks.register("slack.ingest", async (context, input: { account: string; body: Record<string, unknown> }) => {
     const replay = handlers.get(input.account);
     if (!replay) throw new DurableTaskDeferred();
-    await context.step(
-      "accepted",
-      () =>
-        new Promise<boolean>((resolve, reject) => {
-          const gate: AckGate = {
-            persisted: () => resolve(true),
-            failed: (reason) => reject(new Error(reason ?? "Slack event processing failed")),
-          };
-          void replay(input.body, gate).then(() => resolve(true), reject);
-        }),
-    );
+    await context.step("accepted", async () => {
+      let accepted = false;
+      let failure: Error | undefined;
+      await replay(input.body, {
+        persisted: () => {
+          accepted = true;
+        },
+        failed: (reason) => {
+          if (!accepted) failure = new Error(reason ?? "Slack event processing failed");
+        },
+      });
+      if (failure) throw failure;
+      return true;
+    });
   });
   return {
     async accept(account, body) {

@@ -1,4 +1,5 @@
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
+import { createHandoff } from "./runs/handoff.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { resolveTurnOrigin } from "./core/turn-origin.ts";
@@ -402,6 +403,7 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 export interface Runtime {
   start(): void;
   startBackground(): void;
+  requestHandoff(graceMs?: number): void;
   stopBackgroundClaims(): Promise<void>;
   setBackgroundAdmission(check: () => boolean): void;
   stopBackground(): Promise<void>;
@@ -542,6 +544,7 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  const handoff = createHandoff();
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
@@ -549,7 +552,7 @@ export function buildApp(
     onAdmitted: () => noteAdmitted(),
   });
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
-    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
+    createUntrackedSweeper((signal) => admittedWork.run(() => work(signal)), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
@@ -2050,6 +2053,7 @@ export function buildApp(
     : undefined;
   const app = createApp({
     admittedWork,
+    handoff,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2453,11 +2457,17 @@ export function buildApp(
     registry: instanceRegistry,
     protection: taskProtection,
     busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
+    onSuperseded(superseded) {
+      if (backgroundOwnership || closing) return;
+      if (superseded) void stopBackground().catch(swallowAs("wiring: deployment handoff failed", undefined));
+      else if (config.backgroundWorkEnabled) startBackground();
+    },
   });
   noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
+      handoff,
       runs,
       sessions,
       orchestrator,
@@ -2484,7 +2494,7 @@ export function buildApp(
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
-  const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
+  const blobSweeper = createSweeper((signal) => blobTransfer.sweep(BLOB_TTL_MS, signal), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
     .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
@@ -2493,10 +2503,13 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(
+          (signal) => app.reapIdleDeployments(deployIdleTtlMs, undefined, signal),
+          Math.max(5_000, Math.floor(deployIdleTtlMs / 4)),
+        )
       : null;
   const KEEP_WARM_INTERVAL_MS = 5 * 60_000;
-  const keepWarmSweeper = createSweeper(() => app.keepAlwaysOnWarm(), KEEP_WARM_INTERVAL_MS);
+  const keepWarmSweeper = createSweeper((signal) => app.keepAlwaysOnWarm(signal), KEEP_WARM_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const sweepFractions = [deepIdleMachineMs, devIdleMachineMs]
@@ -2505,22 +2518,30 @@ export function buildApp(
   const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && sweepFractions.length);
   const deepIdleSweeper = deepIdleReapEnabled
     ? createSweeper(
-        () =>
+        (signal) =>
           leaderLease.hold("sandbox:deep-idle-reaper", () =>
-            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
+            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs, signal),
           ),
         Math.max(60_000, Math.min(...sweepFractions)),
         { immediate: true },
       )
     : null;
   let backgroundRunning = false;
+  let closing = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
+  function requestHandoff(graceMs = config.backgroundHandoffGraceMs): void {
+    const grace = Math.min(120_000, Math.max(0, graceMs));
+    handoff.request(grace);
+    for (const worker of workers) worker.requestHandoff(grace);
+    for (const worker of workflowWorkers) worker.requestHandoff(grace);
+  }
   function startBackground(): void {
-    if (backgroundRunning) return;
+    if (backgroundRunning || closing || !drain.canClaim()) return;
     backgroundRunning = true;
+    if (handoff.signals().requested.aborted) handoff.reset();
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
@@ -2570,10 +2591,11 @@ export function buildApp(
       }
     };
     if (backgroundStopping)
-      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
+      void backgroundStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
+    requestHandoff();
     admittedWork.pause();
     backgroundRunning = false;
     const previous = backgroundStopping;
@@ -2594,11 +2616,13 @@ export function buildApp(
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
+    ];
+    backgroundClaimsStopping = Promise.all([
       ...workers.map((worker) => worker.stopClaims()),
       ...[...workflowWorkers].map((worker) => worker.stopClaims()),
-    ];
-    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
+    ]).then(() => {});
+    for (const worker of workflowWorkers) void worker.drained().then(() => workflowWorkers.delete(worker));
+    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping, ...stopping])
       .then(() => {})
       .finally(() => {
         if (backgroundStopping === draining) backgroundStopping = null;
@@ -2613,6 +2637,7 @@ export function buildApp(
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
+    requestHandoff,
     setBackgroundAdmission(check) {
       backgroundAdmission = check;
     },
@@ -2622,24 +2647,34 @@ export function buildApp(
     },
     stopBackground,
     async backgroundDrained() {
-      await backgroundStopping;
       await Promise.all([
+        backgroundStopping,
         admittedWork.drained(),
         ...workers.map((worker) => worker.drained()),
         ...[...workflowWorkers].map((worker) => worker.drained()),
       ]);
     },
     async releaseInFlightRuns() {
+      requestHandoff(0);
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
-      await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+      closing = true;
+      const deadline = Date.now() + config.shutdownDrainMs;
+      const remaining = () => Math.max(0, deadline - Date.now());
+      requestHandoff(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
+      await withTimeout(
+        async () => {
+          await Promise.all([
+            stopBackground(),
+            admittedWork.drained(),
+            ...workers.map((w) => w.stop(remaining())),
+            ...[...workflowWorkers].map((worker) => worker.drained()),
+          ]);
+        },
+        remaining(),
+        "background shutdown",
+      ).catch(swallowAs("wiring: background shutdown incomplete", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
       runs.close?.();
@@ -2651,7 +2686,7 @@ export function buildApp(
       void runStreamEvents.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
-      await Promise.all(workflowRuntimes.map((workflows) => workflows.close(config.shutdownDrainMs)));
+      await Promise.all(workflowRuntimes.map((workflows) => workflows.close(remaining())));
       await flyTunnel?.stop();
     },
   };

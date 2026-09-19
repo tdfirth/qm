@@ -7,6 +7,12 @@ import { isolatedPostgres } from "./support/isolated-postgres.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { ScopeId } from "../src/types.ts";
 import { RUN_WORKFLOW_MIGRATION } from "../src/runs/postgres-run-workflows.ts";
+import { claimsSpent } from "../src/runs/run-store.ts";
+import { createWorker, processRun } from "../src/runs/worker.ts";
+import { createHandoff } from "../src/runs/handoff.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
+import type { Orchestrator } from "../src/core/orchestrator.ts";
+import { sleep, withTimeout } from "../src/util/async.ts";
 
 const skip = !process.env.DATABASE_URL;
 const request: OrchestratorInput = {
@@ -15,6 +21,305 @@ const request: OrchestratorInput = {
   origin: { kind: "direct" },
   text: "hello",
 };
+
+test(
+  "deployment hands off a domain claim before its delayed acknowledgement and restarts the worker",
+  { skip },
+  async () => {
+    const db = await isolatedPostgres();
+    const runtime = createPostgresRunStore(db.url, { maxClaims: 1 });
+    const sessions = createPostgresSessionStore(db.url);
+    const entered = Promise.withResolvers<string>();
+    const release = Promise.withResolvers<void>();
+    const claim = runtime.runs.claim.bind(runtime.runs);
+    let intercepted = false;
+    runtime.runs.claim = async (...args) => {
+      const run = await claim(...args);
+      if (!intercepted && run) {
+        intercepted = true;
+        entered.resolve(args[0]);
+        await release.promise;
+      }
+      return run;
+    };
+    let effects = 0;
+    const worker = createWorker({
+      runs: runtime.runs,
+      sessions,
+      orchestrator: {
+        async handleTurn() {
+          effects++;
+          return { status: "ok", reply: "done" };
+        },
+      } as unknown as Orchestrator,
+      leaseTtlMs: 120000,
+      pollMs: 5,
+      workerId: "restartable",
+    });
+    try {
+      const admitted = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+      worker.start();
+      const retiring = await withTimeout(() => entered.promise, 2000, "domain claim committed");
+      worker.requestHandoff(20);
+      await withTimeout(() => worker.drained(), 1000, "domain claim deadline");
+      const pending = await runtime.runs.get(admitted.id);
+      assert.equal(pending?.status, "pending");
+      assert.equal(pending?.handoffs, 1);
+      assert.equal(pending?.errorAttempts, 0);
+      assert.equal(await runtime.runs.claim(retiring, 120000), null);
+      worker.start();
+      const completed = await withTimeout(() => runtime.runs.waitFor(admitted.id), 2000, "same worker resumed");
+      assert.equal(completed.status, "done");
+      assert.equal(completed.attempts, 2);
+      assert.equal(claimsSpent(completed), 1);
+      assert.equal(effects, 1);
+      release.resolve();
+      await worker.stop();
+      assert.deepEqual((await db.admin.query("SELECT state,attempt FROM absurd.r_qm_runs ORDER BY run_id")).rows, [
+        { state: "failed", attempt: 1 },
+        { state: "completed", attempt: 1 },
+      ]);
+    } finally {
+      release.resolve();
+      await worker.stop();
+      await runtime.close();
+      await db.cleanup();
+    }
+  },
+);
+
+test("deployment fences a native domain claim before the run projection was updated", { skip }, async () => {
+  const db = await isolatedPostgres();
+  const runtime = createPostgresRunStore(db.url, { maxClaims: 1 });
+  try {
+    const admitted = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+    const native = await db.admin.query("SELECT * FROM qm_claim_tasks('qm_runs','unacknowledged',120,1)");
+    assert.equal(native.rows.length, 1);
+    await runtime.runs.handoffWorker("unacknowledged");
+    assert.equal(await runtime.runs.claim("unacknowledged", 120000), null);
+    const successor = await runtime.runs.claim("incoming", 120000);
+    assert.equal(successor?.id, admitted.id);
+    assert.equal(successor?.attempts, 1);
+    assert.equal(successor?.handoffs, 0);
+    assert.equal(successor?.errorAttempts, 0);
+  } finally {
+    await runtime.close();
+    await db.cleanup();
+  }
+});
+
+test("deployment surrenders unacknowledged domain claims before a long grace expires", { skip }, async () => {
+  const db = await isolatedPostgres();
+  const runtime = createPostgresRunStore(db.url, { maxClaims: 1 });
+  const sessions = createPostgresSessionStore(db.url);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const claim = runtime.runs.claim.bind(runtime.runs);
+  runtime.runs.claim = async (...args) => {
+    const run = await claim(...args);
+    if (run) {
+      entered.resolve();
+      await release.promise;
+    }
+    return run;
+  };
+  const worker = createWorker({
+    runs: runtime.runs,
+    sessions,
+    orchestrator: {
+      async handleTurn() {
+        assert.fail("unacknowledged claim executed");
+      },
+    } as unknown as Orchestrator,
+    leaseTtlMs: 1000,
+    pollMs: 5,
+  });
+  try {
+    const admitted = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+    worker.start();
+    await withTimeout(() => entered.promise, 2000, "domain claim committed");
+    worker.requestHandoff(120000);
+    const successor = await withTimeout(
+      async () => {
+        for (;;) {
+          const next = await claim("incoming", 120000);
+          if (next) return next;
+          await sleep(5);
+        }
+      },
+      1000,
+      "domain successor starts before grace",
+    );
+    assert.equal(successor.id, admitted.id);
+    assert.equal(successor.handoffs, 1);
+    assert.equal(claimsSpent(successor), 1);
+    assert.equal(successor.errorAttempts, 0);
+    release.resolve();
+    await withTimeout(() => worker.drained(), 1000, "late claim reply fenced");
+    assert.equal((await runtime.runs.get(admitted.id))?.leaseToken, successor.leaseToken);
+  } finally {
+    release.resolve();
+    worker.requestHandoff(0);
+    await worker.stop();
+    await runtime.close();
+    await db.cleanup();
+  }
+});
+
+for (const phase of ["preflight", "cleanup"] as const) {
+  test(`a deploy deadline fences ${phase} that ignores cancellation`, { skip, timeout: 10000 }, async () => {
+    const db = await isolatedPostgres();
+    const runtime = createPostgresRunStore(db.url);
+    const sessions = createPostgresSessionStore(db.url);
+    const entered = Promise.withResolvers<void>();
+    const unblock = Promise.withResolvers<void>();
+    const checked = Promise.withResolvers<void>();
+    try {
+      const session = await sessions.getOrCreateByThread("ordered", "dm", "personal:test-owner");
+      const admitted = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+      const claimed = await runtime.runs.claim("retiring", 60000);
+      assert.ok(claimed?.leaseToken);
+      const orchestrator = {
+        async handleTurn(input: OrchestratorInput) {
+          const owner = { runId: claimed.id, runLeaseToken: claimed.leaseToken! };
+          const oldLease = phase === "cleanup" ? (await sessions.acquireLease(session.id, "turn", owner)).lease : null;
+          entered.resolve();
+          await unblock.promise;
+          try {
+            assert.equal(input.cancel?.aborted, true);
+            if (oldLease)
+              await assert.rejects(
+                sessions.append(oldLease, {
+                  type: "system",
+                  payload: { late: true },
+                  scopeLabel: "personal:test-owner",
+                }),
+              );
+            else await assert.rejects(sessions.acquireLease(session.id, "turn", owner), /inactive run/);
+            const tool = createAgentTools({
+              current: null,
+              abortSignal: input.cancel,
+              handoffDeadline: input.handoffDeadline,
+            }).find((tool) => tool.name === "write")!;
+            await assert.rejects(
+              (tool.execute as (id: string, params: unknown) => Promise<unknown>)("late", {
+                path: "late.txt",
+                content: "late",
+              }),
+              { name: "AbortError" },
+            );
+            checked.resolve();
+          } catch (error) {
+            checked.reject(error);
+          }
+          return { status: "ok", reply: "late completion" } as const;
+        },
+      } as Orchestrator;
+      const handoff = createHandoff();
+      const active = processRun({ runs: runtime.runs, orchestrator, leaseTtlMs: 60000, sessions }, claimed, {
+        handoff: handoff.signals(),
+      });
+      await entered.promise;
+      const rejected = assert.rejects(active, { name: "TurnHandedOff" });
+      handoff.request(0);
+      await rejected;
+      const incoming = await runtime.runs.claim("incoming", 60000);
+      assert.ok(incoming?.leaseToken);
+      assert.notEqual(incoming.leaseToken, claimed.leaseToken);
+      const newLease = await sessions.acquireLease(session.id, "turn", {
+        runId: incoming.id,
+        runLeaseToken: incoming.leaseToken,
+      });
+      assert.ok(newLease.lease);
+      unblock.resolve();
+      await checked.promise;
+      assert.equal((await runtime.runs.get(admitted.id))?.leaseToken, incoming.leaseToken);
+      assert.equal((await runtime.runs.get(admitted.id))?.handoffs, 1);
+    } finally {
+      unblock.resolve();
+      await runtime.close();
+      await db.cleanup();
+    }
+  });
+}
+
+test(
+  "deploy handoffs preserve native retry budget while fencing every old run and session owner",
+  { skip },
+  async () => {
+    const db = await isolatedPostgres();
+    const runtime = createPostgresRunStore(db.url, { maxClaims: 2 });
+    const sessions = createPostgresSessionStore(db.url);
+    try {
+      const session = await sessions.getOrCreateByThread("ordered", "dm", "personal:test-owner");
+      const run = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+      const task = (await db.admin.query("SELECT workflow_task_id FROM runs WHERE id=$1", [run.id])).rows[0]
+        .workflow_task_id;
+      const oldTokens: string[] = [];
+      for (let segment = 1; segment <= 5; segment++) {
+        const claimed = await runtime.runs.claim(`worker-${segment}`, 60000);
+        assert.ok(claimed?.leaseToken);
+        assert.equal(claimed.attempts, segment);
+        assert.equal(claimsSpent(claimed), 1);
+        const { lease } = await sessions.acquireLease(session.id, "turn", {
+          runId: run.id,
+          runLeaseToken: claimed.leaseToken,
+        });
+        assert.ok(lease);
+        await sessions.append(lease, { type: "system", payload: { segment }, scopeLabel: "personal:test-owner" });
+        await db.admin.query("SELECT absurd.set_task_checkpoint_state('qm_runs',$1,$2,$3,$4)", [
+          task,
+          `segment:${segment}`,
+          JSON.stringify(segment),
+          claimed.leaseToken,
+        ]);
+        for (const old of oldTokens) {
+          assert.equal(await runtime.runs.heartbeat(run.id, old, 60000), false);
+          assert.equal(await runtime.runs.complete(run.id, old, { status: "ok", reply: "stale" }), false);
+          await assert.rejects(
+            db.admin.query("SELECT absurd.set_task_checkpoint_state('qm_runs',$1,'late','true'::jsonb,$2)", [
+              task,
+              old,
+            ]),
+            { code: "AB002" },
+          );
+        }
+        assert.equal(await runtime.runs.releaseLease(run.id, claimed.leaseToken, { handoff: true }), true);
+        assert.equal(await runtime.runs.releaseLease(run.id, claimed.leaseToken, { handoff: true }), false);
+        await assert.rejects(
+          sessions.append(lease, { type: "system", payload: { stale: true }, scopeLabel: "personal:test-owner" }),
+        );
+        const released = await runtime.runs.get(run.id);
+        assert.equal(released?.status, "pending");
+        assert.equal(released?.handoffs, segment);
+        assert.equal(released?.errorAttempts, 0);
+        oldTokens.push(claimed.leaseToken);
+      }
+      assert.equal(
+        (await db.admin.query("SELECT attempts FROM absurd.t_qm_runs WHERE task_id=$1", [task])).rows[0].attempts,
+        1,
+      );
+      assert.equal(
+        (await db.admin.query("SELECT count(*) FROM absurd.c_qm_runs WHERE task_id=$1", [task])).rows[0].count,
+        "5",
+      );
+      assert.equal((await db.admin.query("SELECT count(*) FROM absurd.t_qm_handoffs")).rows[0].count, "0");
+      const current = await runtime.runs.claim("incoming", 60000);
+      assert.ok(current?.leaseToken);
+      assert.deepEqual(await runtime.runs.fail(run.id, current.leaseToken, "real failure", { retryAfterMs: 0 }), {
+        requeued: true,
+      });
+      const retry = await runtime.runs.claim("real-retry", 60000);
+      assert.ok(retry?.leaseToken);
+      assert.equal(claimsSpent(retry), 2);
+      assert.deepEqual(await runtime.runs.fail(run.id, retry.leaseToken, "last real failure"), { requeued: false });
+      assert.equal((await runtime.runs.get(run.id))?.status, "failed");
+    } finally {
+      await runtime.close();
+      await db.cleanup();
+    }
+  },
+);
 
 test("Absurd run admission and terminal handoff commit together", { skip }, async () => {
   const db = await isolatedPostgres();

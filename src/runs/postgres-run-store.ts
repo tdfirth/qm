@@ -3,15 +3,24 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { PoolClient } from "pg";
-import { ABSURD_MIGRATION, DURABLE_RETRY_STRATEGY } from "../durable/schema.ts";
+import {
+  ABSURD_CHECKPOINT_FENCING_MIGRATION,
+  ABSURD_MIGRATION,
+  ABSURD_HANDOFF_MIGRATION,
+  ABSURD_WORKER_FENCING_MIGRATION,
+  ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+  ABSURD_EXPIRED_HANDOFF_MIGRATION,
+  DURABLE_RETRY_STRATEGY,
+} from "../durable/schema.ts";
 import { SESSION_LEASE_OWNERSHIP_MIGRATION } from "../sessions/lease-ownership.ts";
-import { RUN_WORKFLOW_MIGRATION } from "./postgres-run-workflows.ts";
+import { RUN_HANDOFF_WORKFLOW_MIGRATION, RUN_WORKFLOW_MIGRATION } from "./postgres-run-workflows.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal } from "./run-store.ts";
+import { claimsSpent, isTerminal } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { getOperationSignal } from "../util/async.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface PostgresRuntime {
@@ -32,6 +41,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
     dedupKey: (r.idempotency_key as string | null) ?? null,
     attempts: Number(r.attempts),
+    handoffs: Number(r.handoffs ?? 0),
     errorAttempts: Number(r.error_attempts),
     maxAttempts: Number(r.max_attempts),
     leaseToken: (r.lease_token as string | null) ?? null,
@@ -56,6 +66,11 @@ export function createPostgresRunStore(
     connectionString,
     [
       ABSURD_MIGRATION,
+      ABSURD_HANDOFF_MIGRATION,
+      ABSURD_CHECKPOINT_FENCING_MIGRATION,
+      ABSURD_WORKER_FENCING_MIGRATION,
+      ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+      ABSURD_EXPIRED_HANDOFF_MIGRATION,
       SESSION_LEASE_OWNERSHIP_MIGRATION,
       {
         id: "runs/store/0001",
@@ -120,6 +135,11 @@ export function createPostgresRunStore(
         ],
       },
       RUN_WORKFLOW_MIGRATION,
+      {
+        id: "runs/store/0006-handoffs",
+        statements: ["ALTER TABLE runs ADD COLUMN IF NOT EXISTS handoffs INT NOT NULL DEFAULT 0"],
+      },
+      RUN_HANDOFF_WORKFLOW_MIGRATION,
     ],
     [
       {
@@ -221,11 +241,14 @@ export function createPostgresRunStore(
     const specific = runId !== undefined || sessionId !== undefined;
     const count = specific ? 256 : 1;
     for (let round = 0; round < 32; round++) {
-      const { rows: claimed } = await q("SELECT * FROM absurd.claim_task('qm_runs',$1,$2,$3)", [
-        workerId,
-        Math.max(1, Math.ceil(ttlMs / 1000)),
-        count,
-      ]);
+      const signal = getOperationSignal();
+      signal?.throwIfAborted();
+      const { rows: claimed } = await q(
+        "SELECT * FROM qm_claim_tasks('qm_runs',$1,$2,$3)",
+        [workerId, Math.max(1, Math.ceil(ttlMs / 1000)), count],
+        { signal },
+      );
+      signal?.throwIfAborted();
       if (!claimed.length) return null;
       let selected: Run | null = null;
       for (const task of claimed) {
@@ -263,7 +286,7 @@ export function createPostgresRunStore(
           if (previous.rows[0]) return { event: `run-terminal:${previous.rows[0].id}` };
           const { rows: started } = await client.query(
             `UPDATE runs SET status='running',lease_token=$2,lease_expires_at=$3,worker_id=$4,
-              attempts=workflow_attempt_base+$5,started_at=COALESCE(started_at,$6) WHERE id=$1 RETURNING *`,
+              attempts=workflow_attempt_base+$5+handoffs,started_at=COALESCE(started_at,$6) WHERE id=$1 RETURNING *`,
             [
               row.id,
               task.run_id,
@@ -358,6 +381,10 @@ export function createPostgresRunStore(
     claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
     claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
 
+    async handoffWorker(workerId, keepLeaseTokens = []) {
+      await q("SELECT qm_handoff_worker('qm_runs',$1,$2::uuid[])", [workerId, keepLeaseTokens]);
+    },
+
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
       return withPgTransaction(await pg.pool(), async (client) => {
         if (!(await lockedRun(client, runId, leaseToken))) return false;
@@ -373,9 +400,18 @@ export function createPostgresRunStore(
       });
     },
 
-    async releaseLease(runId, leaseToken): Promise<boolean> {
+    async releaseLease(runId, leaseToken, opts): Promise<boolean> {
       return withPgTransaction(await pg.pool(), async (client) => {
-        if (!(await lockedRun(client, runId, leaseToken))) return false;
+        const run = await lockedRun(client, runId, leaseToken);
+        if (!run) return false;
+        if (opts?.handoff) {
+          const { rows } = await client.query("SELECT qm_handoff_run('qm_runs',$1,$2) AS successor", [
+            leaseToken,
+            run.workerId,
+          ]);
+          if (!rows[0]?.successor) return false;
+          return true;
+        }
         await client.query("SELECT absurd.fail_run('qm_runs',$1,$2,absurd.current_time())", [
           leaseToken,
           JSON.stringify({ name: "DeploymentDrain", message: "deployment handed back execution" }),
@@ -400,7 +436,7 @@ export function createPostgresRunStore(
         const run = await lockedRun(client, runId, leaseToken);
         if (!run) return false;
         await client.query("UPDATE runs SET error_attempts=error_attempts+1 WHERE id=$1", [runId]);
-        if (opts?.retry === false || run.errorAttempts + 1 >= run.maxAttempts || run.attempts >= maxClaims) {
+        if (opts?.retry === false || run.errorAttempts + 1 >= run.maxAttempts || claimsSpent(run) >= maxClaims) {
           await terminal(client, run, { status: "failed", sessionId: run.sessionId, reason: error }, "failed");
           return false;
         }

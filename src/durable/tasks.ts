@@ -11,24 +11,38 @@ import {
   type TaskContext,
 } from "absurd-sdk";
 import { createPgPool, type PgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { sleep, withAbort, withTimeout } from "../util/async.ts";
+import { sleep, withAbort, withTimeout, getOperationSignal, withOperationSignal } from "../util/async.ts";
 import { errMessage, reportFailure } from "../util/errors.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import { jsonbStringify } from "../persistence/durable-map.ts";
-import { ABSURD_MIGRATION, absurdQueueMigration, DURABLE_RETRY_STRATEGY } from "./schema.ts";
+import {
+  ABSURD_CHECKPOINT_FENCING_MIGRATION,
+  ABSURD_HANDOFF_MIGRATION,
+  ABSURD_MIGRATION,
+  ABSURD_WORKER_FENCING_MIGRATION,
+  ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+  ABSURD_EXPIRED_HANDOFF_MIGRATION,
+  absurdQueueMigration,
+  DURABLE_RETRY_STRATEGY,
+} from "./schema.ts";
 import { createMemoryDurableTasks } from "./memory-tasks.ts";
+import { createHandoff, type HandoffSignals } from "../runs/handoff.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 
 export interface DurableTaskContext {
   readonly taskID: string;
   readonly runID: string;
   readonly attempt: number;
   readonly signal: AbortSignal;
+  readonly handoff: HandoffSignals;
   step<T>(name: string, run: () => Promise<T>): Promise<T>;
   sleepFor(name: string, seconds: number): Promise<void>;
   sleepUntil(name: string, date: Date): Promise<void>;
   awaitEvent<T>(name: string, options?: { timeoutSeconds?: number; stepName?: string }): Promise<T>;
   heartbeat(seconds?: number): Promise<void>;
 }
+
+export const durableTaskContext = new AsyncLocalStorage<DurableTaskContext>();
 
 export interface DurableSpawnOptions {
   idempotencyKey: string;
@@ -47,6 +61,7 @@ export interface DurableWorkerOptions {
 }
 
 export interface DurableWorker {
+  requestHandoff(graceMs: number): void;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(): Promise<void>;
@@ -81,15 +96,24 @@ export class DurableTaskDeferred extends Error {
 interface TaskExecution {
   task: ClaimedTask;
   controller: AbortController;
+  nativeController: AbortController;
   leaseSeconds: number;
   claimStartedAt: number;
+  handoff: HandoffSignals;
+  surrender: boolean;
+  deferSeconds?: number;
 }
 
 export function isDurableControlFlow(error: unknown): boolean {
+  const operationSignal = getOperationSignal();
+  const taskSignal = durableTaskContext.getStore()?.signal;
   return (
+    (operationSignal?.aborted && error === operationSignal.reason) ||
+    (taskSignal?.aborted && error === taskSignal.reason) ||
     error instanceof SuspendTask ||
     error instanceof CancelledTask ||
     error instanceof FailedTask ||
+    error instanceof TurnHandedOff ||
     error instanceof DurableTaskDeferred
   );
 }
@@ -97,7 +121,15 @@ export function isDurableControlFlow(error: unknown): boolean {
 export function createDurableTasks(options: { databaseUrl?: string; queue: string }): DurableTasks {
   if (!options.databaseUrl) return createMemoryDurableTasks();
   const queue = options.queue;
-  const pg = createPgPool(options.databaseUrl, [ABSURD_MIGRATION, absurdQueueMigration(queue)]);
+  const pg = createPgPool(options.databaseUrl, [
+    ABSURD_MIGRATION,
+    ABSURD_HANDOFF_MIGRATION,
+    ABSURD_CHECKPOINT_FENCING_MIGRATION,
+    ABSURD_WORKER_FENCING_MIGRATION,
+    ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+    ABSURD_EXPIRED_HANDOFF_MIGRATION,
+    absurdQueueMigration(queue),
+  ]);
   const registrations = new Map<string, (ctx: DurableTaskContext, params: unknown) => Promise<unknown>>();
   const executions = new Map<string, TaskExecution>();
   const executionContext = new AsyncLocalStorage<TaskExecution>();
@@ -110,7 +142,9 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
       const execution = executionContext.getStore();
       if (!execution) throw new Error(`Missing execution ownership for ${native.taskID}`);
       const { controller, task, leaseSeconds } = execution;
+      const signal = AbortSignal.any([controller.signal, execution.handoff.deadline]);
       const nativeOperations = new Set<Promise<unknown>>();
+      const stepScope = new AsyncLocalStorage<boolean>();
       let beat: Promise<void> | undefined;
       let confirmedUntil = execution.claimStartedAt + leaseSeconds * 1000;
       let expires = setTimeout(
@@ -120,7 +154,11 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
       expires.unref();
       const check = () => {
         if (Date.now() >= confirmedUntil) controller.abort(new Error("Workflow lease expired"));
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
+      };
+      const boundary = () => {
+        check();
+        if (!stepScope.getStore() && execution.handoff.requested.aborted) throw new TurnHandedOff();
       };
       const invokeNative = async <T>(run: () => Promise<T>): Promise<T> => {
         check();
@@ -163,31 +201,39 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
         taskID: task.task_id,
         runID: task.run_id,
         attempt: task.attempt,
-        signal: controller.signal,
+        signal,
+        handoff: execution.handoff,
         async step<T>(name: string, run: () => Promise<T>): Promise<T> {
-          check();
+          boundary();
           const saved = await invokeNative(() =>
             native.step<{ value?: T }>(name, async () => {
               await heartbeat();
-              const value = await withAbort(run, controller.signal);
+              boundary();
+              const value = await stepScope.run(true, () => withOperationSignal(signal, () => withAbort(run, signal)));
               check();
               return { value };
             }),
           );
-          check();
+          boundary();
           return saved.value as T;
         },
         async sleepFor(name, seconds) {
+          boundary();
           await invokeNative(() => native.sleepFor(name, seconds));
+          boundary();
         },
         async sleepUntil(name, date) {
+          boundary();
           await invokeNative(() => native.sleepUntil(name, date));
+          boundary();
         },
         async awaitEvent<T>(name: string, opts?: { timeoutSeconds?: number; stepName?: string }): Promise<T> {
-          check();
-          return (await invokeNative(() =>
+          boundary();
+          const result = (await invokeNative(() =>
             native.awaitEvent(name, { timeout: opts?.timeoutSeconds, stepName: opts?.stepName }),
           )) as T;
+          boundary();
+          return result;
         },
         heartbeat,
       };
@@ -195,18 +241,21 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
         return await withAbort(async () => {
           const at = native.headers?.qm_schedule_at;
           if (typeof at === "number") await context.sleepUntil("$qm:scheduled", new Date(at));
-          check();
-          const result = await registrations.get(name)!(context, params);
+          boundary();
+          const result = await durableTaskContext.run(context, () =>
+            withOperationSignal(signal, () => registrations.get(name)!(context, params)),
+          );
           check();
           return { value: result };
-        }, controller.signal);
+        }, signal);
       } catch (error) {
         if (controller.signal.aborted) throw new SuspendTask();
+        if (error instanceof TurnHandedOff || (execution.handoff.deadline.aborted && error === signal.reason)) {
+          execution.surrender = true;
+          throw new SuspendTask();
+        }
         if (error instanceof DurableTaskDeferred) {
-          await pg.q(
-            "SELECT absurd.schedule_run($1, $2, absurd.current_time() + make_interval(secs => $3::double precision))",
-            [queue, task.run_id, error.seconds],
-          );
+          execution.deferSeconds = error.seconds;
           throw new SuspendTask();
         }
         if (!isDurableControlFlow(error))
@@ -215,7 +264,8 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
       } finally {
         clearInterval(timer);
         clearTimeout(expires);
-        await Promise.allSettled(nativeOperations);
+        await withAbort(() => Promise.allSettled(nativeOperations), signal).catch(() => undefined);
+        controller.abort(new SuspendTask());
         clearTimeout(expires);
       }
     });
@@ -226,7 +276,27 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
     clientPromise ??= pg
       .pool()
       .then((pool) => {
-        const client = new Absurd({ db: pool, queueName: queue, defaultMaxAttempts: 100 });
+        const db: Queryable = {
+          query: (async (text: string, values?: unknown[]) => {
+            text = text.replace("FROM absurd.claim_task(", "FROM qm_claim_tasks(");
+            const execution = executionContext.getStore();
+            const signal = execution
+              ? AbortSignal.any([execution.nativeController.signal, execution.handoff.deadline])
+              : getOperationSignal();
+            if (!signal) return pool.query(text, values);
+            try {
+              signal.throwIfAborted();
+              const result = await withAbort(() => pg.query(text, values, { signal }), signal);
+              signal.throwIfAborted();
+              return result;
+            } catch (error) {
+              if (!signal.aborted || !execution) throw error;
+              if (execution.handoff.deadline.aborted) execution.surrender = true;
+              throw new SuspendTask();
+            }
+          }) as Queryable["query"],
+        };
+        const client = new Absurd({ db: pool, queueName: queue, defaultMaxAttempts: 100 }).bindToConnection(db);
         for (const name of registrations.keys()) install(client, name);
         return client;
       })
@@ -263,8 +333,20 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
     const concurrency = opts.concurrency ?? 8;
     if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Workflow concurrency must be positive");
     const leaseSeconds = Math.max(1, Math.ceil((opts.leaseTtlMs ?? 120_000) / 1000));
-    const workerId = opts.workerId ?? `${queue}:${randomUUID()}`;
+    const workerId = `${opts.workerId ?? queue}:${randomUUID()}`;
+    const handoff = createHandoff();
     const onError = opts.onError ?? ((error: unknown) => reportFailure("workflow: worker", error, `queue=${queue}`));
+    const activeRuns = new Set<string>();
+    let fenced: Promise<void> | undefined;
+    const fence = () =>
+      (fenced ??= pg
+        .q("SELECT qm_handoff_worker($1, $2, $3::uuid[])", [queue, workerId, [...activeRuns]])
+        .then(() => undefined));
+    let surrendered: Promise<void> | undefined;
+    const surrender = () =>
+      (surrendered ??= pg.q("SELECT qm_handoff_worker($1, $2)", [queue, workerId]).then(() => undefined));
+    const onDeadline = () => void surrender().catch(onError);
+    handoff.signals().deadline.addEventListener("abort", onDeadline, { once: true });
     const executing = new Set<Promise<void>>();
     let stopping = false;
     let wake: (() => void) | undefined;
@@ -288,24 +370,50 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
           }
           const client = await absurd();
           const claimStartedAt = Date.now();
-          const tasks = await client.claimTasks({
-            workerId,
-            claimTimeout: leaseSeconds,
-            batchSize: concurrency - executing.size,
-          });
+          const tasks = await withOperationSignal(handoff.signals().deadline, () =>
+            client.claimTasks({
+              workerId,
+              claimTimeout: leaseSeconds,
+              batchSize: concurrency - executing.size,
+            }),
+          );
           if (stopping || (opts.canClaim && !(await opts.canClaim()))) {
-            for (const task of tasks)
-              await pg.q("SELECT absurd.schedule_run($1, $2, absurd.current_time())", [queue, task.run_id]);
+            for (const task of tasks) await pg.q("SELECT qm_handoff_run($1, $2, $3)", [queue, task.run_id, workerId]);
             continue;
           }
           for (const task of tasks) {
             const controller = new AbortController();
-            const owned = { task, controller, leaseSeconds, claimStartedAt };
+            const owned: TaskExecution = {
+              task,
+              controller,
+              nativeController: new AbortController(),
+              leaseSeconds,
+              claimStartedAt,
+              handoff: handoff.signals(),
+              surrender: false,
+            };
             executions.set(task.run_id, owned);
-            const run = () =>
-              executionContext.run(owned, () => client.executeTask(task, leaseSeconds, { fatalOnLeaseTimeout: false }));
+            activeRuns.add(task.run_id);
+            const run = async () => {
+              try {
+                await executionContext.run(owned, () =>
+                  client.executeTask(task, leaseSeconds, { fatalOnLeaseTimeout: false }),
+                );
+              } catch (error) {
+                if (!owned.surrender) throw error;
+              } finally {
+                owned.nativeController.abort(new SuspendTask());
+              }
+              if (owned.surrender) await pg.q("SELECT qm_handoff_run($1, $2, $3)", [queue, task.run_id, workerId]);
+              else if (owned.deferSeconds !== undefined)
+                await pg.q(
+                  "SELECT absurd.schedule_run($1, $2, absurd.current_time() + make_interval(secs => $3::double precision))",
+                  [queue, task.run_id, owned.deferSeconds],
+                );
+            };
             const execution = (opts.admittedWork ? opts.admittedWork.run(run) : run()).catch(onError).finally(() => {
               executions.delete(task.run_id);
+              activeRuns.delete(task.run_id);
               executing.delete(execution);
               wake?.();
             });
@@ -313,12 +421,18 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
           }
           if (!tasks.length) await idle();
         } catch (error) {
-          onError(error);
+          if (!handoff.signals().deadline.aborted) onError(error);
           if (!stopping) await idle();
         }
       }
     })().catch(onError);
     const worker: DurableWorker = {
+      requestHandoff(graceMs) {
+        stopping = true;
+        void fence().catch(onError);
+        handoff.request(graceMs);
+        wake?.();
+      },
       async stopClaims() {
         stopping = true;
         wake?.();
@@ -327,6 +441,8 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
       async drained() {
         await claims;
         await Promise.allSettled(executing);
+        if (handoff.signals().requested.aborted) await surrender();
+        handoff.signals().deadline.removeEventListener("abort", onDeadline);
       },
       async stop() {
         await worker.stopClaims();
@@ -356,12 +472,15 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
     },
     async result<T>(taskId: string): Promise<T> {
       const client = await absurd();
+      const current = durableTaskContext.getStore();
       while (!closed) {
         const state = await client.fetchTaskResult(taskId);
         if (!state) throw new Error(`Workflow not found: ${taskId}`);
         if (state.state === "completed") return (state.result as { value: T }).value;
         if (state.state === "failed" || state.state === "cancelled")
           throw new Error(`Workflow ${taskId} ${state.state}: ${JSON.stringify(state)}`);
+        if (current?.handoff.requested.aborted) throw new TurnHandedOff();
+        current?.signal.throwIfAborted();
         await sleep(100);
       }
       throw new Error("Workflow runtime closed while waiting for a result");
@@ -373,7 +492,10 @@ export function createDurableTasks(options: { databaseUrl?: string; queue: strin
     async close(timeoutMs = 2000) {
       closed = true;
       const stopping = Promise.all([...workers].map((worker) => worker.stop()));
-      for (const { controller } of executions.values()) controller.abort(new SuspendTask());
+      for (const { controller, nativeController } of executions.values()) {
+        controller.abort(new SuspendTask());
+        nativeController.abort(new SuspendTask());
+      }
       await withTimeout(
         async () => {
           await stopping;

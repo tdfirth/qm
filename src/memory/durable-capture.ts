@@ -1,4 +1,4 @@
-import type { DurableTasks } from "../durable/tasks.ts";
+import { isDurableControlFlow, type DurableTasks } from "../durable/tasks.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { hashId } from "../util/crypto.ts";
 import { isSystemActor } from "./memory-service.ts";
@@ -6,7 +6,7 @@ import { DEFAULT_CAPTURE_MAX_TURNS } from "./strategies/per-turn.ts";
 import type { MemoryStrategy } from "./strategy.ts";
 import type { MetricsSink } from "../admin/metrics-sink.ts";
 
-type Capture = Parameters<NonNullable<MemoryStrategy["onTurnEnd"]>>[0];
+type Capture = Omit<Parameters<NonNullable<MemoryStrategy["onTurnEnd"]>>[0], "signal" | "checkpoint">;
 type CaptureEvent = { params: Capture; acceptedAt: number; id: string };
 export interface MemoryCaptureBurst {
   accepted: Record<string, true>;
@@ -77,13 +77,23 @@ export function withDurableMemoryCapture(
             ...first,
             conversationScopeId: first.conversationScopeId ?? first.scopeId,
             idempotencyKey,
+            signal: context.signal,
+            checkpoint: (name, run) => context.step(`capture:${name}`, run),
             turns: accepted.map(({ params: turn }) => ({ input: turn.input, reply: turn.reply })),
           });
         } else {
-          for (const { params: turn } of accepted) await capture(turn);
+          for (const { params: turn, id } of accepted) {
+            await context.step(`capture:turn:${id}`, () =>
+              capture({
+                ...turn,
+                signal: context.signal,
+                checkpoint: (name, run) => context.step(`capture:turn:${id}:${name}`, run),
+              }),
+            );
+          }
         }
       } catch (error) {
-        telemetry.onError?.(error, params);
+        if (!isDurableControlFlow(error) && !context.signal.aborted) telemetry.onError?.(error, params);
         throw error;
       } finally {
         telemetry.metrics?.record({
@@ -104,7 +114,7 @@ export function withDurableMemoryCapture(
   });
   return {
     ...strategy,
-    async onTurnEnd(params) {
+    async onTurnEnd({ signal: _signal, checkpoint: _checkpoint, ...params }) {
       if (!params.idempotencyKey) throw new Error("Memory capture requires a durable turn identity");
       if (params.autonomous || isSystemActor(params.actorId)) return;
       const id = hashId([params.scopeId, params.idempotencyKey], 48);

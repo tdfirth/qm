@@ -136,13 +136,16 @@ export function createApprovals(deps: {
     runId?: string;
   }
 
-  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+  async function runTurn(
+    body: CoreTurnBody,
+    hooks: { onQueued?: (runId: string) => void | Promise<void> } = {},
+  ): Promise<TurnOutcome> {
     let runId: string | undefined;
     const result = await flow.callCore(body, {
       ...hooks,
       onQueued: (id) => {
         runId = id;
-        hooks.onQueued?.(id);
+        return hooks.onQueued?.(id);
       },
     });
     return { result, ...(runId ? { runId } : {}) };
@@ -435,6 +438,7 @@ export function createApprovals(deps: {
             const key = `${durable.key}:agent-request:message:${part++}`;
             return durable.context.step(key, () =>
               postWithVerify(sourceClient, args, key, {
+                context: durable.context,
                 verifyFirst: true,
                 verifyOldest: String((startedAt - 60000) / 1000),
               }),
@@ -767,15 +771,12 @@ export function createApprovals(deps: {
       };
       const checkpointCard =
         messageTs && !cardIsRemote
-          ? (runId: string): void => {
-              void core
-                .reportRunEditRef(runId, messageTs)
-                .catch(swallowAs("slack: delivery-state checkpoint", undefined));
-            }
+          ? (runId: string): Promise<void> =>
+              core.reportRunEditRef(runId, messageTs).catch(swallowAs("slack: delivery-state checkpoint", undefined))
           : undefined;
       const onQueued = (runId: string) => {
         context?.ackGate?.persisted();
-        checkpointCard?.(runId);
+        return checkpointCard?.(runId);
       };
       const deliveredDurably = async (outcome: TurnOutcome): Promise<boolean> => {
         if (!core.durableDeliveries) return false;
