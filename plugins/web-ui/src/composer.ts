@@ -478,10 +478,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${icon(X, 13)}
       </button>
     `;
-    if (browserRenderableImage(attachment.mimeType)) {
-      const content = attachment.preview ?? attachment.content;
-      const src = content.startsWith("data:") ? content : `data:${attachment.mimeType};base64,${content}`;
-      return html`<span class="image-preview"><img src=${src} alt=${attachment.fileName} />${remove(false)}</span>`;
+    if (browserRenderableImage(attachment.mimeType) && attachment.preview?.startsWith("data:image/")) {
+      return html`<span class="image-preview"
+        ><img src=${attachment.preview} alt=${attachment.fileName} />${remove(false)}</span
+      >`;
     }
     if (pastedTextIds.has(attachment.id)) {
       return html`<span class="file-chip">
@@ -2196,10 +2196,42 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
   }
 
+  const IMAGE_PREVIEW_EDGE = 512;
+  const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;
+  const IMAGE_PREVIEW_BYTES = 1_000_000;
+
+  async function boundedImagePreview(file: File): Promise<string | undefined> {
+    if (
+      !browserRenderableImage(file.type) ||
+      file.size > IMAGE_PREVIEW_SOURCE_BYTES ||
+      typeof createImageBitmap !== "function"
+    )
+      return undefined;
+    let bitmap: ImageBitmap | undefined;
+    try {
+      bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, IMAGE_PREVIEW_EDGE / bitmap.width, IMAGE_PREVIEW_EDGE / bitmap.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) return undefined;
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const preview = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
+      if (!preview || preview.size > IMAGE_PREVIEW_BYTES) return undefined;
+      return `data:${preview.type};base64,${bytesToBase64(new Uint8Array(await preview.arrayBuffer()))}`;
+    } catch {
+      return undefined;
+    } finally {
+      bitmap?.close();
+    }
+  }
+
   async function loadAnyAttachment(file: File): Promise<Attachment> {
+    const preview = boundedImagePreview(file);
     try {
       const { loadAttachment } = await import("@earendil-works/pi-web-ui");
-      return await loadAttachment(file);
+      return { ...(await loadAttachment(file)), preview: await preview };
     } catch {
       return {
         id: `${file.name}_${Date.now()}_${Math.random()}`,
@@ -2208,6 +2240,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         mimeType: file.type || "application/octet-stream",
         size: file.size,
         content: await fileToBase64(file),
+        preview: await preview,
       };
     }
   }

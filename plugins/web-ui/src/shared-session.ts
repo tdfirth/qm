@@ -59,7 +59,7 @@ render(
                                     return html`<img
                                       class="user-image-attachment"
                                       src=${`${href}?inline=1`}
-                                      alt=""
+                                      alt="Attached image"
                                       loading="lazy"
                                     />`;
                                   }

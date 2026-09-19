@@ -178,11 +178,12 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
         mimeType: "image/png",
         size: 1,
         content: "iVBORw0KGgo=",
+        preview: "data:image/webp;base64,cHJldmlldw==",
       },
     ];
     draw();
     const preview = host.querySelector<HTMLImageElement>(".attachment-strip .image-preview img");
-    assert.equal(preview?.src, "data:image/png;base64,iVBORw0KGgo=");
+    assert.equal(preview?.src, "data:image/webp;base64,cHJldmlldw==");
     assert.equal(preview?.alt, "tiny.png");
     preview?.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: true }));
     assert.notEqual(dom.window.document.querySelector(".qm-tooltip.visible")?.textContent, "tiny.png");
@@ -191,6 +192,19 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     assert.ok(imageRemove);
     imageRemove.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: true }));
     assert.notEqual(dom.window.document.querySelector(".qm-tooltip.visible")?.textContent, "Remove");
+    composer!.state.attachments = [
+      {
+        id: "unbounded-image",
+        type: "image",
+        fileName: "original.png",
+        mimeType: "image/png",
+        size: 1,
+        content: "iVBORw0KGgo=",
+      },
+    ];
+    draw();
+    assert.equal(host.querySelector(".attachment-strip .image-preview"), null);
+    assert.equal(host.querySelector(".attachment-strip .file-chip span")?.textContent, "original.png");
     composer!.state.attachments = [];
     stopping = false;
     composer!.state.draft = "Resume sending";

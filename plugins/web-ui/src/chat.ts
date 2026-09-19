@@ -2797,6 +2797,7 @@ export function createChatSurface(
     mimeType?: string;
     size?: number;
     content?: string;
+    preview?: string;
     artifactId?: string;
   }
 
@@ -2821,11 +2822,10 @@ export function createChatSurface(
   function userAttachmentBadge(a: UserAttachmentView): TemplateResult | typeof nothing {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
-      const dataUrl =
-        a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const src = artifactHref ?? dataUrl;
+      const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
+      const src = artifactHref ?? preview;
       if (browserRenderableImage(a.mimeType) && src) {
-        return html`<img class="user-image-attachment" src=${src} alt="" loading="lazy" />`;
+        return html`<img class="user-image-attachment" src=${src} alt="Attached image" loading="lazy" />`;
       }
       return imageChip(a.fileName, a.size, artifactHref ?? localContentUrl(a));
     }
