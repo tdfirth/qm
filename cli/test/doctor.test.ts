@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -769,7 +770,7 @@ test("doctor probes a configured custom model provider endpoint, not the officia
     await doctorCommon(gatewayConfig, new Map([["OPENAI_API_KEY", "sk-gateway-only"]]));
     assert.deepEqual(seen, [{ url: "https://gw.example.com/v1/models", auth: "Bearer sk-gateway-only" }]);
     assert.ok(
-      !seen.some((call) => call.url.includes("api.openai.com")),
+      !seen.some((call) => new URL(call.url).hostname === "api.openai.com"),
       "the official OpenAI endpoint must not be contacted once a gateway override is configured",
     );
   } finally {
@@ -833,5 +834,72 @@ test("doctor rejects a malformed configured endpoint before making any network r
     assert.equal(called, false, "a malformed override must reject before any fetch is attempted");
   } finally {
     globalThis.fetch = priorFetch;
+  }
+});
+
+function startHttpServer(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{
+  server: Server;
+  port: number;
+}> {
+  const server = createServer(handler);
+  return new Promise((resolvePromise) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolvePromise({ server, port: typeof address === "object" && address ? address.port : 0 });
+    });
+  });
+}
+
+function stopHttpServer(server: Server): Promise<void> {
+  return new Promise((resolvePromise) => server.close(() => resolvePromise()));
+}
+
+test("doctor refuses a redirect from a configured endpoint and never forwards the key to the redirect target", async () => {
+  let targetHits = 0;
+  let targetAuthHeader: string | undefined;
+  const target = await startHttpServer((req, res) => {
+    targetHits++;
+    targetAuthHeader = req.headers.authorization;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  const redirecting = await startHttpServer((req, res) => {
+    res.writeHead(302, { location: `http://127.0.0.1:${target.port}/v1/models` });
+    res.end();
+  });
+  try {
+    const gatewayConfig = modelConfig({
+      env: { core: { HARNESS: "pi", OPENAI_BASE_URL: `http://127.0.0.1:${redirecting.port}` } },
+    });
+    await assert.rejects(
+      doctorCommon(gatewayConfig, new Map([["OPENAI_API_KEY", "sk-must-not-cross-origins"]])),
+      /could not reach the openai API/,
+    );
+    assert.equal(targetHits, 0, "the redirect target must never receive a request");
+    assert.equal(targetAuthHeader, undefined, "the sentinel key must never reach the redirect target");
+  } finally {
+    await stopHttpServer(redirecting.server);
+    await stopHttpServer(target.server);
+  }
+});
+
+test("doctor's model probe still succeeds against a direct, non-redirecting loopback endpoint", async () => {
+  let receivedAuth: string | undefined;
+  let receivedPath: string | undefined;
+  const direct = await startHttpServer((req, res) => {
+    receivedAuth = req.headers.authorization;
+    receivedPath = req.url;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  try {
+    const gatewayConfig = modelConfig({
+      env: { core: { HARNESS: "pi", OPENAI_BASE_URL: `http://127.0.0.1:${direct.port}` } },
+    });
+    await doctorCommon(gatewayConfig, new Map([["OPENAI_API_KEY", "sk-direct-loopback"]]));
+    assert.equal(receivedAuth, "Bearer sk-direct-loopback");
+    assert.equal(receivedPath, "/models");
+  } finally {
+    await stopHttpServer(direct.server);
   }
 });

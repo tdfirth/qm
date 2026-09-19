@@ -287,7 +287,11 @@ async function modelProviderCheck(
   const url = modelProviderProbeUrl(provider, baseUrlOverride);
   let res: Response;
   try {
-    res = await fetch(url, { headers: probe.headers(apiKey), signal: AbortSignal.timeout(10_000) });
+    res = await fetch(url, {
+      headers: probe.headers(apiKey),
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
   } catch (e) {
     throw new CliError(
       `could not reach the ${provider} API: ${errMessage(e)} — check network access (and any proxy) and retry`,
