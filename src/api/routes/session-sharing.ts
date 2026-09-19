@@ -45,12 +45,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const projected = sharedMessages(source.entries, deliveredAttachments);
   if (!projected.length) return sendJson(res, 400, { error: "empty_conversation" });
   const previewIds = new Set(projected.flatMap((m) => m.inlinePreviewIds ?? []));
-  const ids = [
-    ...new Set([
-      ...projected.flatMap((m) => m.attachmentIds ?? []),
-      ...previewIds,
-    ]),
-  ];
+  const ids = [...new Set([...projected.flatMap((m) => m.attachmentIds ?? []), ...previewIds])];
   if (ids.length > 100 || Buffer.byteLength(JSON.stringify(projected)) > 2_000_000)
     return sendJson(res, 413, { error: "share_too_large" });
   const files: SessionShare["files"] = [];

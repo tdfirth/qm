@@ -304,7 +304,11 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const opened = await app.openFileForViewer(id, viewer, url.searchParams.get("preview") === "1" ? { preview: true } : undefined);
+  const opened = await app.openFileForViewer(
+    id,
+    viewer,
+    url.searchParams.get("preview") === "1" ? { preview: true } : undefined,
+  );
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
     "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),

@@ -70,7 +70,10 @@ test("images a user attached render as passive images on the share page", () => 
   assert.match(userImage, /failedImageSources\.add\(imageSrc\);/);
   assert.match(userImage, /href=\$\{href\}/);
   assert.match(userImage, /download=\$\{file\.name\}/);
-  assert.match(shared, /message\.role !== "user" \|\| \(file\.inlinePreview === true && Boolean\(file\.previewId\)\)/);
+  assert.match(
+    shared,
+    /message\.role !== "user" \|\|\s*\(file\.inlinePreview === true && Boolean\(file\.previewId\)\)/,
+  );
   assert.doesNotMatch(userImage, /chipBadge|title=/);
   assert.match(files, /browserRenderableImage\(file\.mimetype\) &&/);
   assert.match(files, /return chipBadge\([\s\S]*?inlineImage \? FileImage : File/);

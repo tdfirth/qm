@@ -68,7 +68,8 @@ function sharedConversation(): TemplateResult {
                                     : `${href}?inline=1`;
                                   const inlineImage =
                                     browserRenderableImage(file.mimetype) &&
-                                    (message.role !== "user" || (file.inlinePreview === true && Boolean(file.previewId)));
+                                    (message.role !== "user" ||
+                                      (file.inlinePreview === true && Boolean(file.previewId)));
                                   const failedImage = failedImageSources.has(imageSrc);
                                   if (message.role === "user" && inlineImage && !failedImage) {
                                     return html`<a

@@ -2221,11 +2221,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ) {
       return { width: view.getUint32(16), height: view.getUint32(20) };
     }
-    if (
-      type === "image/gif" &&
-      bytes.length >= 10 &&
-      (signature(0, 6) === "GIF87a" || signature(0, 6) === "GIF89a")
-    ) {
+    if (type === "image/gif" && bytes.length >= 10 && (signature(0, 6) === "GIF87a" || signature(0, 6) === "GIF89a")) {
       return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
     }
     if (
@@ -2236,12 +2232,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ) {
       return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
     }
-    if (
-      type === "image/webp" &&
-      bytes.length >= 30 &&
-      signature(0, 4) === "RIFF" &&
-      signature(8, 12) === "WEBP"
-    ) {
+    if (type === "image/webp" && bytes.length >= 30 && signature(0, 4) === "RIFF" && signature(8, 12) === "WEBP") {
       let offset = 12;
       while (offset + 8 <= bytes.length) {
         const chunk = String.fromCharCode(...bytes.subarray(offset, offset + 4));
