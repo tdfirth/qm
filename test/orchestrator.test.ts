@@ -336,7 +336,7 @@ test(
   },
 );
 
-test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
+test("a retried run whose tape ends at a committed tool result CONTINUES the conversation with no resume note", async () => {
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
 
@@ -344,33 +344,22 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /system note: your previous attempt at the request above was interrupted/);
-  assert.equal(res.sourceUserSeq, 0, "provenance points at the original interrupted user entry, not the resume note");
-  assert.equal(res.sourceAssistantEntrySeq, 4);
+  assert.match(res.reply ?? "", /continued from the recorded conversation/);
+  assert.doesNotMatch(res.reply ?? "", /interrupted/, "nothing was lost, so the model is told nothing");
+  assert.equal(res.sourceUserSeq, 0, "provenance points at the original user entry");
+  assert.equal(res.sourceAssistantEntrySeq, 3);
 
   const found = await app.getSession(res.sessionId!);
-  assert.deepEqual(
-    found!.entries.map((e) => e.type),
-    ["user", "tool_call", "tool_result", "user", "assistant"],
-  );
+  assert.deepEqual(found!.entries.map((e) => e.type), ["user", "tool_call", "tool_result", "assistant"]);
   const userTexts = found!.entries
     .filter((e) => e.type === "user")
     .map((e) => String((e.payload as { text?: string }).text ?? ""));
-  assert.equal(
-    userTexts.filter((t) => t.startsWith("!work-then-boom")).length,
-    1,
-    "the original input is NOT re-emitted on resume",
-  );
-  assert.match(
-    userTexts[1]!,
-    /^\(system note: your previous attempt at the request above was interrupted/,
-    "the retry prompts a continuation instead",
-  );
+  assert.deepEqual(userTexts, ["!work-then-boom"], "neither the original input nor a note is re-emitted on resume");
 });
 
 test("the resume note is recorded hidden so no surface renders it as a typed user message", async () => {
   const { app } = freshApp();
-  const req = dm("!work-then-boom", { idempotencyKey: "resume-hidden-1" });
+  const req = dm("!post-lost-result hello", { idempotencyKey: "resume-hidden-1" });
 
   await assert.rejects(app.turn(req), /boom/);
   const res = await app.turn(req);

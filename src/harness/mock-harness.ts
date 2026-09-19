@@ -1,3 +1,4 @@
+import { isOverheardEntry } from "../sessions/session-store.ts";
 import {
   defineHarness,
   type Harness,
@@ -93,15 +94,20 @@ export function createMockHarness(): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const userEntry = await turn.emit({
-          type: "user",
-          payload: {
-            text: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-            ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-          },
-          scopeLabel: turn.scopeLabel,
-        });
+        const continuedUserEntry = turn.continueTurn
+          ? [...turn.history].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+          : undefined;
+        const userEntry =
+          continuedUserEntry ??
+          (await turn.emit({
+            type: "user",
+            payload: {
+              text: turn.input,
+              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+            },
+            scopeLabel: turn.scopeLabel,
+          }));
         const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
         turn.recordModelCall({
@@ -831,6 +837,8 @@ export function createMockHarness(): Harness {
                 .map((m) => `${m.name ?? "you"}@${m.ts}: ${m.text}${m.files?.length ? ` [${m.files.join(",")}]` : ""}`)
                 .join("\n")
             : "overheard:none";
+        } else if (turn.continueTurn) {
+          reply = "(continued from the recorded conversation)";
         } else {
           reply = `You said: ${modelPrompt}`;
         }

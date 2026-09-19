@@ -48,6 +48,8 @@ A process records `admitted` before starting background resources. The desired d
 
 `drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
 
+Relinquishing also hands in-flight turns to the incoming deployment instead of running them to completion. Each worker asks its turn to stop at the next committed step: an in-flight model call finishes, any tool calls it requested run and record their results, and the harness ends the segment there instead of calling the model again. The run's lease is released back to the queue with the hand-off counted separately from retry attempts, so repeated deployments never park a healthy turn as a crash loop. A turn whose current step outlives `BACKGROUND_HANDOFF_GRACE_MS` (default 120 s) has its model call aborted and is released at the last committed step; only a tool call still running at the deadline leaves an unknown outcome behind. The desired deployment's workers claim the released run, and when the tape ends cleanly at a committed tool result they continue the model conversation without any resume note; a tape that ends in an interrupted tool call resumes through the existing interruption path. Loop fires still count as one admitted unit until each item's continuation is queued separately.
+
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 
 ## Terminated processes

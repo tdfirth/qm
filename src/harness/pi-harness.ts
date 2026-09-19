@@ -48,7 +48,7 @@ import type {
   TapeMeta,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { isOverheardEntry, tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -1797,16 +1797,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           turn.onGapWork?.(collectGapWork);
           entry.ref.onGapWork = collectGapWork;
-          const userEntry = await turn.emit({
-            type: "user",
-            payload: {
-              text: turn.input,
-              ...(turn.environment ? { environment: turn.environment } : {}),
-              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-            },
-            scopeLabel: turn.scopeLabel,
-          });
+          const resumedUserEntry = turn.continueTurn
+            ? [...turn.history].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+            : undefined;
+          const userEntry =
+            resumedUserEntry ??
+            (await turn.emit({
+              type: "user",
+              payload: {
+                text: turn.input,
+                ...(turn.environment ? { environment: turn.environment } : {}),
+                ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+                ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+              },
+              scopeLabel: turn.scopeLabel,
+            }));
           const grindMeter = createGrindMeter();
 
           if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
@@ -1838,7 +1843,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let tapeError: Error | undefined;
-          let tapedTriggerUser = false;
+          let tapedTriggerUser = !!turn.continueTurn;
           const toolAbort = new AbortController();
           const pendingSteerTapeMeta: Array<{
             text: string;
@@ -2082,7 +2087,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           let userAborted = false;
           let recoveryDead = false;
+          let handoffAborted = false;
           entry.ref.abortSignal = toolAbort.signal;
+          entry.ref.handoffRequested = false;
           const onCancel = (): void => {
             toolAbort.abort();
             void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
@@ -2090,6 +2097,22 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (turn.cancel) {
             if (turn.cancel.aborted) onCancel();
             else turn.cancel.addEventListener("abort", onCancel, { once: true });
+          }
+          const onHandoffRequested = (): void => {
+            entry.ref.handoffRequested = true;
+          };
+          const onHandoffDeadline = (): void => {
+            if (!entry.ref.handoffRequested || userAborted || turn.cancel?.aborted) return;
+            handoffAborted = true;
+            void entry.agentSession.abort().catch(swallowAs("pi: handoff deadline abort", undefined));
+          };
+          if (turn.handoff) {
+            if (turn.handoff.aborted) onHandoffRequested();
+            else turn.handoff.addEventListener("abort", onHandoffRequested, { once: true });
+          }
+          if (turn.handoffDeadline) {
+            if (turn.handoffDeadline.aborted) onHandoffDeadline();
+            else turn.handoffDeadline.addEventListener("abort", onHandoffDeadline, { once: true });
           }
           const steeredSeen = recordedMessageTimestamps(turn.history);
           const stopSignalPoll =
@@ -2199,13 +2222,43 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
               : undefined;
             wallClock = await raceTurnWallClock(
-              entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+              turn.continueTurn
+                ? entry.agentSession.agent.continue()
+                : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
               {
                 capMs: raceCapMs(),
                 extendMs: extendCapMs,
                 abort: () => entry.agentSession.abort(),
               },
             );
+            const handoffStopReason = freshAssistantStopReason();
+            if (
+              entry.ref.handoffRequested &&
+              !userAborted &&
+              !turn.cancel?.aborted &&
+              (handoffAborted || handoffStopReason === "toolUse" || handoffStopReason === "aborted")
+            ) {
+              await thinkTail;
+              if (handoffAborted && turn.tape) {
+                const partialText = (entry.agentSession.getLastAssistantText() ?? "").trim();
+                if (partialText)
+                  await turn.tape({
+                    kind: "annotation",
+                    payload: { event: "handoff_partial", text: partialText, at: Date.now() },
+                    scopeLabel: turn.scopeLabel,
+                  });
+              }
+              console.log(
+                `[pi] turn handed off at a committed step session=${turn.session.id} reason=${handoffAborted ? "deadline" : "tool boundary"}`,
+              );
+              return {
+                reply: "",
+                handedOff: true,
+                modelCalls: entry.ref.modelCalls ?? 0,
+                compileMs,
+                cacheUsage: sumCacheUsage(callStats) ?? undefined,
+              };
+            }
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&

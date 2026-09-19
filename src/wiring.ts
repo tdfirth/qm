@@ -2490,6 +2490,7 @@ export function buildApp(
       backgroundAdmission = check;
     },
     async stopBackgroundClaims() {
+      for (const worker of workers) worker.requestHandoff(config.backgroundHandoffGraceMs);
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
       await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
     },
@@ -2502,6 +2503,8 @@ export function buildApp(
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
+      for (const worker of workers)
+        worker.requestHandoff(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(

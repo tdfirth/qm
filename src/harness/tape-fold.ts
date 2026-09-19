@@ -316,6 +316,12 @@ export function tapeNeedsInterruptHeal(rows: readonly TapeRecord[], folded?: rea
   return problems.length > 0 && problems.every((p) => p.startsWith("end:"));
 }
 
+export function tapeEndsAtCommittedStep(messages: readonly unknown[] | undefined): boolean {
+  if (!messages?.length || !lintFold(messages).ok) return false;
+  const last = messages[messages.length - 1] as { role?: string } | undefined;
+  return last?.role === "toolResult" || last?.role === "user";
+}
+
 export function healFoldInterrupt(messages: readonly unknown[], at: number): unknown[] {
   const healed = [...messages];
   healDanglingCalls(healed, at);

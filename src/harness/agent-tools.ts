@@ -63,6 +63,7 @@ export interface ToolContextRef {
     approvalKey?: string;
   }>;
   pausedOnApproval?: boolean;
+  handoffRequested?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
@@ -348,7 +349,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "session"]);
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "handoffRequested">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -356,7 +357,8 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff || ref.handoffRequested)
+      return { ...upstream, terminate: true };
     return upstream;
   };
 }

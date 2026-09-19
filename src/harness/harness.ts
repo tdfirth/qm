@@ -93,6 +93,9 @@ export interface HarnessTurnInput {
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
+  handoff?: AbortSignal;
+  handoffDeadline?: AbortSignal;
+  continueTurn?: boolean;
   input: string;
   triggerTs?: string;
   entryTs?: string;
@@ -147,6 +150,7 @@ export interface HarnessTurnResult {
   silent?: boolean;
   stopped?: true;
   stoppedTapeComplete?: true;
+  handedOff?: true;
   pendingApprovals?: Array<{
     command: string;
     reason: string;

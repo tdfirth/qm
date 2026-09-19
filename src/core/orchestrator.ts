@@ -128,6 +128,7 @@ import {
   lastImportLacksScopes,
   lintFold,
   rehydrateFoldImages,
+  tapeEndsAtCommittedStep,
   tapeEventsEntitled,
   tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
@@ -165,7 +166,13 @@ import {
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import {
+  NonRetryableTurnError,
+  TitleRejected,
+  TurnHandedOff,
+  turnFailureMessage,
+  type TurnFailurePayload,
+} from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -2807,7 +2814,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               eventsEntitled &&
               participantHistorySeqs === undefined;
             let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
+            let interrupted = false;
             if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
+              interrupted = true;
               const interrupt = await deps.sessions.appendTape(lease, {
                 kind: "context_event",
                 payload: { event: "interrupt" },
@@ -2817,7 +2826,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               fold = healFoldInterrupt(fold, interrupt.createdAt);
             }
             const serve = eligible && !!fold?.length && lintFold(fold).ok;
-            return { rows, serve, covered, fold };
+            return { rows, serve, covered, fold, interrupted };
           } catch (e) {
             swallow("tape: read/heal", e);
             return undefined;
@@ -2844,6 +2853,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         const resume = partial && partial.workEntries > 0 ? partial : null;
+        let seamlessResume =
+          !!resume &&
+          !recordedTurn?.answer &&
+          !input.approval &&
+          !!tapeRows?.serve &&
+          !tapeRows.interrupted &&
+          tapeEndsAtCommittedStep(tapeRows.fold);
         if (partial) postKeys.seed(completedSurfaceEnqueues(visibleHistory, partial.userSeq, surfaceName));
         if (partial) {
           deps.auditLog.record({
@@ -2857,12 +2873,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
           });
           console.error(
-            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries}`,
+            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} seamless=${seamlessResume}`,
           );
         }
-        const turnInput = partial
-          ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume })
-          : baseText;
+        const resumeInput = seamlessResume ? "" : resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume });
+        let turnInput = partial ? resumeInput : baseText;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
           (e) =>
@@ -2896,6 +2911,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           actorId: actor.id,
           ...(input.model ? { model: input.model } : {}),
         });
+        if (seamlessResume && history !== visibleHistory) {
+          seamlessResume = false;
+          turnInput = resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume });
+        }
         compactMs = Date.now() - compactStart;
         const turnStart = Date.now();
         let firstChunkAt: number | undefined;
@@ -3225,6 +3244,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
+            ...(input.handoff ? { handoff: input.handoff } : {}),
+            ...(input.handoffDeadline ? { handoffDeadline: input.handoffDeadline } : {}),
+            ...(seamlessResume && !continuation ? { continueTurn: true } : {}),
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
@@ -3442,7 +3464,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 usage[key] += segment.cacheUsage[key];
           };
           addUsage();
-          while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
+          while (segment.runtimeHandoff && !segment.stopped && !segment.handedOff && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
@@ -3487,6 +3509,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        if (result.handedOff) throw new TurnHandedOff();
         const primarySubturnEndSeq = emittedEntries.at(-1)?.seq;
         const preTurnCovered = tapeRows ? tapeRows.covered : false;
         let latchedCoverageSeq = -1;
@@ -3909,6 +3932,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
+        if (err instanceof TurnHandedOff) throw err;
         if (err instanceof ProjectRosterChanged) {
           return {
             status: "refused",
