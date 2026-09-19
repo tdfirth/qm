@@ -44,22 +44,19 @@ export async function verifyDeployGitAccess(
 }
 
 export function deploymentGitToken(authorization: string | undefined, url: URL): string | null {
-  const authz = authorization;
-  if (typeof authz === "string") {
-    const basic = /^basic\s+(.+)$/i.exec(authz);
-    if (basic) {
-      try {
-        const decoded = Buffer.from(basic[1]!, "base64").toString("utf8");
-        const colon = decoded.indexOf(":");
-        const user = colon < 0 ? decoded : decoded.slice(0, colon);
-        const pass = colon < 0 ? "" : decoded.slice(colon + 1);
-        return pass || user || null;
-      } catch {
-        return null;
-      }
+  const authz = /^(basic|bearer)\s+(\S.*)$/i.exec(authorization ?? "");
+  if (authz) {
+    const token = authz[2]!;
+    if (authz[1]!.toLowerCase() === "bearer") return token;
+    try {
+      const decoded = Buffer.from(token, "base64").toString("utf8");
+      const colon = decoded.indexOf(":");
+      const user = colon < 0 ? decoded : decoded.slice(0, colon);
+      const pass = colon < 0 ? "" : decoded.slice(colon + 1);
+      return pass || user || null;
+    } catch {
+      return null;
     }
-    const bearer = /^bearer\s+(.+)$/i.exec(authz);
-    if (bearer) return bearer[1]!;
   }
   return url.searchParams.get("token") ?? url.searchParams.get("access_token");
 }
