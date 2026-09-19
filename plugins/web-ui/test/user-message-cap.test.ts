@@ -29,6 +29,8 @@ test("images a user attached render as passive images in the live chat", () => {
   const fn = chat.match(/function userAttachmentBadge\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(fn, /startsWith\("image\/"\)/);
   assert.match(fn, /<img class="user-image-attachment" src=\$\{src\} alt="" loading="lazy"/);
+  assert.match(fn, /if \(browserRenderableImage\(a\.mimeType\) && src\)/);
+  assert.match(fn, /return imageChip\(a\.fileName, a\.size, artifactHref \?\? localContentUrl\(a\)\);/);
   assert.doesNotMatch(fn, /chipBadge\(FileImage|tip\(|download|title=/);
 });
 
@@ -38,6 +40,8 @@ test("images a user attached render as passive images on the share page", () => 
   assert.match(userImage, /class="user-image-attachment"/);
   assert.match(userImage, /alt=""/);
   assert.doesNotMatch(userImage, /<a|chipBadge|file\.name|title=|download/);
+  assert.match(files, /const inlineImage = browserRenderableImage\(file\.mimetype\);/);
+  assert.match(files, /return chipBadge\([\s\S]*?inlineImage \? FileImage : File/);
 });
 
 test("both transcript renderers provide an accessible control and an observable inner body", () => {

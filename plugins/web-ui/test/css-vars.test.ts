@@ -52,6 +52,19 @@ test("sent user images have a passive medium presentation", () => {
   assert.doesNotMatch(image, /border:|cursor:/);
 });
 
+test("two sent user images form a compact side-by-side pair", () => {
+  const pair =
+    shellCss.match(/\.message-files:has\([\s\S]*?\.user-image-attachment:last-child\s*\) \{[^}]+\}/)?.[0] ?? "";
+  assert.match(pair, /display:\s*grid;/);
+  assert.match(pair, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(pair, /width:\s*324px;/);
+  assert.match(pair, /max-width:\s*100%;/);
+  assert.match(pair, /gap:\s*4px;/);
+  const images = shellCss.match(/\.message-files:has\([\s\S]*?> \.user-image-attachment \{[^}]+\}/)?.[0] ?? "";
+  assert.match(images, /aspect-ratio:\s*1;/);
+  assert.match(images, /object-fit:\s*cover;/);
+});
+
 test("image remove actions follow the sidebar conversation action styling", () => {
   const imageAction = shellCss.match(/\.image-preview \.chip-x \{[^}]+\}/)?.[0] ?? "";
   assert.match(imageAction, /width:\s*26px;/);

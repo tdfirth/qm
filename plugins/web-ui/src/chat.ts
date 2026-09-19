@@ -2821,11 +2821,13 @@ export function createChatSurface(
   function userAttachmentBadge(a: UserAttachmentView): TemplateResult | typeof nothing {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
-      if (!browserRenderableImage(a.mimeType)) return nothing;
       const dataUrl =
         a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
       const src = artifactHref ?? dataUrl;
-      return src ? html`<img class="user-image-attachment" src=${src} alt="" loading="lazy" />` : nothing;
+      if (browserRenderableImage(a.mimeType) && src) {
+        return html`<img class="user-image-attachment" src=${src} alt="" loading="lazy" />`;
+      }
+      return imageChip(a.fileName, a.size, artifactHref ?? localContentUrl(a));
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;

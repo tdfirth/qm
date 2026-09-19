@@ -1,12 +1,12 @@
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
-import { Lock, ArrowUpRight, Check, Copy, File } from "lucide";
+import { Lock, ArrowUpRight, Check, Copy, File, FileImage } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
-import { brandName, brandMark, chipBadge, icon, copyText } from "./ui";
+import { brandName, brandMark, browserRenderableImage, chipBadge, icon, copyText } from "./ui";
 
 interface SharedTranscript {
   createdAt: number;
@@ -54,16 +54,14 @@ render(
                             ? html`<div class="message-files">
                                 ${message.attachments.map((file) => {
                                   const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
-                                  const inlineImage = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
-                                  if (message.role === "user" && file.mimetype.startsWith("image/")) {
-                                    return inlineImage
-                                      ? html`<img
-                                          class="user-image-attachment"
-                                          src=${`${href}?inline=1`}
-                                          alt=""
-                                          loading="lazy"
-                                        />`
-                                      : "";
+                                  const inlineImage = browserRenderableImage(file.mimetype);
+                                  if (message.role === "user" && inlineImage) {
+                                    return html`<img
+                                      class="user-image-attachment"
+                                      src=${`${href}?inline=1`}
+                                      alt=""
+                                      loading="lazy"
+                                    />`;
                                   }
                                   if (inlineImage && message.role !== "user") {
                                     return html`<a
@@ -74,7 +72,13 @@ render(
                                       ><img src=${`${href}?inline=1`} alt=${file.name} loading="lazy"
                                     /></a>`;
                                   }
-                                  return chipBadge(File, file.name, file.sizeBytes, href, true);
+                                  return chipBadge(
+                                    inlineImage ? FileImage : File,
+                                    file.name,
+                                    file.sizeBytes,
+                                    inlineImage ? `${href}?inline=1` : href,
+                                    !inlineImage,
+                                  );
                                 })}
                               </div>`
                             : ""
