@@ -112,10 +112,11 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       query: {},
     });
     const res = await fetchWithRetry(
-      () =>
+      (signal) =>
         doFetch(`https://${host}${path}`, {
           method,
           headers: signed.headers as Record<string, string>,
+          signal,
           ...(payload ? { body: payload } : {}),
         }),
       method === "POST" ? "refused" : "idempotent",

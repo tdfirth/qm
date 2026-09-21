@@ -75,7 +75,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   const idByName = new Map<string, string>();
 
-  function send(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
+  function send(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = 60_000,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -83,12 +89,16 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ?? AbortSignal.timeout(timeoutMs),
     });
   }
 
-  const api = (method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> =>
-    fetchWithRetry(() => send(method, path, body, timeoutMs), "idempotent");
+  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
+    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
+    return method === "GET" || method === "DELETE"
+      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
+      : operation();
+  }
 
   async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
     const res = await api(method, path, body, timeoutMs);
@@ -282,14 +292,15 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const id = await machineIdFor(name);
     const res = await fetchWithRetry(
-      () =>
+      (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
           method: "PUT",
           headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
           body: Buffer.from(data),
-          signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+          signal,
         }),
       "idempotent",
+      { timeoutMs: FILE_TRANSFER_TIMEOUT_MS },
     );
     if (!res.ok) {
       throw new Error(`smolmachines write ${absPath}: ${await httpFailure(res)}`);
@@ -299,12 +310,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
     const id = await machineIdFor(name);
     const res = await fetchWithRetry(
-      () =>
+      (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
           headers: { authorization: `Bearer ${opts.token ?? ""}` },
-          signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+          signal,
         }),
       "idempotent",
+      { timeoutMs: FILE_TRANSFER_TIMEOUT_MS },
     );
     if (res.status === 404) return null;
     if (!res.ok) {

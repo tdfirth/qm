@@ -215,20 +215,20 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const url = `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/policy/network`;
     const headers = { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/json" };
     const res = await fetchWithRetry(
-      () =>
+      (signal) =>
         fetchImpl(url, {
           method: "POST",
           headers,
           body: JSON.stringify({ rules }),
-          signal: AbortSignal.timeout(30_000),
+          signal,
         }),
       "idempotent",
+      { timeoutMs: 30_000 },
     );
     if (!res.ok) throw new Error(`sprites egress policy ${name}: ${await httpFailure(res)}`);
-    const check = await fetchWithRetry(
-      () => fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) }),
-      "idempotent",
-    );
+    const check = await fetchWithRetry((signal) => fetchImpl(url, { headers, signal }), "idempotent", {
+      timeoutMs: 30_000,
+    });
     const got = (await check.json().catch(() => null)) as {
       rules?: Array<{ domain?: string; action?: string }>;
     } | null;
@@ -405,13 +405,14 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       return base.provisionQueue(scopeId, async () => {
         const name = sandboxScopeName(prefix, scopeId);
         const res = await fetchWithRetry(
-          () =>
+          (signal) =>
             fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}`, {
               method: "DELETE",
               headers: { authorization: `Bearer ${opts.token ?? ""}` },
-              signal: AbortSignal.timeout(RESTART_TIMEOUT_MS),
+              signal,
             }),
           "idempotent",
+          { timeoutMs: RESTART_TIMEOUT_MS },
         );
         if (!res.ok && res.status !== 404) throw new Error(`sprites delete ${name}: ${await httpFailure(res)}`);
         ensured.delete(name);
@@ -424,12 +425,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       const name = sandboxScopeName(prefix, scopeId);
       const spriteJson = async (path: string): Promise<{ status?: string } | null> => {
         const res = await fetchWithRetry(
-          () =>
+          (signal) =>
             fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}${path}`, {
               headers: { authorization: `Bearer ${opts.token ?? ""}` },
-              signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+              signal,
             }),
           "idempotent",
+          { timeoutMs: CHECK_TIMEOUT_MS },
         );
         if (!res.ok) throw new Error(await httpFailure(res));
         return (await res.json().catch(() => null)) as { status?: string } | null;

@@ -266,8 +266,8 @@ test("profile advertises resident disk and process sessions", () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
 });
 
-test("instance create retries 429 and 503 refusals but not an ambiguous 5xx", async () => {
-  fake.failNext(503, {
+test("instance create retries 429 refusals but not an ambiguous 5xx", async () => {
+  fake.failNext(429, {
     headers: { "retry-after": "0" },
     match: (c) => c.method === "POST" && c.path === "/v1/instances",
   });
@@ -287,6 +287,29 @@ test("instance create retries 429 and 503 refusals but not an ambiguous 5xx", as
   );
   assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, posts + 1);
 });
+
+for (const failure of ["disconnect", "503"]) {
+  test(`accepted create followed by ${failure} never duplicates the instance`, async () => {
+    let injected = false;
+    const adapter = make({
+      fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+        const response = await fake.fetchImpl(input, init);
+        if (!injected && init?.method === "POST" && new URL(String(input)).pathname === "/v1/instances") {
+          injected = true;
+          if (failure === "disconnect") throw new TypeError("connection lost after create");
+          return new Response("upstream unavailable", { status: 503, headers: { "retry-after": "0" } });
+        }
+        return response;
+      },
+    });
+    await assert.rejects(adapter.provision(layers), /connection lost after create|http 503/);
+    assert.equal(fake.names().length, 1);
+    const recovered = await adapter.provision(layers);
+    assert.equal(fake.names().length, 1);
+    assert.equal((await adapter.run(recovered, "echo recovered")).stdout.trim(), "recovered");
+    assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 1);
+  });
+}
 
 test("instance listing retries 429 with Retry-After; exec is never retried and names the request id", async () => {
   fake.failNext(429, {

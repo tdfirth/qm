@@ -109,7 +109,13 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  function send(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
+  function send(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = 60_000,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -117,12 +123,16 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ?? AbortSignal.timeout(timeoutMs),
     });
   }
 
-  const api = (method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> =>
-    fetchWithRetry(() => send(method, path, body, timeoutMs), "idempotent");
+  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
+    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
+    return method === "GET" || method === "DELETE"
+      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
+      : operation();
+  }
 
   async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
     const res = await api(method, path, body, timeoutMs);
@@ -158,8 +168,10 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
   async function createInstance(name: string): Promise<InstanceInfo> {
     const res = await fetchWithRetry(
-      () => send("POST", "/v1/instances", { template, name, resources, auto_sleep: true }, CREATE_TIMEOUT_MS),
+      (signal) =>
+        send("POST", "/v1/instances", { template, name, resources, auto_sleep: true }, CREATE_TIMEOUT_MS, signal),
       "refused",
+      { timeoutMs: CREATE_TIMEOUT_MS },
     );
     if (!res.ok) throw new Error(`agent37 create ${name}: ${await httpFailure(res)}`);
     const info = (await res.json()) as InstanceInfo;

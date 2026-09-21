@@ -230,10 +230,10 @@ test("fetchWithRetry retries connection failures only for idempotent requests, n
   assert.equal(calls, 1);
 });
 
-test("fetchWithRetry treats a refused request as retryable only when the server did not process it", async () => {
+test("fetchWithRetry retries throttling but never infers refusal from a server error", async () => {
   for (const [status, expectedCalls] of [
     [429, 2],
-    [503, 2],
+    [503, 1],
     [500, 1],
     [502, 1],
     [504, 1],
@@ -250,4 +250,43 @@ test("fetchWithRetry treats a refused request as retryable only when the server 
     assert.equal(calls, expectedCalls, `status ${status}`);
     assert.equal(res.status, expectedCalls === 2 ? 201 : status);
   }
+});
+
+test("fetchWithRetry cancellation interrupts Retry-After without another request", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const pending = fetchWithRetry(
+    async () => {
+      calls++;
+      return reply(429, { "retry-after": "30" });
+    },
+    "idempotent",
+    { signal: controller.signal },
+  );
+  const timeout = setTimeout(() => controller.abort(), 20);
+  try {
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(calls, 1);
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+test("fetchWithRetry shares a deadline across attempts and backoff", async () => {
+  const signals: AbortSignal[] = [];
+  await assert.rejects(
+    fetchWithRetry(
+      async (signal) => {
+        signals.push(signal);
+        if (signals.length === 1) return reply(503, { "retry-after": "0" });
+        return new Promise<Response>((resolve) => setTimeout(() => resolve(reply(200)), 100));
+      },
+      "idempotent",
+      { timeoutMs: 30 },
+    ),
+    { name: "TimeoutError" },
+  );
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0], signals[1]);
+  assert.equal(signals[1]!.aborted, true);
 });
