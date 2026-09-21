@@ -657,7 +657,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       reportError("sandbox_reap", "orphan_list_failed", errMessage(e));
       return 0;
     }
-    for (const id of [...orphanFirstSeenMs.keys()]) if (!listed.has(id) || known.has(id)) orphanFirstSeenMs.delete(id);
+    for (const id of orphanFirstSeenMs.keys()) if (!listed.has(id) || known.has(id)) orphanFirstSeenMs.delete(id);
     if (!candidates.length) return 0;
     known = await tracked();
     let reaped = 0;
