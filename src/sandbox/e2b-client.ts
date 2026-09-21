@@ -111,7 +111,7 @@ export interface E2bEgressNetwork {
 const DEFAULT_TEMPLATE = "base";
 const DEFAULT_TTL_MS = 15 * 60_000;
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
-export const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
+const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
 export const E2B_EXEC_MARGIN_MS = 60_000;
 const ALL_TRAFFIC = "0.0.0.0/0";
 
@@ -129,7 +129,7 @@ export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
   return { allowOut: [host], denyOut: [ALL_TRAFFIC] };
 }
 
-export function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs" | "maxCommandMs">): {
+function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs" | "maxCommandMs">): {
   sandboxTtlMs: number;
   maxLifetimeMs: number;
   maxCommandMs: number;

@@ -159,7 +159,7 @@ export interface ComputerStatus {
   resources?: ComputerResources;
 }
 
-export interface ComputerResources {
+interface ComputerResources {
   cpuUsedPct: number;
   memUsedMb: number;
   memTotalMb: number;
