@@ -76,6 +76,29 @@ test("one failing blob degrades that file only; the rest upload and the send sur
   assert.equal(skipped[0]!.note, oversizeAttachmentNote("rejected.txt"), "a 413 reads as the size limit, not raw HTTP");
 });
 
+test("Safari PNG preview fallbacks are uploaded with their actual MIME type", async () => {
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call++;
+    return new Response(JSON.stringify({ blobId: `b${call}`, sizeBytes: 4 }), { status: 200 });
+  }) as typeof fetch;
+  const { uploaded, skipped } = await uploadAttachments([
+    {
+      id: "image-1",
+      type: "image",
+      fileName: "image.png",
+      mimeType: "image/png",
+      size: 3,
+      content: "YWJj",
+      preview: "data:image/png;base64,cHJldmlldw==",
+    },
+  ]);
+  assert.deepEqual(skipped, []);
+  assert.equal(call, 2);
+  assert.equal(uploaded[0]!.previewBlobId, "b2");
+  assert.equal(uploaded[0]!.previewMimetype, "image/png");
+});
+
 test("a non-413 upload failure is noted per file with its reason", async () => {
   globalThis.fetch = (async () => {
     throw new Error("network unreachable");

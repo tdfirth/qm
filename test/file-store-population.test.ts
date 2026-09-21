@@ -30,6 +30,15 @@ function webp(width: number, height: number): Buffer {
   return bytes;
 }
 
+function png(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
 function memSandbox(seed: Record<string, Uint8Array | string> = {}): {
   sandbox: Sandbox;
   files: Map<string, Uint8Array>;
@@ -178,6 +187,68 @@ test("materializeInbound registers a bounded image preview beside the original",
   const chunks: Buffer[] = [];
   for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
   assert.deepEqual(Buffer.concat(chunks), preview);
+  assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
+});
+
+test("materializeInbound accepts a bounded PNG preview when WebP encoding is unavailable", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  const { blobId } = await transfer.put(PNG);
+  const preview = png(512, 384);
+  const { blobId: previewBlobId } = await transfer.put(preview);
+  const { sandbox } = memSandbox();
+
+  const inbound = await materializeInbound(
+    sandbox,
+    HANDLE,
+    [
+      {
+        name: "shared.png",
+        mimetype: "image/png",
+        sizeBytes: PNG.length,
+        blobId,
+        previewBlobId,
+        previewMimetype: "image/png",
+      },
+    ],
+    transfer,
+    reg(store),
+  );
+
+  const previewArtifactId = inbound.metas[0]!.previewArtifactId;
+  assert.ok(previewArtifactId);
+  const opened = await store.open(previewArtifactId, { includeDisabled: true });
+  assert.ok(opened);
+  const chunks: Buffer[] = [];
+  for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
+  assert.deepEqual(Buffer.concat(chunks), preview);
+});
+
+test("materializeInbound rejects preview bytes that do not match their declared MIME type", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  const { blobId } = await transfer.put(PNG);
+  const { blobId: previewBlobId } = await transfer.put(webp(128, 96));
+  const { sandbox } = memSandbox();
+
+  const inbound = await materializeInbound(
+    sandbox,
+    HANDLE,
+    [
+      {
+        name: "shared.png",
+        mimetype: "image/png",
+        sizeBytes: PNG.length,
+        blobId,
+        previewBlobId,
+        previewMimetype: "image/png",
+      },
+    ],
+    transfer,
+    reg(store),
+  );
+
+  assert.equal(inbound.metas[0]!.previewArtifactId, undefined);
   assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
 });
 

@@ -650,9 +650,8 @@ async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
     return (await response.json()) as { blobId: string; sizeBytes: number };
   };
   const { blobId, sizeBytes } = await upload(bytes);
-  const previewBytes = a.preview?.startsWith("data:image/webp;base64,")
-    ? base64ToBytes(a.preview.slice("data:image/webp;base64,".length))
-    : undefined;
+  const previewData = /^data:(image\/(?:png|webp));base64,(.+)$/.exec(a.preview ?? "");
+  const previewBytes = previewData ? base64ToBytes(previewData[2]!) : undefined;
   const preview =
     previewBytes && previewBytes.length <= 1_000_000 ? await upload(previewBytes).catch(() => undefined) : undefined;
   return {
@@ -660,7 +659,7 @@ async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
     mimetype: a.mimeType,
     sizeBytes: sizeBytes ?? a.size,
     blobId,
-    ...(preview ? { previewBlobId: preview.blobId, previewMimetype: "image/webp" } : {}),
+    ...(preview ? { previewBlobId: preview.blobId, previewMimetype: previewData![1]! } : {}),
   };
 }
 

@@ -33,6 +33,10 @@ export function turnFileId(runId?: string, attempt = 1, now = Date.now()): strin
 export const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
 const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const PREVIEW_FORMAT_BY_MIME: ReadonlyMap<string, "png" | "webp"> = new Map([
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+] as const);
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
@@ -361,14 +365,15 @@ export async function materializeInbound(
       ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
       : undefined;
     let previewArtifactId: string | undefined;
-    if (register && a.previewBlobId && a.previewMimetype === "image/webp") {
+    const previewFormat = PREVIEW_FORMAT_BY_MIME.get(a.previewMimetype ?? "");
+    if (register && a.previewBlobId && previewFormat) {
       let preview: Awaited<ReturnType<BlobTransferStore["open"]>> = null;
       try {
         preview = await transfer.open(a.previewBlobId);
         if (preview && preview.sizeBytes <= 1_000_000) {
           const previewBytes = await collectBlob(preview.stream);
           const dimensions = sniffImageDimensions(previewBytes);
-          if (dimensions?.format === "webp" && dimensions.width <= 512 && dimensions.height <= 512) {
+          if (dimensions?.format === previewFormat && dimensions.width <= 512 && dimensions.height <= 512) {
             const previewArtifact = await registerArtifact(
               register,
               "in",
