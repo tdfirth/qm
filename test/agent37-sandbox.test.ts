@@ -532,3 +532,49 @@ test("a used turn requests an on-demand backup at teardown; an untouched one doe
   assert.equal(fake.instance(h.id)?.backups.length, 1);
   assert.equal(fake.instance(h.id)?.backups[0]?.kind, "manual");
 });
+
+test("capacity retries use only the remaining create budget", async (t) => {
+  const actualNow = Date.now.bind(Date);
+  const actualTimeout = AbortSignal.timeout.bind(AbortSignal);
+  let offset = 0;
+  let latestTimeout = 0;
+  const createTimeouts: number[] = [];
+  t.mock.method(Date, "now", () => actualNow() + offset);
+  t.mock.method(AbortSignal, "timeout", (ms: number) => {
+    latestTimeout = ms;
+    return actualTimeout(ms);
+  });
+  fake.rejectNextCreate({ status: 503, code: "no_capacity" });
+  const adapter = make({
+    fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      const isCreate = init?.method === "POST" && new URL(String(input)).pathname === "/v1/instances";
+      if (isCreate) createTimeouts.push(latestTimeout);
+      const response = await fake.fetchImpl(input, init);
+      if (isCreate && createTimeouts.length === 1) offset = 300_000;
+      return response;
+    },
+  });
+  await adapter.provision(layers);
+  assert.equal(createTimeouts.length, 2);
+  assert.ok(createTimeouts[0]! > 329_000);
+  assert.ok(createTimeouts[1]! > 0 && createTimeouts[1]! <= 30_000);
+});
+
+test("overslept capacity backoff never sends a create past the deadline", async (t) => {
+  const actualNow = Date.now.bind(Date);
+  const actualSetTimeout = setTimeout;
+  let offset = 0;
+  t.mock.method(Date, "now", () => actualNow() + offset);
+  t.mock.method(globalThis, "setTimeout", (callback: () => void, ms: number) =>
+    actualSetTimeout(
+      () => {
+        if (ms === 2_000) offset = 331_000;
+        callback();
+      },
+      ms === 2_000 ? 0 : ms,
+    ),
+  );
+  fake.rejectNextCreate({ status: 503, code: "no_capacity" });
+  await assert.rejects(sandbox.provision(layers), /no_capacity/);
+  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 1);
+});

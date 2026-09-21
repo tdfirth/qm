@@ -341,7 +341,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     };
     const deadline = Date.now() + CREATE_TIMEOUT_MS;
     for (;;) {
-      const res = await api("POST", "/v1/instances", body, CREATE_TIMEOUT_MS);
+      const res = await api("POST", "/v1/instances", body, Math.max(1, deadline - Date.now()));
       if (res.ok) {
         const info = (await res.json()) as InstanceInfo;
         await ensureRunning(info.id);
@@ -355,8 +355,9 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
           `agent37 create ${target.name}: the workspace is at its Agent37 instance limit (instance_limit_reached); delete instances qm no longer needs or top up the workspace to raise the cap`,
         );
       }
-      if (err.code !== "no_capacity" || Date.now() > deadline) throw err;
+      if (err.code !== "no_capacity" || Date.now() + READY_POLL_MS >= deadline) throw err;
       await sleep(READY_POLL_MS);
+      if (Date.now() >= deadline) throw err;
     }
   }
 
