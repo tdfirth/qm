@@ -106,6 +106,7 @@ import {
   openCreateProject,
   openProjectDetail,
   renderContexts,
+  resetActiveProject,
   resetContextsState,
   resolveProjectScope,
 } from "./contexts";
@@ -123,7 +124,6 @@ let sidebarControlsEl: HTMLElement | null = null;
 
 subscribeSidebar(() => {
   renderList();
-  renderSidebarTop();
   if (sidebarControlsEl) render(sidebarControls(), sidebarControlsEl);
 });
 
@@ -771,6 +771,7 @@ function onNavClick(e: Event): void {
   if (e instanceof MouseEvent && !isPlainLeftClick(e)) return;
   e.preventDefault();
   setScopedSession(null);
+  if (view === "contexts") resetActiveProject();
   switchView(view);
   closeSidebarOnNarrowView();
 }

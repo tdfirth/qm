@@ -125,6 +125,7 @@ async function fetchContexts(): Promise<CoreContext[]> {
   contextsState.list = result.contexts ?? [];
   contextsState.loaded = true;
   contextsState.loadedAt = Date.now();
+  renderList();
   return contextsState.list;
 }
 
@@ -1085,6 +1086,10 @@ function createProjectDialog(): TemplateResult | typeof nothing {
 export function openProjectDetail(scopeId: string): void {
   switchView("contexts");
   selectContext(scopeId);
+}
+
+export function resetActiveProject(): void {
+  selectContext(null);
 }
 
 export async function renameProject(project: CoreProject, name: string): Promise<boolean> {

@@ -124,6 +124,22 @@ export function toggleSidebarCustomization(): void {
 
 export function sidebarControls(): TemplateResult {
   return html` ${
+      sidebarState.notice
+        ? html`<div class="sidebar-save-error" role="alert">
+            ${sidebarState.notice}
+            <button
+              type="button"
+              @click=${() => {
+                sidebarState.notice = "";
+                notifySidebar();
+              }}
+            >
+              Dismiss
+            </button>
+          </div>`
+        : nothing
+    }
+    ${
       sidebarState.error
         ? html`<div class="sidebar-save-error" role="alert">
             ${sidebarState.error}

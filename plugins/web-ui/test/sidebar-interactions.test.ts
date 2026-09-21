@@ -317,9 +317,26 @@ test("sidebar organization survives reload, handles failed saves, and isolates i
     button("Remove Recent work section").click();
     toggleSidebarCustomization();
 
+    await settle();
+    const beforeOversized = structuredClone(sidebarState.layout);
+    const oversizedWrites = writes.length;
+    updateSidebarLayout((layout: SidebarLayout) => ({
+      ...layout,
+      sections: layout.sections.map((section, index) => ({
+        ...section,
+        items: index < 3 ? Array.from({ length: 500 }, (_, i) => `web:owner:${String(i).padStart(42, "0")}`) : [],
+      })),
+    }));
+    await settle();
+    assert.match(sidebarState.notice, /fill your sidebar/);
+    assert.deepEqual(sidebarState.layout, beforeOversized, "oversized edits preserve the last valid layout");
+    assert.equal(writes.length, oversizedWrites, "oversized edits never reach the bounded UI-state endpoint");
+    assert.equal(keepaliveWrites.at(-1), false, "regular saves do not consume the unload keepalive budget");
+
     failWrites = true;
     button("Private").click();
     await settle();
+    assert.equal(sidebarState.notice, "", "smaller edits remain possible after reaching the limit");
     assert.match(sidebarState.error, /haven't saved/);
     failWrites = false;
     await saveSidebarState();

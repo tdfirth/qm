@@ -75,8 +75,9 @@ minimum/maximum widths, and double-click to reset. Width is saved on the device.
 
 Layout version 2 migrates the original section-only preferences and uses the existing
 per-user `sidebar-layout` UI-state record, backed by Postgres in durable deployments.
-Failed loads/saves expose Retry; pending saves flush when leaving the page. Resetting
-the layout never deletes projects or conversations.
+Failed loads/saves expose Retry; pending saves flush when leaving the page. Layouts
+that exceed the preference storage limit are rejected with a message, preserving the
+previous layout. Resetting the layout never deletes projects or conversations.
 
 ### Notion comparison
 
@@ -95,9 +96,9 @@ Audited against the live Notion sidebar and its
 | Expand/collapse, resize/hide, appearance     | Expandable project/chat tree, resize, rail/mobile drawer, existing themes     |
 | Contextual hover controls and floating menus | Hover/focus/touch actions, anchored section dialogs, Escape/outside dismissal |
 
-Notion's arbitrary page nesting, database schemas/views, calendar events, and meeting
-notes are content features outside QM's project/conversation model. Saved conversation
-views cover the sidebar filtering use case; this change does not add those content systems.
+Notion's arbitrary page nesting, database schemas/views, and meeting notes are content
+features outside QM's project/conversation model. Saved conversation views cover the
+sidebar filtering use case; QM's Calendar remains available as a navigation shortcut.
 
 ## Suggested activities
 

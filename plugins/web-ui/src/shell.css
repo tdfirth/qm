@@ -263,9 +263,6 @@ body.resizing-sidebar {
   margin-bottom: 2px;
   padding-bottom: 0;
 }
-.new-chat-nav {
-  margin: 2px 0 10px;
-}
 a.navrow,
 a.session,
 a.chat-row-open {
@@ -827,6 +824,50 @@ a.chat-row-open {
   font-size: 11px;
   cursor: pointer;
   text-decoration: underline;
+}
+@media (max-width: 860px), (pointer: coarse) {
+  .sidebar-tabs button,
+  .sidebar-icon-input {
+    min-width: 44px;
+  }
+  .sidebar-small-button {
+    flex-basis: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+  .sidebar-tabs button,
+  .sidebar-section-toggle,
+  .sidebar-show-more,
+  .sidebar-section-options > button,
+  .sidebar-section-options summary,
+  .sidebar-customization input:not([type="checkbox"]),
+  .sidebar-customization select,
+  .sidebar-section-options input,
+  .sidebar-section-options select,
+  .sidebar-reset,
+  .sidebar-tab-settings summary {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .sidebar-row-settings summary {
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+  .sidebar-customization-row {
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+  }
+  .sidebar-customization-row .sidebar-section-name-input,
+  .sidebar-customization-row .sidebar-customization-name {
+    flex: 1 0 calc(100% - 68px);
+  }
+  .sidebar-section-action,
+  .sidebar-customization-row .sidebar-small-button,
+  .sidebar-row-settings summary {
+    opacity: 1;
+  }
 }
 .layout.sidebar-closed .sidebar-tabs {
   flex-direction: column;

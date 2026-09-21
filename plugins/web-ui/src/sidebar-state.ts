@@ -6,6 +6,7 @@ export const sidebarState = {
   loaded: false,
   saving: false,
   error: "",
+  notice: "",
   customizing: false,
   sectionMenu: null as string | null,
 };
@@ -37,6 +38,7 @@ export function resetSidebarState(): void {
   sidebarState.layout = defaultSidebarLayout();
   sidebarState.loaded = sidebarState.saving = sidebarState.customizing = false;
   sidebarState.error = "";
+  sidebarState.notice = "";
   sidebarState.sectionMenu = null;
 }
 
@@ -65,18 +67,25 @@ export function loadSidebarState(): Promise<void> {
 
 export function updateSidebarLayout(update: (layout: SidebarLayout) => SidebarLayout): void {
   if (!sidebarState.loaded) return;
-  sidebarState.layout = normalizeSidebarLayout(update(sidebarState.layout));
+  const next = normalizeSidebarLayout(update(sidebarState.layout));
+  if (new TextEncoder().encode(JSON.stringify(next)).byteLength > 60 * 1024) {
+    sidebarState.notice = "This change would fill your sidebar. Remove unused sections or shortcuts and try again.";
+    notifySidebar();
+    return;
+  }
+  sidebarState.notice = "";
+  sidebarState.layout = next;
   revision++;
   notifySidebar();
   void saveSidebarState();
 }
 
-async function persistSidebarRevision(epoch: number): Promise<void> {
+async function persistSidebarRevision(epoch: number, keepalive = false): Promise<void> {
   const writingRevision = revision;
   timestamp = Math.max(Date.now(), timestamp + 1);
   const response = (await putUiState("sidebar-layout", sidebarState.layout, timestamp, {
     signal: controller.signal,
-    keepalive: true,
+    keepalive,
   })) as { ok?: boolean; updatedAt?: number };
   if (epoch !== generation) return;
   if (typeof response?.updatedAt === "number" && Number.isFinite(response.updatedAt))
@@ -111,7 +120,7 @@ export async function flushSidebarState(): Promise<void> {
   if (!sidebarState.loaded || savedRevision === revision) return;
   const epoch = generation;
   try {
-    await persistSidebarRevision(epoch);
+    await persistSidebarRevision(epoch, true);
   } catch {
     if (epoch === generation && savedRevision < revision)
       sidebarState.error = "Sidebar changes haven't saved. Try again.";

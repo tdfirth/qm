@@ -100,7 +100,6 @@ import {
   renderSidebarTop,
   sidebarShortcutChoices,
   showMainEmpty,
-  syncDocumentTitle,
   syncUrlFromState,
 } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
@@ -334,7 +333,7 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
-  syncDocumentTitle();
+  renderSidebarTop();
   if (chatsPageShowing()) drawChatsPage();
   if (!appState.listEl) return;
   const visible = visibleSessions();
