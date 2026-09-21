@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { withTimeout } from "../util/async.ts";
+import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
@@ -72,6 +73,27 @@ export function spritesErrorDetail(e: unknown): string {
   const retryAfter = e.getRetryAfterSeconds();
   if (retryAfter !== undefined && !e.message.includes("retry after")) parts.push(`retry after ${retryAfter}s`);
   return parts.join("; ");
+}
+
+export async function retrySpritesControl<T>(operation: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await withAbort(operation, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!(error instanceof APIError) || ![429, 500, 502, 503, 504].includes(error.statusCode ?? 0) || attempt >= 4)
+        throw error;
+      const seconds = error.getRetryAfterSeconds();
+      const delay = seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }));
+      try {
+        await wait(delay ?? jitteredBackoffMs(attempt), undefined, { signal });
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
+      }
+    }
+  }
 }
 
 const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode === 404;
@@ -257,8 +279,8 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
     const s = sprite(name);
-    await attempt(`egress policy ${name}`, () => s.updateNetworkPolicy({ rules }));
-    const got = await attempt(`egress policy readback ${name}`, () => s.getNetworkPolicy());
+    await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
+    const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
     const norm = (d?: string) => (d ?? "").toLowerCase().replace(/\.$/, "");
     const only = got.rules?.length === 1 ? got.rules[0] : undefined;
     const bound = !!only && norm(only.domain) === norm(egressProxyHost) && only.action?.toLowerCase() === "allow";
@@ -277,7 +299,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function spriteExists(name: string): Promise<boolean> {
     try {
-      await client.getSprite(name);
+      await retrySpritesControl(() => client.getSprite(name));
       return true;
     } catch (e) {
       if (isMissing(e)) return false;
@@ -287,7 +309,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function deleteSprite(name: string): Promise<void> {
     try {
-      await client.deleteSprite(name);
+      await retrySpritesControl(() => client.deleteSprite(name));
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
@@ -333,7 +355,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   async function latestCheckpoint(name: string): Promise<Checkpoint | undefined> {
-    const list = await sprite(name).listCheckpoints();
+    const list = await retrySpritesControl(() => sprite(name).listCheckpoints());
     return list
       .filter((c) => c.id !== "Current" && !c.health)
       .sort((a, b) => b.createTime.getTime() - a.createTime.getTime())[0];
@@ -541,7 +563,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);
-      const [checked, latest] = await Promise.allSettled([sprite(name).check(), latestCheckpoint(name)]);
+      const [checked, latest] = await Promise.allSettled([
+        retrySpritesControl(() => sprite(name).check()),
+        latestCheckpoint(name),
+      ]);
       if (checked.status === "rejected" && isMissing(checked.reason)) {
         return { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false };
       }
@@ -585,7 +610,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           (e) => spritesErrorDetail(e),
         );
         if (restartFailure === undefined) return;
-        const fault = await s.check().then(
+        const fault = await retrySpritesControl(() => s.check()).then(
           (check) => (check.reason ? `check reports ${describeCheck(check)}` : undefined),
           (e) => `check failed: ${spritesErrorDetail(e)}`,
         );

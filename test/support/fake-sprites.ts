@@ -25,6 +25,11 @@ export interface SpritesCall {
   script?: string;
 }
 
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
 export interface FakeSprites {
   baseUrl: string;
   calls: SpritesCall[];
@@ -36,6 +41,7 @@ export interface FakeSprites {
   execScripts(): string[];
   stallAfterRun(name: string): void;
   fail502(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   unhealthy(name: string, reason: string): void;
   refuseDelete(status?: number): void;
@@ -172,6 +178,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   let refuseDeleteStatus: number | undefined;
   let rateLimitRetryAfter: number | undefined;
   let checkpointSeq = 0;
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const ensureDir = (name: string): string => {
     let s = sprites.get(name);
@@ -272,6 +279,11 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const fetchImpl = async (url: URL, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? "GET";
     calls.push({ method, path: url.pathname + url.search });
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return Response.json({ error: "injected", message: `injected ${next!.status}` }, { status: next!.status, headers: next!.headers });
+    }
     const one = /^\/v1\/sprites\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
     if (url.pathname === "/v1/sprites" && method === "POST") {
       if (rateLimitRetryAfter !== undefined) {
@@ -438,6 +450,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     fail502: (name) => {
       gateway502.add(name);
     },
+    failNext: (status, opts = {}) => { injected.push({ status, ...opts }); },
     refuseRestart: (name) => {
       refusedRestart.add(name);
     },
@@ -472,6 +485,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       unhealthy.clear();
       brokenReadback.clear();
       restarts.length = 0;
+      injected.length = 0;
       refuseDeleteStatus = undefined;
       rateLimitRetryAfter = undefined;
     },

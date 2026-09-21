@@ -4,7 +4,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox, processKeepaliveScript, spritesErrorDetail } from "../src/sandbox/sprites-sandbox.ts";
+import {
+  createSpritesSandbox,
+  processKeepaliveScript,
+  retrySpritesControl,
+  spritesErrorDetail,
+} from "../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
@@ -606,4 +611,47 @@ test("without a snapshot store a destroy is a single delete that tolerates a mis
   );
   fake.refuseDelete(503);
   await assert.rejects(sandbox.destroyScope!(scope), /sprites delete .*http 503/);
+});
+
+test("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
+  const h = await sandbox.provision(layers);
+  fake.failNext(429, { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.provisioned, true);
+  assert.equal(status.guestResponsive, true);
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/check")).length, 2);
+
+  const before = fake.execScripts().length;
+  fake.stallAfterRun(h.id);
+  await assert.rejects(sandbox.run(h, "echo hi"), /connection reset/);
+  assert.equal(fake.execScripts().length, before + 1);
+
+  for (let i = 1; i <= 4; i++)
+    fake.failNext(503, {
+      headers: { "retry-after": "0", "x-request-id": `req-${i}` },
+      match: (c) => c.method === "DELETE",
+    });
+  await assert.rejects(sandbox.destroyScope!(scope), /sprites delete .*injected 503/);
+});
+
+test("control retries share an elapsed-time budget across backoff and SDK requests", async () => {
+  let calls = 0;
+  await assert.rejects(
+    retrySpritesControl(async () => {
+      calls++;
+      throw new APIError("rate limited", { statusCode: 429, retryAfterHeader: 30 });
+    }, 30),
+    { name: "TimeoutError" },
+  );
+  assert.equal(calls, 1);
+  calls = 0;
+  await assert.rejects(
+    retrySpritesControl(async () => {
+      calls++;
+      if (calls === 1) throw new APIError("unavailable", { statusCode: 503, retryAfterHeader: 0 });
+      return new Promise((resolve) => setTimeout(() => resolve("late response"), 100));
+    }, 30),
+    { name: "TimeoutError" },
+  );
+  assert.equal(calls, 2);
 });
