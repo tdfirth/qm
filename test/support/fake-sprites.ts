@@ -282,7 +282,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
     if (at >= 0) {
       const [next] = injected.splice(at, 1);
-      return Response.json({ error: "injected", message: `injected ${next!.status}` }, { status: next!.status, headers: next!.headers });
+      return Response.json(
+        { error: "injected", message: `injected ${next!.status}` },
+        { status: next!.status, headers: next!.headers },
+      );
     }
     const one = /^\/v1\/sprites\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
     if (url.pathname === "/v1/sprites" && method === "POST") {
@@ -450,7 +453,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     fail502: (name) => {
       gateway502.add(name);
     },
-    failNext: (status, opts = {}) => { injected.push({ status, ...opts }); },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
+    },
     refuseRestart: (name) => {
       refusedRestart.add(name);
     },
