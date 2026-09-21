@@ -10,6 +10,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
@@ -178,6 +179,57 @@ test("materializeInbound registers a bounded image preview beside the original",
   for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
   assert.deepEqual(Buffer.concat(chunks), preview);
   assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
+});
+
+test("materializeInbound keeps the original when its optional preview stream fails", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  const { blobId } = await transfer.put(PNG);
+  const { blobId: previewBlobId } = await transfer.put(webp(64, 64));
+  const errors: unknown[] = [];
+  const failingTransfer = {
+    ...transfer,
+    open: async (id: string) =>
+      id === previewBlobId
+        ? {
+            sizeBytes: 30,
+            stream: new Readable({
+              read() {
+                this.destroy(new Error("preview read failed"));
+              },
+            }),
+          }
+        : transfer.open(id),
+  };
+  const { sandbox } = memSandbox();
+
+  const inbound = await materializeInbound(
+    sandbox,
+    HANDLE,
+    [
+      {
+        name: "shared.png",
+        mimetype: "image/png",
+        sizeBytes: PNG.length,
+        blobId,
+        previewBlobId,
+        previewMimetype: "image/webp",
+      },
+    ],
+    failingTransfer,
+    reg(store, {
+      onError: (error) => {
+        errors.push(error);
+        throw new Error("preview error report failed");
+      },
+    }),
+  );
+
+  assert.ok(inbound.metas[0]!.artifactId);
+  assert.equal(inbound.metas[0]!.previewArtifactId, undefined);
+  assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
+  assert.deepEqual(await drain(store, inbound.metas[0]!.artifactId!), PNG);
+  assert.equal(errors.length, 1);
 });
 
 test("materializeInbound omits artifactId when registration fails or is absent", async () => {

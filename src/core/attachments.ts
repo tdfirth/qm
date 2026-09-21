@@ -362,24 +362,34 @@ export async function materializeInbound(
       : undefined;
     let previewArtifactId: string | undefined;
     if (register && a.previewBlobId && a.previewMimetype === "image/webp") {
-      const preview = await transfer.open(a.previewBlobId);
-      if (preview && preview.sizeBytes <= 1_000_000) {
-        const previewBytes = await collectBlob(preview.stream);
-        const dimensions = sniffImageDimensions(previewBytes);
-        if (dimensions?.format === "webp" && dimensions.width <= 512 && dimensions.height <= 512) {
-          const previewArtifact = await registerArtifact(
-            register,
-            "in",
-            MAX_INBOUND_FILES + metas.length,
-            name,
-            a.previewMimetype,
-            previewBytes,
-            true,
-          );
-          previewArtifactId = previewArtifact?.id;
+      let preview: Awaited<ReturnType<BlobTransferStore["open"]>> = null;
+      try {
+        preview = await transfer.open(a.previewBlobId);
+        if (preview && preview.sizeBytes <= 1_000_000) {
+          const previewBytes = await collectBlob(preview.stream);
+          const dimensions = sniffImageDimensions(previewBytes);
+          if (dimensions?.format === "webp" && dimensions.width <= 512 && dimensions.height <= 512) {
+            const previewArtifact = await registerArtifact(
+              register,
+              "in",
+              MAX_INBOUND_FILES + metas.length,
+              name,
+              a.previewMimetype,
+              previewBytes,
+              true,
+            );
+            previewArtifactId = previewArtifact?.id;
+          }
+        } else {
+          preview?.stream.destroy();
         }
-      } else {
+      } catch (error) {
         preview?.stream.destroy();
+        try {
+          register.onError?.(error);
+        } catch (reportError) {
+          swallowAs("attachments: preview onError", undefined)(reportError);
+        }
       }
     }
     metas.push({
