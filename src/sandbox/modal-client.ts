@@ -75,7 +75,7 @@ export const MODAL_EXEC_GRACE_MS = 30_000;
 export const MODAL_MAX_EXEC_ARG_BYTES = 64 * 1024;
 const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
 
-export function wholeSeconds(ms: number): number {
+function wholeSeconds(ms: number): number {
   return Math.max(1000, Math.ceil(ms / 1000) * 1000);
 }
 
