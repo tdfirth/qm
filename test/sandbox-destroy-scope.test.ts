@@ -45,10 +45,14 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   const fake = installFakeSprites();
   try {
     const sandbox = createSpritesSandbox(workspace(), { token: "test", baseUrl: fake.baseUrl });
+    await sandbox.provision([{ scopeId: "scope", mountPath: "", mode: "rw" }]);
+    fake.calls.length = 0;
     fake.refuseDelete(503);
     await assert.rejects(sandbox.destroyScope!("scope"), /503/);
+    assert.equal(fake.names().length, 1);
     fake.refuseDelete();
     await sandbox.destroyScope!("scope");
+    assert.deepEqual(fake.names(), []);
     await sandbox.destroyScope!("scope");
     assert.deepEqual(
       fake.calls.map((c) => `${c.method} ${c.path}`),
