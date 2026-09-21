@@ -1,4 +1,4 @@
-import { stopBrowserErrors } from "./browser-errors.ts";
+import { reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
@@ -125,6 +125,7 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
+  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;
@@ -674,7 +675,18 @@ export function reportSigninRequired(detail: SigninRequired): void {
 }
 
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
+  const startMs = Date.now();
+  const request = input instanceof Request ? input : null;
+  const url = request?.url ?? String(input);
+  const method = init?.method ?? request?.method ?? "GET";
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch (error) {
+    reportRequestTiming(url, method, startMs, null);
+    throw error;
+  }
+  reportRequestTiming(url, method, startMs, response.status);
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();
@@ -1411,7 +1423,7 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle";
+  state: "working" | "awaiting_approval" | "idle" | "metadata";
   at: number;
 }
 

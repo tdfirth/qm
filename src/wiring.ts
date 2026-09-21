@@ -1,5 +1,7 @@
-import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
+import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
+import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -16,6 +18,8 @@ import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
+import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
+import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -488,6 +492,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -1460,6 +1465,17 @@ export function buildApp(
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => {
     void productAnalytics.responseFinished(run);
+    const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
+    const finishTiming = startTiming("queue.task", "run", startedAt);
+    let status: TimingStatus = "internal_error";
+    if (run.result?.stopped) status = "cancelled";
+    else if (run.status === "done") status = "ok";
+    finishTiming?.({
+      status,
+      endMs: run.finishedAt ?? Date.now(),
+      data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
+      measurements: { queue_wait: startedAt - run.createdAt },
+    });
   });
   const ledger = runStore.ledger;
 
@@ -1660,7 +1676,7 @@ export function buildApp(
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items");
   const loopOwnerCache = new Map<string, string>();
-  const loopItems = createLoopItemLedger(loopItemsMap, (event) => {
+  const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
       let owner = loopOwnerCache.get(event.loopId);
       if (owner === undefined) {
@@ -1669,8 +1685,17 @@ export function buildApp(
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
+  };
+  const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
+    lock: advisoryLock,
+    accepts: async (id) => {
+      const loop = await loopStore.get(id);
+      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
+    },
   });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs"));
+  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs"), (output) =>
+    publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
+  );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
@@ -1754,7 +1779,9 @@ export function buildApp(
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox"));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
-    enabled: (actorId) => featureFlags.enabled("persistent_subagents", scopeId("personal", actorId)),
+    enabled: async (actorId) =>
+      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
+      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
     sessions,
     runs,
     signals: runSignals,
@@ -2098,11 +2125,18 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock.withLock("session-tree-admission", async () => {
-      await deliverSubagentMail(
-        { sessions, runs, maxAttempts, mailbox: sessionMailbox, prepareRequest: prepareSessionRequest },
+      const settled = await deliverSubagentMail(
+        {
+          sessions,
+          runs,
+          maxAttempts,
+          mailbox: sessionMailbox,
+          prepareRequest: prepareSessionRequest,
+          delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+        },
         run,
       );
-      await runs.markReturned(run.id);
+      if (settled) await runs.markReturned(run.id);
     });
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
@@ -2197,6 +2231,10 @@ export function buildApp(
         fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
+    admittedWork,
+    crons,
+    samePerson: (a, b) => app.samePerson(a, b),
+    lock: advisoryLock,
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,
@@ -2211,7 +2249,21 @@ export function buildApp(
       sessions,
     },
   });
+  const loopIngress = createLoopIngress({
+    enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
+    sources: artifactMap<LoopIngress>("loop_ingress"),
+    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries"),
+    loops: loopStore,
+    items: loopItems,
+    outputs: loopOutputs,
+    fire: loopFire,
+    lock: advisoryLock,
+    ...(config.gmailPubSub && keychain
+      ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
+      : {}),
+  });
   const loops: LoopServiceDeps = {
+    lock: advisoryLock,
     store: loopStore,
     items: loopItems,
     outputs: loopOutputs,
@@ -2222,9 +2274,11 @@ export function buildApp(
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
+  let ingressMaintenance: Promise<void> | undefined;
   const scheduler = createScheduler({
     admittedWork,
     requireQueueStart: Boolean(config.backgroundDeploymentId),
+    lock: advisoryLock,
     crons,
     deliveries,
     idempotency,
@@ -2234,11 +2288,18 @@ export function buildApp(
     directory,
     currentScopeMembers,
     sessions,
-    fireLoop: (loopId, fireKey) => loopFire.fire(loopId, fireKey),
+    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),
     sweepAsks: async (now) => {
+      if (!ingressMaintenance)
+        ingressMaintenance = admittedWork
+          .run(() => loopIngress.maintain())
+          .catch(swallowAs("Loop ingress maintenance", undefined))
+          .finally(() => {
+            ingressMaintenance = undefined;
+          });
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
@@ -2566,6 +2627,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    loopIngress,
     admin,
     rateLimiter,
     errors,
@@ -2705,6 +2767,7 @@ export function serverDeps(
     ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    loopIngress: built.loopIngress,
     identity: built.identity,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
