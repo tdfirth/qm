@@ -848,6 +848,7 @@ export function buildApp(
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: smolmachinesBodies,
+      advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
         : {}),

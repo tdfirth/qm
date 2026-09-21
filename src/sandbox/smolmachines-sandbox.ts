@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
@@ -59,6 +60,7 @@ interface MachineExecResponse {
 }
 
 export interface StoredSmolmachinesSandbox {
+  initializationPending?: boolean;
   lastSnapshotMs?: number;
   homeDirty?: boolean;
   snapshotError?: string;
@@ -77,6 +79,7 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   egressProxyUrl?: string;
   snapshotIntervalMs?: number;
   store?: DurableMap<StoredSmolmachinesSandbox>;
+  advisoryLock?: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -99,6 +102,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
   const store = opts.store ?? createMemoryMap<StoredSmolmachinesSandbox>();
+  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const lifecycleKey = (scope: string): string => `smolmachines-provision:${prefix}:${scope}`;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
@@ -352,38 +357,50 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     }
   }
 
-  async function ensureMachine(
+  function ensureMachine(
     name: string,
     scope: string,
     onStatus?: (text: string) => void,
   ): Promise<{ coldStart: boolean }> {
-    if (idByName.has(name)) return { coldStart: false };
+    return advisoryLock.withLock(lifecycleKey(scope), () => initializeMachine(name, scope, onStatus));
+  }
+
+  async function initializeMachine(
+    name: string,
+    scope: string,
+    onStatus?: (text: string) => void,
+  ): Promise<{ coldStart: boolean }> {
+    const stored = await store.get(scope);
+    if (idByName.has(name) && !stored?.initializationPending) return { coldStart: false };
     const existing = await findMachine(name);
-    if (existing) {
+    if (existing && !stored?.initializationPending) {
       idByName.set(name, existing.id);
       if (!isRunning(existing)) await startMachine(existing.id);
       return { coldStart: false };
     }
+    await mergeStored(scope, { initializationPending: true });
     try {
-      onStatus?.("Creating the sandbox…");
+      onStatus?.("Preparing the sandbox…");
     } catch (error) {
       void error;
     }
-    const { info, created } = await createMachine(name, false);
-    idByName.set(name, info.id);
-    if (!created || !homeSnapshots) return { coldStart: created };
     try {
-      const hydrated = await homeSnapshots.hydrateHome(scope, name);
-      if (hydrated) await mergeStored(scope, { homeDirty: false });
+      const info = existing ?? (await createMachine(name, false)).info;
+      idByName.set(name, info.id);
+      if (existing && !isRunning(existing)) await startMachine(existing.id);
+      const hydrated = homeSnapshots ? await homeSnapshots.hydrateHome(scope, name) : false;
+      await mergeStored(scope, { initializationPending: undefined, ...(hydrated ? { homeDirty: false } : {}) });
       return { coldStart: !hydrated };
     } catch (e) {
+      if (idByName.has(name))
+        await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: delete after failed hydration", undefined));
+      idByName.delete(name);
       opts.onError?.({
         category: "sandbox_hydrate",
         code: "hydrate_failed",
         message: errMessage(e),
         scopeLabel: scope,
       });
-      await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: delete after failed hydration", undefined));
       throw new Error(
         `smolmachines provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`,
         {
@@ -414,7 +431,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       const { info } = await createMachine(name, true);
       idByName.set(name, info.id);
     },
-    deleteInstance: deleteMachine,
+    deleteInstance: (name) =>
+      advisoryLock.withLock(lifecycleKey(base.scopeFor(name) ?? name), () => deleteMachine(name)),
     ...(egressProxyHost ? { ensureEgress } : {}),
   });
 
@@ -498,10 +516,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
             const name = sandboxScopeName(prefix, scopeId);
-            await base.provisionQueue(scopeId, async () => {
-              await ensureMachine(name, scopeId);
-              await snapshotHome(scopeId, name);
-            });
+            await base.provisionQueue(scopeId, () =>
+              advisoryLock.withLock(lifecycleKey(scopeId), async () => {
+                await initializeMachine(name, scopeId);
+                await snapshotHome(scopeId, name);
+              }),
+            );
           },
         }
       : {}),
@@ -548,30 +568,35 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     },
 
     async destroyScope(scopeId: string): Promise<void> {
-      return base.provisionQueue(scopeId, async () => {
-        await deleteMachine(sandboxScopeName(prefix, scopeId));
-        await store.delete(scopeId);
-      });
+      return base.provisionQueue(scopeId, () =>
+        advisoryLock.withLock(lifecycleKey(scopeId), async () => {
+          await deleteMachine(sandboxScopeName(prefix, scopeId));
+          await store.delete(scopeId);
+        }),
+      );
     },
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       if (homeSnapshots && !handle.scratch && !tdOpts?.destroy) {
         const scope = base.scopeFor(handle.id) ?? "default";
-        await base.provisionQueue(scope, async () => {
-          const stored = await store.get(scope);
-          if (!tdOpts?.homeUnchanged) await mergeStored(scope, { homeDirty: true });
-          if (!snapshotDue(stored, tdOpts, snapshotIntervalMs)) return;
-          try {
-            await snapshotHome(scope, handle.id);
-          } catch (e) {
-            opts.onError?.({
-              category: "sandbox_snapshot",
-              code: "teardown_snapshot_failed",
-              message: errMessage(e),
-              scopeLabel: scope,
-            });
-          }
-        });
+        await base.provisionQueue(scope, () =>
+          advisoryLock.withLock(lifecycleKey(scope), async () => {
+            const stored = await store.get(scope);
+            if (stored?.initializationPending) return;
+            if (!tdOpts?.homeUnchanged) await mergeStored(scope, { homeDirty: true });
+            if (!snapshotDue(stored, tdOpts, snapshotIntervalMs)) return;
+            try {
+              await snapshotHome(scope, handle.id);
+            } catch (e) {
+              opts.onError?.({
+                category: "sandbox_snapshot",
+                code: "teardown_snapshot_failed",
+                message: errMessage(e),
+                scopeLabel: scope,
+              });
+            }
+          }),
+        );
       }
       return base.teardown(handle, tdOpts);
     },

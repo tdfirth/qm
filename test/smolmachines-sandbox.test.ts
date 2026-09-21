@@ -17,6 +17,9 @@ import {
 } from "./support/fake-smolmachines.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 let fake: FakeSmolmachines;
@@ -415,4 +418,69 @@ test("read and write refuse parent path segments before any provider request", a
     fake.calls.filter((c) => c.path.includes("/files")),
     [],
   );
+});
+for (const lostResponse of ["disconnect", "503"] as const) {
+  test(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
+    const snapshots = createMemorySnapshotStore();
+    const store = createMemoryMap<StoredSmolmachinesSandbox>();
+    const advisoryLock = createMemoryAdvisoryLock();
+    const first = make({ snapshots, store, advisoryLock });
+    const original = await first.provision(layers);
+    await first.writeFile(original, "notes.txt", "preserve me");
+    await first.teardown(original);
+    fake.deleteBehindCore(original.id);
+    let inject = true;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const response = await fake.fetchImpl(input, init);
+      if (inject && init?.method === "POST" && new URL(String(input)).pathname === "/v1/machines") {
+        inject = false;
+        if (lostResponse === "disconnect") throw new TypeError("response lost after create");
+        return new Response("response lost after create", { status: 503 });
+      }
+      return response;
+    };
+    const replacing = make({ snapshots, store, advisoryLock, fetchImpl });
+    await assert.rejects(replacing.provision(layers), /response lost after create/);
+    assert.equal((await store.get(scope))?.initializationPending, true);
+    const next = make({ snapshots, store, advisoryLock });
+    const restored = await next.provision(layers);
+    assert.equal(await next.readFile(restored, "notes.txt"), "preserve me");
+    assert.equal((await store.get(scope))?.initializationPending, undefined);
+    assert.equal(fake.names().length, 1);
+  });
+}
+
+test("destructive teardown waits for another core's lifecycle lock", async () => {
+  const shared = createMemoryAdvisoryLock();
+  const requested = Promise.withResolvers<void>();
+  let destroying = false;
+  const adapter = make({
+    advisoryLock: {
+      withLock: <T>(key: string, run: () => Promise<T>) => {
+        if (destroying) {
+          assert.equal(key, `smolmachines-provision:qmt:${scope}`);
+          requested.resolve();
+        }
+        return shared.withLock(key, run);
+      },
+    },
+  });
+  const handle = await adapter.provision(layers);
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const holding = shared.withLock(`smolmachines-provision:qmt:${scope}`, async () => {
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  destroying = true;
+  const teardown = adapter.teardown(handle, { destroy: true });
+  try {
+    await requested.promise;
+    assert.ok(fake.machine(handle.id));
+  } finally {
+    release.resolve();
+  }
+  await Promise.all([holding, teardown]);
+  assert.equal(fake.machine(handle.id), null);
 });
