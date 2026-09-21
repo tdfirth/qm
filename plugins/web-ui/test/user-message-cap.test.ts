@@ -56,6 +56,7 @@ test("local image previews are bounded before they reach an image element", () =
   assert.match(preview, /canvas\.height = height/);
   assert.match(preview, /preview\.size > IMAGE_PREVIEW_BYTES/);
   assert.match(staged, /attachment\.preview\?\.startsWith\("data:image\/"\)/);
+  assert.match(staged, /icon\(X, 11\)/);
   assert.doesNotMatch(staged, /attachment\.content/);
   assert.match(
     composer,

@@ -77,11 +77,11 @@ test("two sent user images form a compact side-by-side pair", () => {
   assert.match(images, /object-fit:\s*cover;/);
 });
 
-test("image remove actions follow the sidebar conversation action styling", () => {
+test("image remove actions stay compact", () => {
   const imageAction = shellCss.match(/\.image-preview \.chip-x \{[^}]+\}/)?.[0] ?? "";
-  assert.match(imageAction, /width:\s*26px;/);
-  assert.match(imageAction, /height:\s*26px;/);
-  assert.match(imageAction, /border-radius:\s*6px;/);
+  assert.match(imageAction, /width:\s*20px;/);
+  assert.match(imageAction, /height:\s*20px;/);
+  assert.match(imageAction, /border-radius:\s*5px;/);
   assert.match(imageAction, /background:\s*color-mix\(in srgb, var\(--background\) 44%, transparent\);/);
   assert.match(imageAction, /color:\s*var\(--muted-foreground\);/);
   assert.match(imageAction, /opacity 0\.12s ease,/);
@@ -92,7 +92,7 @@ test("image remove actions follow the sidebar conversation action styling", () =
     /\.image-preview \.chip-x:hover,\s*\.image-preview \.chip-x:focus-visible \{\s*background:\s*var\(--secondary\);\s*color:\s*var\(--foreground\);/,
   );
   assert.match(shellCss, /\.image-preview:hover \.chip-x,\s*\.image-preview:focus-within \.chip-x \{\s*opacity:\s*1;/);
-  assert.match(shellCss, /@media \(hover: none\) \{\s*\.image-preview \.chip-x \{\s*width:\s*32px;\s*height:\s*32px;/);
+  assert.match(shellCss, /@media \(hover: none\) \{\s*\.image-preview \.chip-x \{\s*width:\s*24px;\s*height:\s*24px;/);
 });
 
 test("colored session actions keep their row hue at rest and on hover", () => {

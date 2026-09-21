@@ -477,7 +477,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${showTooltip ? tip("Remove") : nothing}
         @click=${() => removeAttachment(attachment.id, agent)}
       >
-        ${icon(X, 13)}
+        ${icon(X, 11)}
       </button>
     `;
     if (browserRenderableImage(attachment.mimeType) && attachment.preview?.startsWith("data:image/")) {
