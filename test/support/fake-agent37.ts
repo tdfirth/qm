@@ -140,6 +140,7 @@ export function installFakeAgent37(): FakeAgent37 {
   };
 
   const guestPath = (m: FakeInstance, p: string): string => {
+    if (p === m.home || p.startsWith(`${m.home}/`)) return p;
     if (p.startsWith("~/")) return join(m.home, p.slice(2));
     if (p === "/home/node" || p.startsWith("/home/node/")) return join(m.home, p.slice("/home/node".length));
     if (p.startsWith("/tmp/")) return join(m.home, "tmp", p.slice("/tmp/".length));
