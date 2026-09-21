@@ -246,7 +246,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
           app,
           tmp: join(root, `${spec.name}-tmp`),
           mounts,
-          volumeMounts: { ...(spec.volume_mounts ?? {}) },
+          volumeMounts: { ...spec.volume_mounts },
           host,
           startedAt: new Date().toISOString(),
           logs: ["sandbox started"],
