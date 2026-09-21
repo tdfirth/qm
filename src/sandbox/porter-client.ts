@@ -23,9 +23,9 @@ const CREATE_DEADLINE_MS = 180_000;
 const CREATE_POLL_MS = 500;
 const RETIRE_DEADLINE_MS = 120_000;
 const RETIRE_POLL_MS = 500;
-export const PORTER_CLIENT_TIMEOUT_MS = 120_000;
-export const PORTER_VOLUME_REQUEST_TIMEOUT_MS = 60_000;
-export const PORTER_VOLUME_READ_CHUNK = 8 * 1024 * 1024;
+const PORTER_CLIENT_TIMEOUT_MS = 120_000;
+const PORTER_VOLUME_REQUEST_TIMEOUT_MS = 60_000;
+const PORTER_VOLUME_READ_CHUNK = 8 * 1024 * 1024;
 
 export type PorterSandboxStatus = Pick<StatusResponse, "name"> &
   Partial<Pick<StatusResponse, "host" | "phase" | "started_at" | "finished_at" | "exit_code" | "volume_mounts">>;
@@ -39,12 +39,12 @@ export interface PorterSandboxLike {
   logs(options?: { limit?: number }): Promise<Array<Pick<LogLine, "line"> & Partial<LogLine>>>;
 }
 
-export interface PorterVolumeLike {
+interface PorterVolumeLike {
   readonly id: string;
   readonly attachedTo: string[];
 }
 
-export type PorterSnapshot = Pick<Snapshot, "id" | "status"> & Partial<Snapshot>;
+type PorterSnapshot = Pick<Snapshot, "id" | "status"> & Partial<Snapshot>;
 
 export interface PorterClientLike {
   sandboxes: {
@@ -268,7 +268,7 @@ export interface PorterVolumeMount {
   mountPath: string;
 }
 
-export const porterVolumeRelPath = (mount: PorterVolumeMount, absPath: string): string | null => {
+const porterVolumeRelPath = (mount: PorterVolumeMount, absPath: string): string | null => {
   const root = mount.mountPath.replace(/\/+$/, "");
   if (absPath === root) return "/";
   return absPath.startsWith(`${root}/`) ? absPath.slice(root.length) : null;
