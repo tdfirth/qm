@@ -2164,6 +2164,29 @@ qm-markdown .tok-in {
   height: 100%;
   object-fit: cover;
 }
+.image-preview-loading {
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--muted-foreground) 10%, var(--background));
+}
+.image-preview-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--muted-foreground) 24%, transparent);
+  border-top-color: var(--muted-foreground);
+  border-radius: 50%;
+  animation: image-preview-spin 0.7s linear infinite;
+}
+@keyframes image-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-preview-spinner {
+    animation: none;
+  }
+}
 .image-preview .chip-x {
   position: absolute;
   top: 3px;

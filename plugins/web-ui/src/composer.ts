@@ -253,6 +253,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     attachments: [] as Attachment[],
     error: "",
     processingFiles: false,
+    preparingImages: 0,
     dragging: false,
     openMenu: null as ComposerMenu | null,
     menuQuery: "",
@@ -328,6 +329,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     pastedTextIds.clear();
     composerState.error = "";
     composerState.processingFiles = false;
+    composerState.preparingImages = 0;
     composerState.openMenu = null;
     slashActiveIndex = 0;
     composerState.slashDismissed = false;
@@ -549,7 +551,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
     let composerNotice: TemplateResult | typeof nothing = nothing;
-    if (composerState.processingFiles) {
+    if (composerState.processingFiles && !composerState.preparingImages) {
       composerNotice = html`<div class="composer-note">Preparing files...</div>`;
     } else if (!approvalPauses.length && runtimePending) {
       composerNotice = composerState.error
@@ -597,10 +599,20 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             : nothing
         }
         ${
-          composerState.attachments.length
+          composerState.attachments.length || composerState.preparingImages
             ? html`
                 <div class="attachment-strip">
                   ${composerState.attachments.map((attachment) => stagedAttachment(attachment, agent))}
+                  ${Array.from(
+                    { length: composerState.preparingImages },
+                    () =>
+                      html`<span
+                        class="image-preview image-preview-loading"
+                        role="status"
+                        aria-label="Preparing image preview"
+                        ><span class="image-preview-spinner" aria-hidden="true"></span
+                      ></span>`,
+                  )}
                 </div>
               `
             : nothing
@@ -2392,10 +2404,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       ctx.chat.drawActiveChat(agent);
       return;
     }
+    const plan = planAdmission(files, folders.length);
     composerState.processingFiles = true;
+    composerState.preparingImages = plan.files.filter((file) => browserRenderableImage(file.type)).length;
     composerState.error = "";
     ctx.chat.drawActiveChat(agent);
-    const plan = planAdmission(files, folders.length);
     try {
       const zipped: File[] = [];
       for (const folder of folders.slice(0, plan.folders)) zipped.push(await folderToZipFile(folder));
@@ -2411,6 +2424,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       composerState.error = combineNote(plan.note ?? "", message);
     } finally {
       composerState.processingFiles = false;
+      composerState.preparingImages = 0;
       ctx.chat.drawActiveChat(agent);
     }
   }

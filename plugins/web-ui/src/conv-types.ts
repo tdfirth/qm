@@ -114,6 +114,7 @@ interface ComposerState {
   attachments: Attachment[];
   error: string;
   processingFiles: boolean;
+  preparingImages: number;
   dragging: boolean;
   openMenu: ComposerMenu | null;
   slashDismissed: boolean;

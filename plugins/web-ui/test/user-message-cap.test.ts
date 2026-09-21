@@ -57,6 +57,14 @@ test("local image previews are bounded before they reach an image element", () =
   assert.match(preview, /preview\.size > IMAGE_PREVIEW_BYTES/);
   assert.match(staged, /attachment\.preview\?\.startsWith\("data:image\/"\)/);
   assert.doesNotMatch(staged, /attachment\.content/);
+  assert.match(
+    composer,
+    /composerState\.preparingImages = plan\.files\.filter\(\(file\) => browserRenderableImage\(file\.type\)\)\.length;/,
+  );
+  assert.match(
+    composer,
+    /class="image-preview image-preview-loading"\s*role="status"\s*aria-label="Preparing image preview"/,
+  );
   assert.match(composer, /bytes\[0\] === 0x89/);
   assert.match(composer, /signature\(0, 4\) === "RIFF"/);
 });

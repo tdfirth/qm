@@ -42,6 +42,18 @@ test("composer image previews are 25% larger", () => {
   const preview = shellCss.match(/\.image-preview \{[^}]+\}/)?.[0] ?? "";
   assert.match(preview, /width:\s*70px;\s*height:\s*70px;/);
   assert.doesNotMatch(preview, /border:/);
+  assert.match(
+    shellCss,
+    /\.image-preview-loading \{\s*align-items:\s*center;\s*justify-content:\s*center;\s*background:\s*color-mix\(in srgb, var\(--muted-foreground\) 10%, var\(--background\)\);/,
+  );
+  assert.match(
+    shellCss,
+    /\.image-preview-spinner \{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*animation:\s*image-preview-spin 0\.7s linear infinite;/,
+  );
+  assert.match(
+    shellCss,
+    /@media \(prefers-reduced-motion: reduce\) \{\s*\.image-preview-spinner \{\s*animation:\s*none;/,
+  );
 });
 
 test("sent user images have a passive medium presentation", () => {

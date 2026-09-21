@@ -206,6 +206,17 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     assert.equal(host.querySelector(".attachment-strip .image-preview"), null);
     assert.equal(host.querySelector(".attachment-strip .file-chip span")?.textContent, "original.png");
     composer!.state.attachments = [];
+    composer!.state.preparingImages = 2;
+    composer!.state.processingFiles = true;
+    draw();
+    const placeholders = host.querySelectorAll(
+      '.image-preview.image-preview-loading[aria-label="Preparing image preview"]',
+    );
+    assert.equal(placeholders.length, 2);
+    assert.equal(host.querySelectorAll(".image-preview-spinner").length, 2);
+    assert.equal(host.querySelector(".composer-note"), null);
+    composer!.state.preparingImages = 0;
+    composer!.state.processingFiles = false;
     stopping = false;
     composer!.state.draft = "Resume sending";
     draw();
