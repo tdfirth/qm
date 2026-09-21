@@ -30,6 +30,13 @@ test("the session jump hotkey is registered at boot", () => {
   assert.match(main, /registerSessionJumpHotkeys\(\)/);
 });
 
+test("stale dynamic modules reload the current app version", () => {
+  assert.match(
+    main,
+    /window\.addEventListener\("vite:preloadError", \(event\) => \{\s*event\.preventDefault\(\);\s*window\.location\.reload\(\);/,
+  );
+});
+
 test("sidebar session rows expose the anchor the hotkey targets", () => {
   const row = sessions.match(/function sessionRow\([^]*?\n\}/)?.[0] ?? "";
   assert.match(row, /class="session"/, "sessionRow renders an a.session anchor");

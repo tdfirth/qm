@@ -14,6 +14,11 @@ import {
 } from "./sessions";
 import { isPhone, onPhoneChange } from "./viewport";
 
+window.addEventListener("vite:preloadError", (event) => {
+  event.preventDefault();
+  window.location.reload();
+});
+
 function closeComposerMenus(keepOpenWithin: Element | null): boolean {
   let changed = false;
   for (const conv of allConversations()) {
