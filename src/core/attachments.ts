@@ -365,8 +365,9 @@ export async function materializeInbound(
       ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
       : undefined;
     let previewArtifactId: string | undefined;
-    const previewFormat = PREVIEW_FORMAT_BY_MIME.get(a.previewMimetype ?? "");
-    if (register && a.previewBlobId && previewFormat) {
+    const previewMimetype = a.previewMimetype;
+    const previewFormat = PREVIEW_FORMAT_BY_MIME.get(previewMimetype ?? "");
+    if (register && a.previewBlobId && previewMimetype && previewFormat) {
       let preview: Awaited<ReturnType<BlobTransferStore["open"]>> = null;
       try {
         preview = await transfer.open(a.previewBlobId);
@@ -379,7 +380,7 @@ export async function materializeInbound(
               "in",
               MAX_INBOUND_FILES + metas.length,
               name,
-              a.previewMimetype,
+              previewMimetype,
               previewBytes,
               true,
             );
