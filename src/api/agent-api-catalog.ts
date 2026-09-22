@@ -459,9 +459,10 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
-      (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on)$/.test(p)),
+      (m === "POST" &&
+        /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites show the app inside their own page (an iframe); list every frame between the app and the browser tab, and pass `[]` to forbid embedding again. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
     routes: [
       {
         method: "GET",
@@ -519,6 +520,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id/always-on",
         summary:
           "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
+      },
+      {
+        method: "POST",
+        path: "/v1/deployments/:id/embed-ancestors",
+        summary:
+          "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
       },
       {
         method: "POST",

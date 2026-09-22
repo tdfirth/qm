@@ -1,3 +1,4 @@
+import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -60,6 +61,7 @@ export interface DeployOrUpdateInput {
   share?: Array<{ scope: ScopeId; permission: Permission }>;
   createdInScope?: ScopeId;
   alwaysOn?: boolean;
+  embedAncestors?: string[];
   defaultAudience?: { contextScopeId: ScopeId; granteeScopeIds: ScopeId[]; snapshotAt: number; force?: boolean };
 }
 
@@ -79,6 +81,7 @@ export interface DeployService {
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
+  setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
 
   keepAlwaysOnWarm(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
@@ -538,6 +541,24 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async setDeploymentEmbedAncestors(id, embedAncestors) {
+      const ancestors = parseEmbedAncestors(embedAncestors);
+      if (!ancestors) throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
+      return withDeployLock(id, async () => {
+        const d = await deps.deployStore.get(id);
+        if (!d) throw new Error(`unknown deployment: ${id}`);
+        await deps.deployStore.setEmbedAncestors(id, ancestors);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: d.createdBy,
+          action: "deploy_embed_ancestors",
+          resource: id,
+          scopeLabel: d.ownerScopeId,
+        });
+        return (await deps.deployStore.get(id))!;
+      });
+    },
+
     async keepAlwaysOnWarm() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let warmed = 0;
@@ -641,6 +662,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
+      if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
+        throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 
       if (input.renameFrom !== undefined) {
         if (input.name === undefined) throw new Error("rename requires a target name");
@@ -672,6 +695,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           if (input.defaultAudience)
             await reconcileDefaultAudience((await deps.deployStore.get(existing.id))!, input.defaultAudience, false);
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
+        if (input.embedAncestors !== undefined)
+          await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -687,6 +712,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           input.rollbackTo,
           input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : undefined,
         );
+        if (input.embedAncestors !== undefined)
+          await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -730,6 +757,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       if (input.defaultAudience)
         await reconcileDefaultAudience((await deps.deployStore.get(d.id))!, input.defaultAudience, isCreate);
+      if (input.embedAncestors !== undefined) await this.setDeploymentEmbedAncestors(d.id, input.embedAncestors);
       if (input.share?.length) await issueShares((await deps.deployStore.get(d.id))!, createdBy, input.share);
       return (await deps.deployStore.get(d.id))!;
     },

@@ -110,10 +110,17 @@ export interface CookieOpts {
   maxAge?: number;
   secure: boolean;
   domain?: string;
+  sameSite?: "Lax" | "None";
 }
 
 export function setCookie(name: string, value: string, opts: CookieOpts): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Lax", `Path=${opts.path ?? "/"}`];
+  const sameSite = opts.sameSite === "None" && opts.secure ? "None" : "Lax";
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "HttpOnly",
+    `SameSite=${sameSite}`,
+    `Path=${opts.path ?? "/"}`,
+  ];
   if (opts.domain) parts.push(`Domain=${opts.domain}`);
   if (opts.secure) parts.push("Secure");
   if (opts.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);

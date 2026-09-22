@@ -174,6 +174,15 @@ test("cookie helpers set HttpOnly/SameSite/Path and Secure only when asked", () 
   assert.match(clearCookie("portal_session", "/", true), /Max-Age=0/);
 });
 
+test("a cross-site cookie is only emitted when it is also Secure", () => {
+  const crossSite = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: true, sameSite: "None" });
+  assert.match(crossSite, /SameSite=None/);
+  assert.match(crossSite, /Secure/);
+  const insecure = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: false, sameSite: "None" });
+  assert.match(insecure, /SameSite=Lax/);
+  assert.ok(!insecure.includes("Secure"));
+});
+
 test("readCookie extracts a named cookie and survives other pairs", () => {
   const header = "a=1; portal_session=abc.def; webuiuser=EVIL";
   assert.equal(readCookie(header, "portal_session"), "abc.def");

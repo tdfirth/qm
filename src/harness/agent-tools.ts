@@ -1125,7 +1125,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "most recent writes). The rest of the disk is reset from source on every relaunch. By default " +
       "an app sleeps when idle and cold-starts on the next visit; set `alwaysOn: true` to keep it " +
       "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
-      "`alwaysOn: false` to turn it back off.",
+      "`alwaysOn: false` to turn it back off. An app cannot be shown inside another site's page " +
+      "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
+      "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
       audience: Type.Optional(
         Type.Array(
@@ -1174,6 +1176,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
         }),
       ),
+      embedAncestors: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
+        }),
+      ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1189,6 +1197,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
+        const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
@@ -1204,7 +1213,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.audience ? { audience: r.audience } : {}),
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
-          text(`Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${dataNote}`),
+          text(
+            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${embedNote}${dataNote}`,
+          ),
         );
       } catch (e) {
         const msg = errMessage(e);

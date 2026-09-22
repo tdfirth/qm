@@ -86,6 +86,7 @@ export interface PublishInput {
   env?: Record<string, string>;
   rollbackTo?: number;
   alwaysOn?: boolean;
+  embedAncestors?: string[];
   share?: Array<{ scope: ScopeId; permission: Permission }>;
 }
 
@@ -106,6 +107,7 @@ interface PublishResult {
   audience?: PublishAudienceDescriptor;
   dataDir?: string;
   alwaysOn?: boolean;
+  embedAncestors?: string[];
 }
 
 export class NeedsApproval extends Error {
@@ -1063,6 +1065,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(Object.keys(authEnv).length ? { stampEnv: authEnv } : {}),
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+          ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
           ...(doReconcile
             ? {
                 defaultAudience: {
@@ -1096,6 +1099,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           audience,
           ...(dataDir ? { dataDir } : {}),
           ...(d.alwaysOn ? { alwaysOn: true } : {}),
+          ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
         };
       });
     },
