@@ -287,7 +287,7 @@ import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts"
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
-import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
+import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
@@ -481,6 +481,7 @@ export interface BuiltApp {
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
+  browserModelGateway?: ModelGatewayTransportConfig;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1882,6 +1883,7 @@ export function buildApp(
     crons,
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
+    browserModelGateway: gatewayTransport,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     ...(config.sharedOwnerAuthIsolation ? { sharedOwnerAuthIsolation: true } : {}),
     directory,
@@ -2621,6 +2623,7 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    browserModelGateway: gatewayTransport,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -2708,6 +2711,7 @@ export function serverDeps(
   const configuredModel = configuredModelForHarness(config, config.harness);
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
+    browserModelGateway: built.browserModelGateway,
     production: config.production,
     ...(built.backgroundOwnership
       ? {
