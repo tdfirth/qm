@@ -1,6 +1,6 @@
 const HOST_LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
 const EMBED_ANCESTOR = new RegExp(`^https://(?:\\*\\.)?(?:${HOST_LABEL}\\.)+[a-z](?:[a-z0-9-]*[a-z0-9])?$`);
-export const MAX_EMBED_ANCESTORS = 16;
+const MAX_EMBED_ANCESTORS = 16;
 
 export const EMBED_ANCESTORS_HINT = `array of up to ${MAX_EMBED_ANCESTORS} https origins, e.g. https://tools.example.com or https://*.example.com`;
 
