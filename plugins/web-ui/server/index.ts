@@ -2270,6 +2270,24 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/deployments/:id/embed-ancestors",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      const p = await readJson<{ embedAncestors?: unknown }>(req, res, false);
+      if (!p) return;
+      const embedAncestors = Array.isArray(p.embedAncestors) ? p.embedAncestors : [];
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(id)}/embed-ancestors`,
+        JSON.stringify({ embedAncestors }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/deployments/:id/archive",
     handle: async (c) => {
       const { res, user } = c;

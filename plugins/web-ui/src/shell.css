@@ -7505,6 +7505,63 @@ a.connector-widget:focus-visible {
   justify-content: flex-end;
   gap: 5px;
 }
+.deploy-embed-origins {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  min-width: 0;
+}
+.deploy-embed-origins code {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.deploy-embed-empty {
+  color: var(--muted-foreground);
+}
+.deploy-embed-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.deploy-embed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.deploy-embed-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.deploy-embed-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+.deploy-embed-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.deploy-embed-actions .spacer {
+  flex: 1;
+}
+.deploy-embed-hint {
+  font-size: 12px;
+}
+.deploy-embed-hint code {
+  font-size: 11px;
+}
+
 .deploy-edit-form label {
   min-width: 0;
 }
