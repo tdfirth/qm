@@ -366,6 +366,7 @@ export function createTurnMethods(
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
+        ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
@@ -789,6 +790,17 @@ export function createTurnMethods(
       if (signal.kind === "abort") {
         const accepted = await stopRunTree(run);
         return accepted ? { accepted: true } : { accepted: false, reason: "terminal" };
+      }
+      if (signal.kind === "client_result") {
+        if (viewer && !samePerson(run.request.actor.id, viewer)) return { accepted: false, reason: "not_found" };
+        if (!run.request.clientTools?.length) return { accepted: false, reason: "no_client_tools" };
+        const sent = await deps.signals.send(runId, {
+          kind: "client_result",
+          callId: signal.callId,
+          result: signal.result,
+          dedupeKey: `client:${runId}:${signal.callId}`,
+        });
+        return sent ? { accepted: true } : { accepted: false, reason: "duplicate" };
       }
       if (signal.queuedRunId) {
         const queued = await deps.runs.get(signal.queuedRunId);

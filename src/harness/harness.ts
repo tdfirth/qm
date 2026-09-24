@@ -1,6 +1,14 @@
 import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
-import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry, TurnRequest } from "../types.ts";
+import type {
+  AttachmentMeta,
+  ClientToolDeclaration,
+  ConversationTurn,
+  ScopeId,
+  Session,
+  SessionEntry,
+  TurnRequest,
+} from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type {
   GapPhases,
@@ -114,6 +122,7 @@ export interface HarnessTurnInput {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  clientTools?: readonly ClientToolDeclaration[];
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;

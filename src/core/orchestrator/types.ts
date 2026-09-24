@@ -46,6 +46,7 @@ import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { MetricsSink } from "../../admin/metrics-sink.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
+import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
@@ -166,6 +167,7 @@ export interface OrchestratorDeps {
   errors?: ErrorLog;
   metrics?: MetricsSink;
   ledger?: ToolLedger;
+  signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;

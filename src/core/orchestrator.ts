@@ -2667,6 +2667,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
           ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
           ...(deps.ledger ? { ledger: deps.ledger } : {}),
+          ...(deps.signals ? { signals: deps.signals } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
           attempt: input.attempt ?? 1,
           ...(backgroundBroker ? { backgroundBroker } : {}),
@@ -3401,6 +3402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
             delegateWork,
+            ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined

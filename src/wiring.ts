@@ -1914,6 +1914,7 @@ export function buildApp(
     errors,
     metrics,
     ledger,
+    signals: runSignals,
     turnStream,
     runActivity,
     runs,

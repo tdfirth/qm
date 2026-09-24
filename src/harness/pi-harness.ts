@@ -38,7 +38,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "ultracode",
   "auto",
 ]);
-import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ClientToolDeclaration, ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type {
   GapPhase,
   GapPhases,
@@ -1554,6 +1554,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     turnProviderKeys?: ProviderKeys,
     sessionTools = false,
     delegateWork = false,
+    clientTools?: readonly ClientToolDeclaration[],
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1616,6 +1617,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(commandCredentialHandles?.length ? { commandCredentialHandles } : {}),
           ...(surfaceTools ? { surfaceTools: true } : {}),
           ...(surfaceName ? { surfaceName } : {}),
+          ...(clientTools?.length ? { clientTools } : {}),
           ...(readOnly ? { readOnly: true } : {}),
           ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
@@ -1789,6 +1791,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.providerKeys,
           Boolean(turn.tools.sessionSyscalls),
           turn.delegateWork,
+          turn.clientTools,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

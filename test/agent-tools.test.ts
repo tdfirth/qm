@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import type { EntryType, SessionEntry } from "../src/types.ts";
+import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
@@ -356,6 +357,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     },
     async callMcpTool() {
       return "";
+    },
+    async awaitClientResult() {
+      return "timeout" as const;
     },
   };
 }
@@ -3598,4 +3602,100 @@ test("sandbox call traces preserve purpose across execution, management, process
   }
   assert.equal(calls.length, 5);
   assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
+});
+
+const clientTool = (name: string, timeoutMs?: number): ClientToolDeclaration => ({
+  name,
+  description: `Page tool ${name}`,
+  inputSchema: { type: "object", properties: { note: { type: "string" } } },
+  ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+});
+
+test("declared client tools follow qm's own tools, in name order whatever the declaration order", () => {
+  const core = createAgentTools({ current: fakeToolContext() }).map((t) => t.name);
+  const names = (declared: ClientToolDeclaration[]) =>
+    createAgentTools({ current: fakeToolContext() }, { clientTools: declared }).map((t) => t.name);
+  const forward = names([clientTool("ui__get_selection"), clientTool("ui__highlight_rows")]);
+  const reversed = names([clientTool("ui__highlight_rows"), clientTool("ui__get_selection")]);
+  assert.deepEqual(forward, [...core, "ui__get_selection", "ui__highlight_rows"]);
+  assert.deepEqual(reversed, forward, "the tools array is stable from one turn to the next");
+});
+
+function clientToolRef(store = createMemoryRunSignalStore()) {
+  const emitted: Emitted[] = [];
+  const cancel = new AbortController();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      awaitClientResult: (callId, timeoutMs, signal) =>
+        waitForClientResult(store, "run-1", callId, { timeoutMs, ...(signal ? { signal } : {}) }),
+    },
+    abortSignal: cancel.signal,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  return { store, emitted, cancel, ref };
+}
+
+test("a client tool records the call, waits for the page, and returns its answer as screened external data", async () => {
+  const { store, emitted, ref } = clientToolRef();
+  const screened: Array<{ tool: string; provenance: string; source?: string }> = [];
+  ref.screenToolResult = async ({ tool, provenance, source }) => {
+    screened.push({ tool, provenance, ...(source ? { source } : {}) });
+    return { outcome: "allow" };
+  };
+  const tool = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection")] }).find(
+    (t) => t.name === "ui__get_selection",
+  );
+  const pending = call(tool, { note: "hi" }) as Promise<{ content: Array<{ text: string }>; details: unknown }>;
+  await new Promise((r) => setTimeout(r, 10));
+  await store.send("run-1", {
+    kind: "client_result",
+    callId: "t",
+    result: { content: "rows 3-5 selected", structured: { rows: [3, 4, 5] } },
+  });
+  const ret = await pending;
+  assert.equal(ret.content[0]?.text, "rows 3-5 selected");
+  assert.deepEqual(ret.details, { structured: { rows: [3, 4, 5] } });
+  const toolCall = emitted.find((e) => e.type === "tool_call")!.payload;
+  assert.deepEqual(toolCall, { tool: "ui__get_selection", client: true, args: { note: "hi" }, callId: "t" });
+  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(toolResult.isError, false);
+  assert.equal(toolResult.result, "rows 3-5 selected");
+  assert.deepEqual(screened, [{ tool: "ui__get_selection", provenance: "external", source: "client page" }]);
+});
+
+test("a client tool passes the page's isError through to the model", async () => {
+  const { store, emitted, ref } = clientToolRef();
+  await store.send("run-1", {
+    kind: "client_result",
+    callId: "t",
+    result: { content: "no rows match", isError: true },
+  });
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__highlight_rows")] }).slice(-1);
+  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+  assert.equal(ret.content[0]?.text, "no rows match");
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.isError, true);
+});
+
+test("a client tool times out with an error the model can act on", async () => {
+  const { emitted, ref } = clientToolRef();
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
+  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+  assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
+  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(toolResult.isError, true);
+  assert.equal(toolResult.timedOut, true);
+});
+
+test("a client tool stops waiting when the turn is cancelled", async () => {
+  const { emitted, cancel, ref } = clientToolRef();
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
+  const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
+  cancel.abort();
+  const ret = await pending;
+  assert.match(ret.content[0]?.text ?? "", /cancelled/);
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
 });

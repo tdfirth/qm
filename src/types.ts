@@ -611,6 +611,19 @@ export type TurnOrigin =
     }
   | { kind: "direct" };
 
+export interface ClientToolDeclaration {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
+export interface ClientToolResult {
+  content: string;
+  structured?: unknown;
+  isError?: boolean;
+}
+
 export interface TurnRequest {
   sessionSenderId?: string;
   privateSessionMessage?: true;
@@ -672,6 +685,7 @@ export interface TurnRequest {
   idempotencyKey?: string;
   redeliveryKey?: string;
   async?: boolean;
+  clientTools?: ClientToolDeclaration[];
 }
 
 export interface ActorAssertion {

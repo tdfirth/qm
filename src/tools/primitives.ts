@@ -14,6 +14,7 @@ import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerExport } from "../sandbox/sandbox.ts";
 import type {
   ApprovalGrantModes,
+  ClientToolResult,
   CommandPolicy,
   CommandRule,
   ConversationKind,
@@ -40,6 +41,7 @@ import type {
 } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
+import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type {
   BackgroundExecBroker,
   BackgroundStartResult,
@@ -237,6 +239,11 @@ export interface ToolContext extends SurfaceToolDeps {
   historyOpen(seq: number): Promise<string | null>;
   mcpToolDefs(): McpToolDescriptor[];
   callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
+  awaitClientResult(
+    callId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<ClientToolResult | "timeout" | "cancelled">;
   backgroundStart(command: string, opts?: { ttlSeconds?: number; sandboxId?: string }): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
@@ -499,6 +506,7 @@ export interface ToolContextDeps {
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   ledger?: ToolLedger;
+  signals?: RunSignalStore;
   runId?: string;
   attempt?: number;
   backgroundBroker?: BackgroundExecBroker;
@@ -1232,6 +1240,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.call(name, args, deps.createdBy);
+    },
+
+    async awaitClientResult(callId, timeoutMs, signal) {
+      if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
+      return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });
     },
 
     async backgroundStart(
