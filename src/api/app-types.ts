@@ -304,6 +304,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
+  getRunToolEntries(runId: string, viewer?: string, afterSeq?: number): Promise<SessionEntry[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
