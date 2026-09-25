@@ -28,6 +28,7 @@ interface HarnessOptions {
   holdTranscript?: boolean;
   holdApprovals?: boolean;
   listSessions?: unknown[];
+  contexts?: unknown[];
   entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
@@ -166,7 +167,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       await sessionsHeld;
       return Response.json({ sessions: opts.listSessions ?? [] });
     }
-    return Response.json({ contexts: [], items: [], crons: [] });
+    return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };
 
   const globals = {

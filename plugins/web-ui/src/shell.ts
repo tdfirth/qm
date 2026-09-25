@@ -12,7 +12,6 @@ import {
   Clock,
   Files,
   Folder,
-  Ghost,
   House,
   Inbox as InboxGlyph,
   KeyRound,
@@ -80,7 +79,6 @@ import {
   revealSessionSurface,
   startNewChatInLastScope,
   startNewChat,
-  startNewIncognitoChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -642,18 +640,6 @@ export function renderSidebarTop(): void {
           hideTooltip();
           startNewChatInLastScope();
         })}
-        <button
-          class="new-incognito-btn"
-          type="button"
-          aria-label="New incognito session"
-          ${tip("New incognito session")}
-          @click=${() => {
-            hideTooltip();
-            startNewIncognitoChat();
-          }}
-        >
-          ${icon(Ghost, 16)}
-        </button>
       </div>
       ${sessionSelectionBar() ?? nothing}
     `,

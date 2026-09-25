@@ -4,7 +4,7 @@ import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
 
 interface IncognitoConversation {
   state: { sessionId: string | null; threadRef: string | null; incognito: boolean };
@@ -53,32 +53,26 @@ async function until(check: () => boolean, message: string): Promise<void> {
   assert.ok(check(), message);
 }
 
-function newChatNav(): string {
-  const at = shell.indexOf('<div class="nav new-chat-nav">');
-  assert.ok(at >= 0, "the new-chat row is rendered");
-  return shell.slice(at, shell.indexOf("</div>", at));
-}
-
-test("the new-chat row ends with a labelled ghost button that starts an incognito session", () => {
-  const row = newChatNav();
-  assert.match(row, /actionRow\(ICON\.newChat[\s\S]*?class="new-incognito-btn"/);
-  assert.match(row, /aria-label="New incognito session"/);
-  assert.match(row, /\$\{tip\("New incognito session"\)\}/);
-  assert.match(row, /startNewIncognitoChat\(\)/);
-  assert.match(row, /icon\(Ghost, 16\)/);
-});
-
-test("the ghost button has hover and focus styles and stacks under the plus in the collapsed rail", () => {
-  assert.match(
-    css,
-    /\.new-incognito-btn:hover,\s*\.new-incognito-btn:focus-visible \{\s*background: var\(--secondary\);/,
+test("the Personal group's options menu offers a new incognito session and the top bar does not", () => {
+  const menu = sessions.slice(
+    sessions.indexOf("function projectMenuPopover("),
+    sessions.indexOf("function openProjectFromMenu("),
   );
-  assert.match(css, /\.layout\.sidebar-closed \.new-chat-nav \{\s*flex-direction: column;/);
-  assert.match(css, /\.layout\.sidebar-closed \.new-incognito-btn \{\s*width: 100%;/);
+  assert.match(menu, /item\.groupKind === "personal"[\s\S]*?@click=\$\{startIncognitoFromMenu\}/);
+  assert.match(menu, /icon\(Ghost, 15\)\}<span>New incognito session<\/span>/);
+  assert.match(
+    sessions,
+    /function startIncognitoFromMenu\(\): void \{\s*sessionsState\.openMenuId = null;\s*startNewIncognitoChat\(\);/,
+  );
+  assert.doesNotMatch(shell, /new-incognito-btn|startNewIncognitoChat/);
 });
 
 test("an incognito chat shows its hint and badge, stays out of the sidebar, and flags only its first turn", async () => {
-  const h = await harness({ path: "/", listSessions: [OLD_SESSION] });
+  const h = await harness({
+    path: "/",
+    listSessions: [OLD_SESSION],
+    contexts: [{ scopeId: OLD_SESSION.scopeId, kind: "personal", name: null }],
+  });
   Object.defineProperty(window.Element.prototype, "getAnimations", { configurable: true, value: () => [] });
   const matrixDescriptor = Object.getOwnPropertyDescriptor(globalThis, "DOMMatrix");
   Object.defineProperty(globalThis, "DOMMatrix", { configurable: true, value: class {} });
@@ -96,7 +90,17 @@ test("an incognito chat shows its hint and badge, stays out of the sidebar, and 
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    document.querySelector<HTMLButtonElement>(".new-incognito-btn")!.click();
+    document.querySelector<HTMLButtonElement>(".recent-project .session-menu-btn")!.click();
+    await until(
+      () =>
+        [...document.querySelectorAll(".session-menu-option")].some((o) =>
+          /New incognito session/.test(o.textContent ?? ""),
+        ),
+      "the Personal menu offers a new incognito session",
+    );
+    [...document.querySelectorAll<HTMLButtonElement>(".session-menu-option")]
+      .find((o) => /New incognito session/.test(o.textContent ?? ""))!
+      .click();
     const conv = h.visibleConversation() as unknown as IncognitoConversation;
     const threadRef = conv.state.threadRef!;
     assert.equal(conv.state.incognito, true);
