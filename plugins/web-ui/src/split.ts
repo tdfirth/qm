@@ -1264,7 +1264,7 @@ class PaneTab implements ITabRenderer {
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
         ${
-          paneContents.get(panel.id)?.conversation?.state.incognito
+          dockApi?.panels.length !== 1 && paneContents.get(panel.id)?.conversation?.state.incognito
             ? html`<span class="split-pane-incognito" aria-label="Incognito" ${tip("Incognito")}
                 >${icon(Ghost, 15)}</span
               >`
@@ -1536,6 +1536,13 @@ class GroupActions implements IHeaderActionsRenderer {
       html`${
           single
             ? html`<span class="split-single-tools">
+                ${
+                  panel && paneContents.get(panel.id)?.conversation?.state.incognito
+                    ? html`<span class="session-tool split-pane-incognito" aria-label="Incognito" ${tip("Incognito")}
+                        >${icon(Ghost, 15)}</span
+                      >`
+                    : nothing
+                }
                 ${PANE_TOOLS.map((t) => {
                   const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
                   return html`<button

@@ -8599,8 +8599,16 @@ h3.ambient-field-label {
   display: inline-flex;
   flex: none;
   align-items: center;
-  height: 30px;
-  padding: 0 10px;
+  color: var(--muted-foreground);
+}
+.split-pane-incognito:not(.session-tool) {
+  margin-right: 6px;
+}
+.session-tool.split-pane-incognito {
+  cursor: default;
+}
+.session-tool.split-pane-incognito:hover {
+  background: transparent;
   color: var(--muted-foreground);
 }
 
