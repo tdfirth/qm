@@ -79,6 +79,7 @@ import {
   sessionTitle,
   archiveSessionById,
   syncWorkingPulse,
+  startNewIncognitoChat,
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
@@ -1439,6 +1440,17 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
+            <button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                closeMenu();
+                startNewIncognitoChat();
+              }}
+            >
+              ${icon(Ghost, 15)}<span>Go incognito</span>
+            </button>
             <div class="split-tools-menu-sep" role="separator"></div>
             <button
               class="session-menu-option"
@@ -1536,13 +1548,17 @@ class GroupActions implements IHeaderActionsRenderer {
       html`${
           single
             ? html`<span class="split-single-tools">
-                ${
-                  panel && paneContents.get(panel.id)?.conversation?.state.incognito
-                    ? html`<span class="session-tool split-pane-incognito" aria-label="Incognito" ${tip("Incognito")}
-                        >${icon(Ghost, 15)}</span
-                      >`
-                    : nothing
-                }
+                <button
+                  class="session-tool split-pane-incognito ${
+                    panel && paneContents.get(panel.id)?.conversation?.state.incognito ? "active" : ""
+                  }"
+                  type="button"
+                  aria-label="Go incognito"
+                  ${tip("Go incognito")}
+                  @click=${() => startNewIncognitoChat()}
+                >
+                  ${icon(Ghost, 15)}
+                </button>
                 ${PANE_TOOLS.map((t) => {
                   const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
                   return html`<button

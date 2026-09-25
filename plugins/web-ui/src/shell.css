@@ -8573,13 +8573,6 @@ h3.ambient-field-label {
 .split-pane-incognito:not(.session-tool) {
   margin-right: 6px;
 }
-.session-tool.split-pane-incognito {
-  cursor: default;
-}
-.session-tool.split-pane-incognito:hover {
-  background: transparent;
-  color: var(--muted-foreground);
-}
 
 .split-pane-actions {
   display: flex;
