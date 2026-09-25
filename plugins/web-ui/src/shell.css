@@ -322,6 +322,36 @@ body.resizing-sidebar {
 }
 .new-chat-nav {
   margin-top: 4px;
+  flex-direction: row;
+  align-items: center;
+}
+.new-incognito-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.new-incognito-btn:hover,
+.new-incognito-btn:focus-visible {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.layout.sidebar-closed .new-chat-nav {
+  flex-direction: column;
+  gap: 1px;
+}
+.layout.sidebar-closed .new-incognito-btn {
+  width: 100%;
+  height: 33px;
 }
 a.navrow,
 a.session,
@@ -1346,7 +1376,8 @@ a.chat-row-open {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-fork-badge {
+.session-fork-badge,
+.session-incognito-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1358,8 +1389,10 @@ a.chat-row-open {
   color: var(--muted-foreground);
   font-size: 11.5px;
   font-weight: 550;
-  cursor: pointer;
   white-space: nowrap;
+}
+.session-fork-badge {
+  cursor: pointer;
 }
 .session-fork-badge:hover:not(:disabled) {
   color: var(--foreground);
@@ -1678,6 +1711,31 @@ a.chat-row-open {
   .chat-cta {
     font-size: var(--font-22);
   }
+}
+
+.incognito-hint {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--content-w);
+  margin: 0 0 20px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+.incognito-hint-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 550;
+}
+.incognito-hint p {
+  margin: 0;
+  font-size: 13.5px;
 }
 
 .message-row.welcome-greeting {
@@ -5140,6 +5198,7 @@ a.connector-widget:focus-visible {
   }
   .sidebar .icon-btn,
   .session-menu-btn,
+  .new-incognito-btn,
   .recent-project-new-chat {
     width: 44px;
     height: 44px;
@@ -7542,6 +7601,13 @@ h3.ambient-field-label {
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-right: 6px;
+}
+
+.split-pane-incognito {
+  display: inline-flex;
+  flex: none;
+  margin-right: 6px;
+  color: var(--muted-foreground);
 }
 
 .split-pane-actions {
