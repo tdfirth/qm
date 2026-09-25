@@ -53,13 +53,13 @@ async function until(check: () => boolean, message: string): Promise<void> {
   assert.ok(check(), message);
 }
 
-test("the Personal group's options menu offers a new incognito session and the top bar does not", () => {
+test("the Personal group's options menu offers to go incognito and the top bar does not", () => {
   const menu = sessions.slice(
     sessions.indexOf("function projectMenuPopover("),
     sessions.indexOf("function openProjectFromMenu("),
   );
   assert.match(menu, /item\.groupKind === "personal"[\s\S]*?@click=\$\{startIncognitoFromMenu\}/);
-  assert.match(menu, /icon\(Ghost, 15\)\}<span>New incognito session<\/span>/);
+  assert.match(menu, /icon\(Ghost, 15\)\}<span>Go incognito<\/span>/);
   assert.match(
     sessions,
     /function startIncognitoFromMenu\(\): void \{\s*sessionsState\.openMenuId = null;\s*startNewIncognitoChat\(\);/,
@@ -93,13 +93,11 @@ test("an incognito chat shows its hint and badge, stays out of the sidebar, and 
     document.querySelector<HTMLButtonElement>(".recent-project .session-menu-btn")!.click();
     await until(
       () =>
-        [...document.querySelectorAll(".session-menu-option")].some((o) =>
-          /New incognito session/.test(o.textContent ?? ""),
-        ),
-      "the Personal menu offers a new incognito session",
+        [...document.querySelectorAll(".session-menu-option")].some((o) => /Go incognito/.test(o.textContent ?? "")),
+      "the Personal menu offers to go incognito",
     );
     [...document.querySelectorAll<HTMLButtonElement>(".session-menu-option")]
-      .find((o) => /New incognito session/.test(o.textContent ?? ""))!
+      .find((o) => /Go incognito/.test(o.textContent ?? ""))!
       .click();
     const conv = h.visibleConversation() as unknown as IncognitoConversation;
     const threadRef = conv.state.threadRef!;

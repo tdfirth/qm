@@ -512,7 +512,7 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
       ${
         item.groupKind === "personal"
           ? html`<button class="session-menu-option" type="button" role="menuitem" @click=${startIncognitoFromMenu}>
-              ${icon(Ghost, 15)}<span>New incognito session</span>
+              ${icon(Ghost, 15)}<span>Go incognito</span>
             </button>`
           : nothing
       }
