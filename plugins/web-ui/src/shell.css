@@ -8598,7 +8598,9 @@ h3.ambient-field-label {
 .split-pane-incognito {
   display: inline-flex;
   flex: none;
-  margin-right: 6px;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
   color: var(--muted-foreground);
 }
 

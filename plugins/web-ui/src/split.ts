@@ -1266,7 +1266,7 @@ class PaneTab implements ITabRenderer {
         ${
           paneContents.get(panel.id)?.conversation?.state.incognito
             ? html`<span class="split-pane-incognito" aria-label="Incognito" ${tip("Incognito")}
-                >${icon(Ghost, 12)}</span
+                >${icon(Ghost, 15)}</span
               >`
             : nothing
         }
