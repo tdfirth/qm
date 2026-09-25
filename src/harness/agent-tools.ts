@@ -3657,24 +3657,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const staySilent = defineTool({
-    name: "stay_silent",
-    label: "stay_silent",
-    description:
-      "Explicitly end this turn without posting anything. Only valid when you were addressed directly " +
-      "and have decided not to reply — give a one-line reason (it is logged, never shown).",
-    parameters: Type.Object({
-      reason: Type.String(),
-    }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "stay_silent", reason: params.reason });
-      const r = await tc.staySilent(params.reason);
-      return recordResult(callId, { tool: "stay_silent", ok: true }, text(r.message));
-    },
-  });
-
   const attach = defineTool({
     name: "attach",
     label: "Attach",
@@ -3710,10 +3692,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn immediately without sending anything — the turn stops at this call. ONLY for a " +
-      "scheduled background fire (a cron or poll check) that found nothing worth reporting — for a " +
-      'poll, silence is the success case, so call this instead of sending a "nothing to report" ' +
-      "note. On a turn where a person is waiting for your reply this does nothing — just answer.",
+      "End this turn immediately with no closing reply. Use on surface turns after posting or when " +
+      "choosing not to reply, and on scheduled background fires with nothing worth reporting. " +
+      "Keeps the audit log and any messages already posted. Do not write a closing status line. " +
+      "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
       reason: Type.Optional(
         Type.String({
@@ -3723,13 +3705,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params) {
-      if (!ref.pollFire) {
+      if (!ref.pollFire && !surfaceTools) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,
           { tool: "finish_silently", noop: "not_a_poll_fire" },
           text(
-            "[no-op] finish_silently only applies to scheduled background fires; a person is waiting on this turn — just reply.",
+            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
           ),
           true,
         );
@@ -3740,7 +3722,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return await recordResult(
           callId,
           { tool: "finish_silently", silent: true },
-          { ...text("Ending this turn silently — nothing will be delivered."), terminate: true },
+          { ...text("Turn ended without a closing reply."), terminate: true },
         );
       } catch (e) {
         ref.silentRequested = false;
@@ -3897,24 +3879,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "update",
     label: "update",
     description:
-      'Close, pause, or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
+      'Close or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
       'current evidence. status "blocked" ONLY at a genuine impasse that has recurred across ' +
       `${GOAL_BLOCKED_MIN_ROUNDS} separate continuation rounds — never because the work is hard, slow, or unclear. ` +
-      'status "paused" suspends enforcement (the user asked to set it aside; a halted turn also pauses it); ' +
+      "Only the user can pause a goal by stopping the turn; agents cannot pause goals. " +
       'status "active" resumes a paused goal.',
     parameters: Type.Object({
-      status: Type.Union([
-        Type.Literal("complete"),
-        Type.Literal("blocked"),
-        Type.Literal("paused"),
-        Type.Literal("active"),
-      ]),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("blocked"), Type.Literal("active")]),
       note: Type.Optional(
         Type.String({ description: "complete: what evidence proves it. blocked: the exact impasse (required)." }),
       ),
     }),
     async execute(callId, params) {
-      const p = params as { status: "complete" | "blocked" | "paused" | "active"; note?: string };
+      const p = params as { status: "complete" | "blocked" | "active"; note?: string };
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -3945,15 +3922,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "goal", action: "update", goal },
           text("Goal resumed. It is enforced again; keep working toward it."),
-        );
-      }
-      if (p.status === "paused") {
-        goal.status = "paused";
-        goal.updatedAt = Date.now();
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", goal },
-          text('Goal paused. Enforcement is off until it is resumed with goal action update status "active".'),
         );
       }
       if (goal.status === "paused") {
@@ -4205,7 +4173,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ]
       : []),
     ...(controlTools || surfaceTools ? [refusedInIncognito(guidance, ["write"])] : []),
-    ...(surfaceTools ? [surface, staySilent] : [attach, finishSilently]),
+    ...(surfaceTools ? [surface] : [attach]),
+    finishSilently,
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
     ...mcpTools,
@@ -4221,7 +4190,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   );
 }
 
-const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);
+const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 
 function withToolApprovalGate(

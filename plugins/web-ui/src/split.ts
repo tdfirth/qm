@@ -930,6 +930,7 @@ class PaneContent implements IContentRenderer {
   private loaded = false;
   private disposed = false;
   private redrawOnResize: Array<() => void> = [];
+  private visible = false;
 
   constructor() {
     this.element = document.createElement("div");
@@ -949,13 +950,13 @@ class PaneContent implements IContentRenderer {
       ownsUrl: false,
       container: () => this.chatEl,
       claimContainer: () => this.chatEl,
-      visible: () => splitState.active && appState.currentView === "chats",
+      visible: () => splitState.active && appState.currentView === "chats" && this.visible,
       density: () => this.density,
       onDensityChange: (handler) => this.redrawOnResize.push(handler),
       ensureDeliveryStream,
       onState: (paneState) => {
         notePaneSession(this.panelId, paneState.sessionId, paneState.threadRef);
-        refreshHeaders();
+        notifyPanesChanged();
       },
       onExpand: () => {
         const panel = dockApi?.getPanel(this.panelId);
@@ -967,6 +968,7 @@ class PaneContent implements IContentRenderer {
 
   init(p: GroupPanelPartInitParameters): void {
     this.panelId = p.api.id;
+    this.visible = p.api.isVisible;
     this.panel = p.containerApi.getPanel(p.api.id) ?? null;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
@@ -976,12 +978,14 @@ class PaneContent implements IContentRenderer {
     this.syncZones();
     p.api.onDidDimensionsChange(() => this.syncDensity());
     p.api.onDidVisibilityChange((e) => {
+      this.visible = e.isVisible;
       if (!e.isVisible) return;
       if (!this.loaded) {
         void this.load();
         return;
       }
       this.syncDensity();
+      this.conversation?.redraw();
       this.conversation?.scrollToBottom();
     });
     if (p.api.isVisible) void this.load();

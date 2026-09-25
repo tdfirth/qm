@@ -4,7 +4,7 @@ import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import {
   backfillSessionOriginBatch,
@@ -74,8 +74,222 @@ test("pg session store: getForParticipant returns exactly the row listByParticip
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
 });
 
+test("pg participant activity uses the latest user entry, including overheard entries", { skip }, async () => {
+  let at = 1_000;
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const owner = `activity-${randomUUID()}`;
+  const scope = scopeId("personal", owner);
+  const session = await store.getOrCreateByThread(owner, "dm", scope);
+  await store.addParticipant(session.id, owner);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  at = 300_000;
+  await store.append(lease, { type: "user", payload: { text: "overheard", overheard: true }, scopeLabel: scope });
+  at = 500_000;
+  await store.append(lease, { type: "assistant", payload: { text: "later reply" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+  at = 400_000;
+  const empty = await store.getOrCreateByThread(`${owner}-empty`, "dm", scope);
+  await store.addParticipant(empty.id, owner);
+  const listed = await store.listByParticipant(owner);
+  assert.equal(listed.find((row) => row.id === session.id)?.lastActivityAt, 300_000);
+  assert.equal(listed.find((row) => row.id === empty.id)?.lastActivityAt, 400_000);
+  assert.equal((await store.getForParticipant(session.id, owner))?.lastActivityAt, 300_000);
+  assert.deepEqual(
+    (await store.listByParticipant(owner, { limit: 1 })).map((row) => row.id),
+    [session.id],
+  );
+  assert.deepEqual(await store.listByParticipant(owner, { limit: 0 }), []);
+});
+
 test("pg session store: spendRollup matches the memory rollup row for row", { skip }, async () => {
   await assertSpendRollupParity((now) => createPostgresSessionStore(URL!, { now }), `pg-spend-${randomUUID()}`);
+});
+
+test("pg spend indexes preserve legacy and unusual requests through migration and later writes", { skip }, async () => {
+  const at = Date.UTC(2022, 0, 1);
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const session = await store.getOrCreateByThread("spend-index", "dm", scopeId("personal", "USPENDINDEX"));
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const usage = { input: 10, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 19, costUsd: 0.5 };
+  const wideModel = Array.from({ length: 100 }, () => randomUUID()).join("");
+  const wideUsage = { ...usage, legacyDetail: wideModel };
+  const deeplyNestedUsage =
+    JSON.stringify(usage).slice(0, -1) + ',"detail":' + "[".repeat(20_000) + "0" + "]".repeat(20_000) + "}";
+  const insert = async (id: string, model: string, json: string | null, when = at, sessionId = session.id) => {
+    await raw.query(
+      "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,$3,$4,$5,$6)",
+      [id, sessionId, model, session.scopeId, when, json],
+    );
+  };
+  const range = { from: at, to: at + 1 };
+  try {
+    await raw.query("DROP INDEX session_llm_requests_spend, session_llm_requests_spend_wide");
+    await raw.query(
+      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0021-spend-covering-index')",
+    );
+    await insert("spend-index-normal", "normal", JSON.stringify(usage));
+    await insert("spend-index-wide", wideModel, JSON.stringify(wideUsage));
+    await insert("spend-index-null", "null", null);
+    await insert("spend-index-empty", "empty", "{}");
+    await insert("spend-index-bad-history", "bad-history", "not json", at - 1);
+    await insert("spend-index-bad-orphan", "bad-orphan", "not json", at, "missing-spend-session");
+    await insert(
+      "spend-index-fraction-orphan",
+      "fraction-orphan",
+      JSON.stringify({ ...usage, input: 0.5 }),
+      at,
+      "missing-spend-session",
+    );
+    await insert("spend-index-unicode", "bad-unicode", JSON.stringify({ ...usage, detail: "\u0000" }), at - 1);
+    await insert("spend-index-fraction", "fraction", JSON.stringify({ ...usage, input: 0.5 }), at - 1);
+    await insert("spend-index-overflow", "overflow", JSON.stringify({ ...usage, input: 1e308 }), at - 1);
+    await insert("spend-index-deep-history", "deep-history", deeplyNestedUsage, at - 2);
+    await migrateRegisteredPgSchemas(URL!);
+    const indexes = await raw.query(
+      "SELECT indexrelid::regclass::text AS name, indisvalid, indisready FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass)",
+    );
+    assert.equal(indexes.rows.length, 2);
+    assert.ok(indexes.rows.every((r) => r.indisvalid && r.indisready));
+    const read = async () => (await store.spendRollup(range)).filter((r) => r.scopeId === session.scopeId);
+    const before = await read();
+    assert.equal(before.length, 3);
+    assert.equal(
+      before.reduce((sum, row) => sum + row.calls, 0),
+      3,
+    );
+    assert.equal(
+      before.reduce((sum, row) => sum + row.costUsd, 0),
+      1,
+    );
+    await store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model: wideModel,
+      scopeLabel: session.scopeId,
+      usage: wideUsage,
+    });
+    await store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model: "fraction-after-index",
+      scopeLabel: session.scopeId,
+      usage: { ...usage, input: 0.5 },
+    });
+    await raw.query("UPDATE session_llm_requests SET created_at = $1 WHERE model = 'fraction-after-index'", [at - 1]);
+    await insert("spend-index-bad-later", "bad-later", "not json", at - 1);
+    await insert("spend-index-deep-later", "deep-later", deeplyNestedUsage, at - 2);
+    await assert.rejects(store.spendRollup({ from: at - 2, to: at - 1 }), { code: "54001" });
+    await raw.query("UPDATE session_llm_requests SET usage_json = $1 WHERE id = 'spend-index-normal'", [
+      JSON.stringify({ ...usage, costUsd: 2 }),
+    ]);
+    assert.equal(
+      (await read()).reduce((sum, row) => sum + row.costUsd, 0),
+      3,
+    );
+    await raw.query("UPDATE sessions SET scope_id = 'personal:USPENDMOVED' WHERE id = $1", [session.id]);
+    const moved = (await store.spendRollup(range)).filter((r) => r.scopeId === "personal:USPENDMOVED");
+    assert.equal(
+      moved.reduce((sum, row) => sum + row.calls, 0),
+      4,
+    );
+    await raw.query("UPDATE session_llm_requests SET created_at = $1 WHERE id = 'spend-index-bad-later'", [at]);
+    await assert.rejects(store.spendRollup(range), /invalid input syntax for type json/);
+  } finally {
+    await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);
+    await store.deleteSession(session.id);
+    await raw.end();
+  }
+});
+
+test("pg spend usage guard upgrades the original migration without rewriting indexes or ledger", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: URL });
+  const schema = `spend_upgrade_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const url = new globalThis.URL(URL!);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  const raw = new pg.Pool({ connectionString: url.toString() });
+  const store = createPostgresSessionStore(url.toString());
+  const migrations = registeredPgMigrations(url.toString());
+  const original = migrations.find((migration) => migration.id === "sessions/store/0020-spend-usage-json")!;
+  try {
+    assert.equal(original.checksum, "febf07cde8b9ffe09a497d44a0e524a5c994f7708a0fab6d245315e4ab1e717a");
+    await applyPgMigrations(
+      raw,
+      migrations.filter((migration) => migration.id !== "sessions/store/0020-spend-usage-json-size"),
+    );
+    const ledger = (await raw.query("SELECT * FROM qm_schema_migrations ORDER BY id")).rows;
+    const indexes = (
+      await raw.query(
+        "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
+      )
+    ).rows;
+    await store.countSessions();
+    assert.deepEqual(
+      (
+        await raw.query(
+          "SELECT * FROM qm_schema_migrations WHERE id <> 'sessions/store/0020-spend-usage-json-size' ORDER BY id",
+        )
+      ).rows,
+      ledger,
+    );
+    assert.deepEqual(
+      (
+        await raw.query(
+          "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
+        )
+      ).rows,
+      indexes,
+    );
+    const deep = "[".repeat(20_000) + "0" + "]".repeat(20_000);
+    assert.equal((await raw.query("SELECT spend_usage_json($1) AS usage", [deep])).rows[0].usage, null);
+  } finally {
+    await raw.end();
+    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    await admin.end();
+  }
+});
+
+test("pg spend ancestry only visits sessions with usage inside the requested range", { skip }, async (t) => {
+  const at = Date.UTC(2023, 0, 1);
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const scope = scopeId("personal", "USPENDANCESTRY");
+  const parent = await store.getOrCreateByThread("cron:spend-ancestry", "dm", scope);
+  const current = await store.getOrCreateByThread("spend-ancestry-current", "dm", scope);
+  const historical = await store.getOrCreateByThread("spend-ancestry-historical", "dm", scope);
+  await store.setParentSession(current.id, parent.id);
+  await store.setParentSession(historical.id, parent.id);
+  await store.recordLlmRequest(current.id, {
+    turnSeq: null,
+    step: 0,
+    model: "ancestry",
+    scopeLabel: scope,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+  });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const execute = pg.Pool.prototype.query;
+  let query = "";
+  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
+    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+    return Reflect.apply(execute, this, args);
+  });
+  try {
+    assert.equal((await store.spendRollup({ from: at, to: at + 1 }))[0]!.origin, "cron");
+    assert.ok(query);
+    const explained = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query}`, [at, at + 1]);
+    type Plan = { Plans?: Plan[]; "Subplan Name"?: string; "Actual Rows"?: number };
+    const plans = (plan: Plan): Plan[] => [plan, ...(plan.Plans ?? []).flatMap(plans)];
+    const ancestry = plans(explained.rows[0]["QUERY PLAN"][0].Plan).find(
+      (plan) => plan["Subplan Name"] === "CTE ancestry",
+    );
+    assert.equal(ancestry?.["Actual Rows"], 2);
+  } finally {
+    for (const session of [current, historical, parent]) await store.deleteSession(session.id);
+    await raw.end();
+  }
 });
 
 test("pg session store: a bare failed acquire means the session is gone, not a lease race", { skip }, async () => {
