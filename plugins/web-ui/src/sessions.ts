@@ -16,7 +16,6 @@ import {
   Cog,
   CornerLeftUp,
   EllipsisVertical,
-  Ghost,
   Folder,
   Hash,
   Link,
@@ -560,13 +559,6 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
         ${icon(Folder, 15)}<span>View project</span>
       </button>
       ${
-        item.groupKind === "personal"
-          ? html`<button class="session-menu-option" type="button" role="menuitem" @click=${startIncognitoFromMenu}>
-              ${icon(Ghost, 15)}<span>Go incognito</span>
-            </button>`
-          : nothing
-      }
-      ${
         owned
           ? html`<button
               class="session-menu-option"
@@ -580,12 +572,6 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
       }
     </div>
   `;
-}
-
-function startIncognitoFromMenu(): void {
-  sessionsState.openMenuId = null;
-  startNewIncognitoChat();
-  renderList();
 }
 
 function openProjectFromMenu(scopeId: string): void {

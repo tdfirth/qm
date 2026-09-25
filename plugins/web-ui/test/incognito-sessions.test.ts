@@ -5,6 +5,7 @@ import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
+const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
 
 interface IncognitoConversation {
   state: { sessionId: string | null; threadRef: string | null; incognito: boolean };
@@ -12,7 +13,8 @@ interface IncognitoConversation {
   adoptIncognitoSession(threadRef: string, sessionId: string): void;
 }
 
-const PANE_BADGE = '.split-pane-incognito[aria-label="Incognito"]';
+const TRAY_GHOST = '.split-single-tools .split-pane-incognito[aria-label="Go incognito"]';
+const PANE_BADGE = `${TRAY_GHOST}.active`;
 
 const OLD_SESSION = {
   id: "sess-old",
@@ -53,17 +55,14 @@ async function until(check: () => boolean, message: string): Promise<void> {
   assert.ok(check(), message);
 }
 
-test("the Personal group's options menu offers to go incognito and the top bar does not", () => {
-  const menu = sessions.slice(
-    sessions.indexOf("function projectMenuPopover("),
-    sessions.indexOf("function openProjectFromMenu("),
-  );
-  assert.match(menu, /item\.groupKind === "personal"[\s\S]*?@click=\$\{startIncognitoFromMenu\}/);
-  assert.match(menu, /icon\(Ghost, 15\)\}<span>Go incognito<\/span>/);
-  assert.match(
-    sessions,
-    /function startIncognitoFromMenu\(\): void \{\s*sessionsState\.openMenuId = null;\s*startNewIncognitoChat\(\);/,
-  );
+test("the pane tool tray always offers to go incognito, and nothing else in the sidebar does", () => {
+  const tray = split.slice(split.indexOf('class="split-single-tools"'), split.indexOf("PANE_TOOLS.map((t) => {"));
+  assert.match(tray, /class="session-tool split-pane-incognito/);
+  assert.match(tray, /aria-label="Go incognito"/);
+  assert.match(tray, /\$\{tip\("Go incognito"\)\}/);
+  assert.match(tray, /@click=\$\{\(\) => startNewIncognitoChat\(\)\}/);
+  assert.match(split, /closeMenu\(\);\s*startNewIncognitoChat\(\);[\s\S]*?<span>Go incognito<\/span>/);
+  assert.doesNotMatch(sessions, /startIncognitoFromMenu|<span>Go incognito<\/span>/);
   assert.doesNotMatch(shell, /new-incognito-btn|startNewIncognitoChat/);
 });
 
@@ -90,15 +89,9 @@ test("an incognito chat shows its hint and badge, stays out of the sidebar, and 
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    document.querySelector<HTMLButtonElement>(".recent-project .session-menu-btn")!.click();
-    await until(
-      () =>
-        [...document.querySelectorAll(".session-menu-option")].some((o) => /Go incognito/.test(o.textContent ?? "")),
-      "the Personal menu offers to go incognito",
-    );
-    [...document.querySelectorAll<HTMLButtonElement>(".session-menu-option")]
-      .find((o) => /Go incognito/.test(o.textContent ?? ""))!
-      .click();
+    await until(() => Boolean(document.querySelector(TRAY_GHOST)), "the tool tray shows the ghost");
+    assert.equal(document.querySelector(PANE_BADGE), null, "an ordinary chat's ghost is not active");
+    document.querySelector<HTMLButtonElement>(TRAY_GHOST)!.click();
     const conv = h.visibleConversation() as unknown as IncognitoConversation;
     const threadRef = conv.state.threadRef!;
     assert.equal(conv.state.incognito, true);
@@ -157,7 +150,7 @@ test("an ordinary new chat shows no incognito hint or badge", async () => {
     const conv = h.visibleConversation() as unknown as IncognitoConversation;
     assert.equal(conv.state.incognito, false);
     assert.equal(document.querySelector(".incognito-hint"), null);
-    assert.equal(document.querySelector(".split-pane-incognito, .session-incognito-badge"), null);
+    assert.equal(document.querySelector(`${PANE_BADGE}, .session-incognito-badge`), null);
   } finally {
     await h.close();
   }
