@@ -30,7 +30,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS sessions, session_entries, participants, session_leases, session_tape, session_llm_requests, session_pins, runs, tool_calls CASCADE",
+    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, session_entries, participants, session_leases, session_tape, session_llm_requests, session_pins, runs, tool_calls CASCADE",
   );
   await p.end();
 });
@@ -105,6 +105,210 @@ test("pg participant activity uses the latest user entry, including overheard en
 test("pg session store: spendRollup matches the memory rollup row for row", { skip }, async () => {
   await assertSpendRollupParity((now) => createPostgresSessionStore(URL!, { now }), `pg-spend-${randomUUID()}`);
 });
+
+test("pg saved spend refreshes changed days and preserves live attribution", { skip }, async () => {
+  const day = 86_400_000;
+  const base = Date.UTC(2024, 0, 1);
+  let at = base + 123;
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const scope = scopeId("personal", `saved-${randomUUID()}`);
+  const session = await store.getOrCreateByThread(scope, "dm", scope);
+  const range = { from: base, to: base + 2 * day };
+  const bill = () =>
+    store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model: "saved",
+      scopeLabel: scope,
+      usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, totalTokens: 14, costUsd: 0.25 },
+    });
+  const read = async () => (await store.spendReport!(range)).rows;
+  const check = async () => assert.deepEqual(await read(), await store.spendRollup(range));
+  try {
+    const first = await bill();
+    await check();
+    await store.refreshSpendRollup!();
+    await check();
+    at += 1_000;
+    await bill();
+    assert.equal((await read())[0]!.calls, 1);
+    assert.equal((await store.spendReport!(range)).asOf, base + 123);
+    await store.refreshSpendRollup!();
+    await check();
+    assert.equal((await read())[0]!.calls, 2);
+    const restarted = createPostgresSessionStore(URL!, { now: () => at });
+    assert.deepEqual((await restarted.spendReport!(range)).rows, await read());
+
+    await raw.query("UPDATE session_llm_requests SET created_at = $2, model = 'moved', usage_json = $3 WHERE id = $1", [
+      first.id,
+      base + day + 1,
+      JSON.stringify({ input: 1, costUsd: 2 }),
+    ]);
+    await store.refreshSpendRollup!();
+    await check();
+    assert.equal((await read()).length, 2);
+    const parent = await store.getOrCreateByThread(`cron:${randomUUID()}`, "dm", scope);
+    await store.setParentSession(session.id, parent.id);
+    await store.refreshSpendRollup!();
+    await check();
+    assert.ok((await read()).every((r) => r.origin === "cron"));
+    await raw.query("UPDATE sessions SET scope_id = $2 WHERE id = $1", [session.id, "personal:saved-moved"]);
+    await store.refreshSpendRollup!();
+    await check();
+    assert.ok((await read()).every((r) => r.scopeId === "personal:saved-moved"));
+    await store.deleteSession(parent.id);
+    await store.refreshSpendRollup!();
+    await check();
+    assert.ok((await read()).every((r) => r.origin === "conversation"));
+    const partial = { from: base + 124, to: base + day };
+    assert.deepEqual((await store.spendReport!(partial)).rows, await store.spendRollup(partial));
+    await store.deleteSession(session.id);
+    await store.refreshSpendRollup!();
+    assert.deepEqual(await read(), []);
+    assert.equal(
+      (await raw.query("SELECT jsonb_array_length(rows) AS n FROM session_spend_days WHERE day = $1", [base / day]))
+        .rows[0].n,
+      0,
+    );
+  } finally {
+    await raw.end();
+  }
+});
+
+test("pg spend refresh keeps concurrent writes pending and failures preserve the last report", { skip }, async () => {
+  const base = Date.UTC(2025, 0, 1);
+  const range = { from: base, to: base + 86_400_000 };
+  const store = createPostgresSessionStore(URL!, { now: () => base + 123 });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const scope = scopeId("personal", `race-${randomUUID()}`);
+  const session = await store.getOrCreateByThread(scope, "dm", scope);
+  const bill = () =>
+    store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model: "race",
+      scopeLabel: scope,
+      usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, costUsd: 1 },
+    });
+  const query = pg.Client.prototype.query;
+  const wallClock = Date.now;
+  let duringRollup: (() => Promise<unknown>) | undefined;
+  pg.Client.prototype.query = function (...args: any[]): any {
+    if (duringRollup && typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE ancestry")) {
+      const hook = duringRollup;
+      duringRollup = undefined;
+      return Promise.resolve(Reflect.apply(query, this, args)).then(async (result) => {
+        await hook();
+        return result;
+      });
+    }
+    return Reflect.apply(query, this, args);
+  };
+  try {
+    await bill();
+    await store.refreshSpendRollup!();
+    await bill();
+    duringRollup = bill;
+    await store.refreshSpendRollup!();
+    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 2);
+    assert.equal((await store.spendRollup(range))[0]!.calls, 3);
+    assert.ok(
+      Number(
+        (await raw.query("SELECT count(*) AS n FROM session_spend_dirty WHERE day = $1", [base / 86_400_000])).rows[0]
+          .n,
+      ) > 0,
+    );
+    await store.refreshSpendRollup!();
+    assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
+    const healthyId = randomUUID();
+    await raw.query(
+      "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,'healthy',$3,$4,$5)",
+      [healthyId, session.id, scope, base - 86_400_000, JSON.stringify({ costUsd: 1 })],
+    );
+    await store.refreshSpendRollup!();
+    await raw.query("UPDATE session_llm_requests SET usage_json = $2 WHERE id = $1", [
+      healthyId,
+      JSON.stringify({ costUsd: 2 }),
+    ]);
+    await bill();
+    duringRollup = async () => {
+      const elapsed = wallClock() + 5_001;
+      Date.now = () => elapsed;
+      throw new Error("injected slow spend refresh failure");
+    };
+    await store.refreshSpendRollup!();
+    Date.now = wallClock;
+    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 3);
+    const healthy = await store.spendReport!({ from: base - 86_400_000, to: base });
+    assert.equal(healthy.rows[0]!.costUsd, 2);
+    await Promise.all([store.refreshSpendRollup!(), store.refreshSpendRollup!()]);
+    assert.equal((await store.spendReport!(range)).rows[0]!.calls, 4);
+    assert.equal(
+      Number(
+        (await raw.query("SELECT count(*) AS n FROM session_spend_dirty WHERE day = $1", [base / 86_400_000])).rows[0]
+          .n,
+      ),
+      0,
+    );
+  } finally {
+    pg.Client.prototype.query = query;
+    Date.now = wallClock;
+    await raw.end();
+  }
+});
+
+test(
+  "pg saved spend resolves session changes after commit and preserves non-finite legacy costs",
+  { skip },
+  async () => {
+    const base = Date.UTC(2025, 2, 1);
+    let at = base + 123;
+    const range = { from: base, to: base + 86_400_000 };
+    const store = createPostgresSessionStore(URL!, { now: () => at });
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const editor = await raw.connect();
+    const scope = scopeId("personal", `commit-${randomUUID()}`);
+    const session = await store.getOrCreateByThread(scope, "dm", scope);
+    try {
+      await store.refreshSpendRollup!();
+      await editor.query("BEGIN");
+      await editor.query("UPDATE sessions SET origin = 'cron' WHERE id = $1", [session.id]);
+      await store.recordLlmRequest(session.id, {
+        turnSeq: null,
+        step: 0,
+        model: "commit",
+        scopeLabel: scope,
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, costUsd: 1 },
+      });
+      await store.refreshSpendRollup!();
+      assert.equal((await store.spendReport!(range)).rows[0]!.origin, "conversation");
+      await editor.query("COMMIT");
+      at += 1_000;
+      assert.ok((await store.spendReport!(range)).asOf! < at);
+      await store.refreshSpendRollup!();
+      assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
+      assert.equal((await store.spendReport!(range)).rows[0]!.origin, "cron");
+      for (const cost of ["NaN", "Infinity", "-Infinity"]) {
+        await raw.query(
+          "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,$3,$4,$5,$6)",
+          [randomUUID(), session.id, cost, scope, base, JSON.stringify({ costUsd: cost })],
+        );
+      }
+      await store.refreshSpendRollup!();
+      assert.deepEqual((await store.spendReport!(range)).rows, await store.spendRollup(range));
+      assert.ok(Number.isNaN((await store.spendReport!(range)).rows.find((r) => r.model === "NaN")!.costUsd));
+    } finally {
+      await editor.query("ROLLBACK");
+      editor.release();
+      await store.deleteSession(session.id);
+      await raw.end();
+    }
+  },
+);
 
 test("pg spend indexes preserve legacy and unusual requests through migration and later writes", { skip }, async () => {
   const at = Date.UTC(2022, 0, 1);
@@ -2578,6 +2782,9 @@ test(
       });
     const before = await s.getEntries(session.id);
     assert.deepEqual(await s.getTranscriptEntries(session.id), before);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 0), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
     assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
     assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
     for (const beforeSeq of [0, 1, 3, 4, 99]) {
@@ -2600,6 +2807,10 @@ test(
     assert.equal(await s.clearSecurityTaint(session.id), true);
     assert.equal((await s.getTape(session.id)).length, 8);
     assert.equal(await s.tapeCoverage(session.id), -1);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    await s.append(lease, { type: "soul", payload: { text: "legacy instructions" }, scopeLabel: scope });
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
     await s.releaseLease(lease);
   },
 );
@@ -2654,6 +2865,7 @@ test("pg transcript backfill is bounded, idempotent, and independent of model co
     const dry = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: false });
     assert.deepEqual(dry, { busy: false, scanned: 200, changed: 200, afterSeq: 199 });
     assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 620), false);
     for (let afterSeq = -1; afterSeq < 619;) {
       const page = await migrateTranscriptPage(client, session.id, { afterSeq, limit: 200, apply: true });
       assert.ok(!page.busy);

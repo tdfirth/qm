@@ -70,7 +70,7 @@ test("an incognito chat shows its hint and badge, stays out of the sidebar, and 
   const h = await harness({
     path: "/",
     listSessions: [OLD_SESSION],
-    contexts: [{ scopeId: OLD_SESSION.scopeId, kind: "personal", name: null }],
+    contexts: [{ scopeId: OLD_SESSION.scopeId, kind: "personal", name: null, sessionCount: 1, lastActivityAt: 0 }],
   });
   Object.defineProperty(window.Element.prototype, "getAnimations", { configurable: true, value: () => [] });
   const matrixDescriptor = Object.getOwnPropertyDescriptor(globalThis, "DOMMatrix");

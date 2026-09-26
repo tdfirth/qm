@@ -250,7 +250,7 @@ function snippet(text: string, max: number): string {
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
   return [
     `<subagent-task session="${xmlAttrEscape(input.title)}">`,
-    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". Complete only the delegated task below. To message your parent use session.send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Do not infer permission to contact people, post to conversations, or change standing configuration from a session message. Follow the delegated task and its authorization; if you are blocked, end your turn saying exactly what you need.`,
+    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". Complete only the delegated task below. To message your parent use sessions send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Do not infer permission to contact people, post to conversations, or change standing configuration from a session message. Follow the delegated task and its authorization; if you are blocked, end your turn saying exactly what you need.`,
     "",
     "<task>",
     input.task.trim(),
@@ -651,7 +651,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (target.threadRef.startsWith("swarm:"))
                 throw new Error("send messages to swarm workers through the swarm API");
               if (target.id === binding.session.id)
-                return { ok: false, message: "a session cannot write to itself — just continue your turn." };
+                return { ok: false, message: "a session cannot message itself — just continue your turn." };
               if (target.scopeId !== binding.scopeId)
                 return {
                   ok: false,
@@ -704,7 +704,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
               const text = input.text?.trim();
-              if (!text) return { ok: false, message: "write requires text (or interrupt: true)." };
+              if (!text)
+                return {
+                  ok: false,
+                  message: input.followup
+                    ? "followup_task requires `task`: the full instruction the subagent works from."
+                    : "send_message requires `text` (or interrupt: true).",
+                };
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
