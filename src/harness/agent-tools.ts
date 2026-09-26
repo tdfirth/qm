@@ -4255,7 +4255,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           webhook,
         ]
       : []),
-    ...(controlTools || surfaceTools ? [refusedInIncognito(guidance, ["write"])] : []),
+    ...(controlTools || surfaceTools ? [refusedInIncognito(guidance, ["replace", "edit"])] : []),
     ...(surfaceTools ? [surface] : [attach]),
     finishSilently,
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),

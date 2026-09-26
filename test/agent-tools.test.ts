@@ -1528,7 +1528,11 @@ test("incognito mixed tools refuse writes, allow reads, and keep attach working"
   assert.match(textOut(await call(tool("skills"), { action: "share", id: "S1", toScope: "org" })), refusal);
   assert.match(textOut(await call(tool("skills"), { action: "move", id: "S1", toScope: "org" })), refusal);
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write", scope: "conversation", content: "Be terse." })),
+    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation", content: "Be terse." })),
+    refusal,
+  );
+  assert.match(
+    textOut(await call(tool("guidance"), { action: "edit", scope: "conversation", old: "terse", new: "brief" })),
     refusal,
   );
   assert.match(

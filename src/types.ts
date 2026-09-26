@@ -201,6 +201,8 @@ export interface TriggerBase {
 }
 
 export interface Destination {
+  slackAccountId?: string;
+  slackTeamId?: string;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -627,6 +629,14 @@ export interface ClientToolResult {
 }
 
 export interface TurnRequest {
+  slackSource?: { accountId: string; teamId: string; userId: string };
+  externalSlack?: {
+    accountId: string;
+    teamId: string;
+    userId: string;
+    companyDomains: string[];
+    serviceCredentials: string[];
+  };
   sessionSenderId?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
