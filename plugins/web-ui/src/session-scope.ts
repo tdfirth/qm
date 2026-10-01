@@ -128,7 +128,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     }
     ${
       o.incognito
-        ? html`<span class="session-incognito-badge" ${tip("Nothing from this chat is saved to your qm")}>
+        ? html`<span class="session-incognito-badge" ${tip("Stays out of your history, memory, and search")}>
             ${icon(Ghost, 12)}<span>Incognito</span>
           </span>`
         : nothing

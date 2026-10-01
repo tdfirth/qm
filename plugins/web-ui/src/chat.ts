@@ -1291,8 +1291,10 @@ export function createChatSurface(
 
   function incognitoHint(): TemplateResult {
     return html`<div class="incognito-hint">
-      <span class="incognito-hint-label">${icon(Ghost, 16)}<span>Incognito</span></span>
-      <p>Nothing from this chat is saved to your qm.</p>
+      <span class="incognito-hint-label">${icon(Ghost, 16)}<span>You're incognito</span></span>
+      <p>
+        Incognito chats stay out of your history, memory, and search. Your organization's admins can still see them.
+      </p>
     </div>`;
   }
 
