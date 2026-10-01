@@ -100,7 +100,9 @@ test("an incognito chat shows its hint and badge, stays out of the sidebar, and 
     const hint = document.querySelector(".incognito-hint");
     assert.ok(hint, "the empty chat explains incognito");
     assert.match(hint.textContent ?? "", /Incognito/);
-    assert.match(hint.textContent ?? "", /Nothing from this chat is saved to your qm\./);
+    assert.match(hint.textContent ?? "", /You're incognito/);
+    assert.match(hint.textContent ?? "", /stay out of your history, memory, and search/);
+    assert.match(hint.textContent ?? "", /Your organization's admins can still see them\./);
     assert.equal(document.querySelector(".chat-cta"), null);
     await until(() => Boolean(document.querySelector(PANE_BADGE)), "the pane header carries the ghost badge");
     await until(
