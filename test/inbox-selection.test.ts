@@ -48,6 +48,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
           managesScope: async () => false,
         },
         res: {
+          getHeader: () => undefined,
           writeHead: (value: number) => {
             status = value;
           },
